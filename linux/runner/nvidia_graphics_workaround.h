@@ -1,6 +1,8 @@
 #ifndef FLUTTER_NVIDIA_GRAPHICS_WORKAROUND_H_
 #define FLUTTER_NVIDIA_GRAPHICS_WORKAROUND_H_
 
+#include <string>
+
 namespace mornye {
 
 using GlShaderSourceFn = void (*)(unsigned int shader,
@@ -64,6 +66,15 @@ bool SyncNiriMiniPlayerWindow(bool open,
                               int target_x,
                               int target_y,
                               int pid = 0);
+
+// The Niri id of Mornye's window while the mini player is open, or 0.
+unsigned long long NiriMiniPlayerWindowId();
+
+// Sends one request line to Niri's IPC socket and reads the reply line.
+bool SendNiriSocketCommand(const char* request_line, std::string* out_response);
+
+// Whether MORNYE_NIRI_DEBUG=1 asks for the Niri IPC to be logged to stderr.
+bool NiriDebugEnabled();
 
 // Flutter 3.50.0 disables glBlitFramebuffer on NVIDIA proprietary drivers and
 // falls back to FlCompositorOpenGLShader in fl_compositor_opengl.cc, where

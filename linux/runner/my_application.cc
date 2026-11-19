@@ -9,6 +9,7 @@
 #endif
 
 #include "flutter/generated_plugin_registrant.h"
+#include "niri_workspace_follower.h"
 #include "nvidia_graphics_workaround.h"
 
 extern "C" __attribute__((visibility("default"))) const int
@@ -200,6 +201,7 @@ static gboolean open_mini_player(MyApplication* self, gdouble width,
   gtk_container_check_resize(GTK_CONTAINER(window));
   if (display != nullptr) gdk_display_sync(display);
   mornye::SyncNiriMiniPlayerWindow(true, panel_width, panel_height, x, y);
+  mornye::StartNiriWorkspaceFollower();
   gtk_container_check_resize(GTK_CONTAINER(window));
   if (display != nullptr) gdk_display_sync(display);
   return TRUE;
@@ -223,6 +225,7 @@ static void close_mini_player(MyApplication* self) {
   gtk_container_check_resize(GTK_CONTAINER(window));
   GdkDisplay* display = gtk_widget_get_display(GTK_WIDGET(window));
   if (display != nullptr) gdk_display_sync(display);
+  mornye::StopNiriWorkspaceFollower();
   mornye::SyncNiriMiniPlayerWindow(false, 0, 0, self->restore_x,
                                    self->restore_y);
   gtk_container_check_resize(GTK_CONTAINER(window));
