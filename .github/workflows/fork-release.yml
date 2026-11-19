@@ -1,0 +1,156 @@
+name: Fork release
+
+# Publishes a release of this fork from a finished Desktop workflow run, on
+# GitHub's network: the run's Linux bundles become an AppImage and a deb, and
+# its Windows zips are attached as they are. release.yml cannot serve a fork:
+# it needs signing secrets and publishes desktop builds to the upstream repo.
+#
+#   gh workflow run fork-release.yml -f run_id=<Desktop run id> -f tag=v5.4.0-fork.1
+#
+# The tag is created by the release with GITHUB_TOKEN, which starts no other
+# workflow, so release.yml does not run for it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Id of a successful Desktop workflow run"
+        required: true
+      tag:
+        description: "Release tag (e.g. v5.4.0-fork.1)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      sha: ${{ steps.run.outputs.sha }}
+    steps:
+      - name: Check the Desktop run and the tag
+        id: run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ inputs.run_id }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid tag: $TAG" >&2
+            exit 1
+          fi
+          read -r name conclusion sha < <(gh api "repos/$REPO/actions/runs/$RUN_ID" \
+            --jq '[.name, .conclusion, .head_sha] | @tsv')
+          if [[ "$name" != "Desktop" || "$conclusion" != "success" ]]; then
+            echo "Run $RUN_ID is '$name' ($conclusion), not a successful Desktop run." >&2
+            exit 1
+          fi
+          printf 'sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
+
+  package-linux:
+    name: Package Linux (${{ matrix.arch }})
+    needs: source
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            deb_arch: amd64
+            flutter_arch: x64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            deb_arch: arm64
+            flutter_arch: arm64
+            runner: ubuntu-22.04-arm
+    steps:
+      - name: Checkout the built commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+
+      - name: Download the Linux bundle
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: desktop-linux-${{ matrix.flutter_arch }}
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+          path: artifact
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev unzip file
+
+      - name: Package AppImage and deb
+        env:
+          VERSION: ${{ inputs.tag }}
+          ARCH: ${{ matrix.arch }}
+          DEB_ARCH: ${{ matrix.deb_arch }}
+          FLUTTER_ARCH: ${{ matrix.flutter_arch }}
+        run: |
+          bundle=build/bundle
+          mkdir -p "$bundle" build/desktop
+          unzip -q "artifact/Mornye-linux-${FLUTTER_ARCH}.zip" -d "$bundle"
+          test -x "$bundle/mornye"
+          test -s "$bundle/lib/libmornye_desktop.so"
+          export MORNYE_PACKAGE_ARCH="$ARCH"
+          bash scripts/package_linux.sh appimage "$bundle" "$VERSION" \
+            "build/desktop/Mornye-${VERSION}-linux-${ARCH}.AppImage"
+          bash scripts/package_linux.sh deb "$bundle" "$VERSION" \
+            "build/desktop/Mornye-${VERSION}-linux-${DEB_ARCH}.deb"
+          cp "artifact/Mornye-linux-${FLUTTER_ARCH}.zip" \
+            "build/desktop/Mornye-${VERSION}-linux-${FLUTTER_ARCH}.zip"
+          file "build/desktop/Mornye-${VERSION}-linux-${ARCH}.AppImage"
+
+      - name: Upload Linux packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fork-release-linux-${{ matrix.arch }}
+          if-no-files-found: error
+          path: build/desktop/Mornye-*
+
+  release:
+    needs: [source, package-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download Linux packages
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: fork-release-linux-*
+          merge-multiple: true
+          path: release
+
+      - name: Download Windows zips
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: desktop-windows-*
+          merge-multiple: true
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+          path: windows
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+          SHA: ${{ needs.source.outputs.sha }}
+        run: |
+          for zip in windows/Mornye-windows-*.zip; do
+            arch="${zip##*-}"
+            mv "$zip" "release/Mornye-${TAG}-windows-${arch}"
+          done
+          (cd release && sha256sum Mornye-* > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          gh release create "$TAG" release/* --repo "$REPO" --target "$SHA" \
+            --title "Mornye $TAG" \
+            --notes "Fork build of Mornye from commit ${SHA:0:8}. Windows builds are unsigned portable zips."
