@@ -348,6 +348,10 @@ bool QueryNiriWindowState(int pid, NiriWindowState* out_state) {
   return ParseNiriWindowStateForPid(response.c_str(), pid, out_state);
 }
 
+unsigned long long NiriMiniPlayerWindowId() {
+  return g_niri_mini_player_active ? g_niri_window_id : 0;
+}
+
 std::string FormatNiriIdField(bool has_id, unsigned long long id) {
   if (!has_id) {
     return "null";
