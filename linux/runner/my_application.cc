@@ -9,6 +9,10 @@
 #endif
 
 #include "flutter/generated_plugin_registrant.h"
+#include "nvidia_graphics_workaround.h"
+
+extern "C" __attribute__((visibility("default"))) const int
+    mornye_runner_handles_niri_mini_player = 1;
 
 // Smallest window, in logical pixels, that the desktop layouts support.
 static constexpr gint kMinimumWidth = 800;
@@ -112,6 +116,17 @@ static void set_minimum_size(GtkWindow* window, gint width, gint height) {
   gtk_window_set_geometry_hints(window, nullptr, &geometry, GDK_HINT_MIN_SIZE);
 }
 
+static void set_fixed_size(GtkWindow* window, gint width, gint height) {
+  GdkGeometry geometry = {};
+  geometry.min_width = width;
+  geometry.min_height = height;
+  geometry.max_width = width;
+  geometry.max_height = height;
+  gtk_window_set_geometry_hints(
+      window, nullptr, &geometry,
+      static_cast<GdkWindowHints>(GDK_HINT_MIN_SIZE | GDK_HINT_MAX_SIZE));
+}
+
 // Turns the window into a small undecorated panel of |width| x |height| that
 // stays above other windows, or resizes the panel when it already shows. It
 // keeps its top-left corner when it resizes and opens where it last sat
@@ -150,7 +165,7 @@ static gboolean open_mini_player(MyApplication* self, gdouble width,
     if (self->header_bar != nullptr) gtk_widget_hide(self->header_bar);
     gtk_window_set_keep_above(window, TRUE);
   }
-  set_minimum_size(window, panel_width, panel_height);
+  set_fixed_size(window, panel_width, panel_height);
   gtk_window_resize(window, panel_width, panel_height);
 
   gboolean has_origin = TRUE;
@@ -182,6 +197,11 @@ static gboolean open_mini_player(MyApplication* self, gdouble width,
     y = CLAMP(y, work.y, MAX(work.y, work.y + work.height - panel_height));
   }
   gtk_window_move(window, x, y);
+  gtk_container_check_resize(GTK_CONTAINER(window));
+  if (display != nullptr) gdk_display_sync(display);
+  mornye::SyncNiriMiniPlayerWindow(true, panel_width, panel_height, x, y);
+  gtk_container_check_resize(GTK_CONTAINER(window));
+  if (display != nullptr) gdk_display_sync(display);
   return TRUE;
 }
 
@@ -200,6 +220,13 @@ static void close_mini_player(MyApplication* self) {
   gtk_window_resize(window, self->restore_width, self->restore_height);
   gtk_window_move(window, self->restore_x, self->restore_y);
   if (self->restore_maximized) gtk_window_maximize(window);
+  gtk_container_check_resize(GTK_CONTAINER(window));
+  GdkDisplay* display = gtk_widget_get_display(GTK_WIDGET(window));
+  if (display != nullptr) gdk_display_sync(display);
+  mornye::SyncNiriMiniPlayerWindow(false, 0, 0, self->restore_x,
+                                   self->restore_y);
+  gtk_container_check_resize(GTK_CONTAINER(window));
+  if (display != nullptr) gdk_display_sync(display);
 }
 
 // Moves the window with the pointer, as dragging a title bar does.
@@ -370,6 +397,21 @@ static void my_application_activate(GApplication* application) {
 
   GtkWindow* window =
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
+
+  GdkScreen* default_screen = gdk_screen_get_default();
+  if (default_screen != nullptr) {
+    GtkCssProvider* css_provider = gtk_css_provider_new();
+    gtk_css_provider_load_from_data(
+        css_provider,
+        "decoration, decoration:backdrop, window.csd, window.csd:backdrop, "
+        "window.solid-csd { margin: 0px; padding: 0px; border-width: 0px; "
+        "box-shadow: none; }",
+        -1, nullptr);
+    gtk_style_context_add_provider_for_screen(
+        default_screen, GTK_STYLE_PROVIDER(css_provider),
+        GTK_STYLE_PROVIDER_PRIORITY_USER);
+    g_object_unref(css_provider);
+  }
 
   // Use a header bar when running in GNOME as this is the common style used
   // by applications and is the setup most users will be using (e.g. Ubuntu
