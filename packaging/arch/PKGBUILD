@@ -8,8 +8,8 @@
 # in the release) and run `makepkg -g` for the rest if they changed.
 
 pkgname=mornye
-_tag=v5.4.0-fork.1
-pkgver=5.4.0.fork1
+_tag=v5.4.0-fork.2
+pkgver=5.4.0.fork2
 pkgrel=1
 pkgdesc='Music player for local files and streams (rasid17 fork)'
 arch=('x86_64')
@@ -45,7 +45,7 @@ source=(
 )
 noextract=("${_zip}")
 sha256sums=(
-  'f3f11ef97d2a4b610710e5d9c90d8f4abbbb7938e6e703302cbfaf720d1452e3'
+  'f5515f9f9ba59cabf7fe7fa595fc5eb9610b483357e9eb92f58e010493988b0e'
   '8d5b8ae3d7cc8420a7529b45df727b9a41ee1093e8e69330c2d4b080d9779525'
   '59557600ad61becdd3f800f76e96e4a929661d3b14102c6354618e0846dac764'
   '92c8e1d2438a2273cb426998634101ed87fd41aa2b23ec23f41fae6416e0e4bd'
