@@ -273,6 +273,12 @@ bool ParseSingleNiriWindowObject(const std::string& obj,
   return true;
 }
 
+// MORNYE_NIRI_DEBUG=1 prints every Niri IPC request and reply to stderr.
+bool NiriDebugEnabled() {
+  const char* value = getenv("MORNYE_NIRI_DEBUG");
+  return value != nullptr && strcmp(value, "1") == 0;
+}
+
 bool SendNiriSocketCommand(const char* request_line,
                            std::string* out_response) {
   const char* sock_path = getenv("NIRI_SOCKET");
@@ -320,6 +326,14 @@ bool SendNiriSocketCommand(const char* request_line,
     }
   }
   close(fd);
+  if (NiriDebugEnabled()) {
+    // The window list is long; its size is enough to tell it arrived.
+    const bool is_query = strstr(request_line, "\"Windows\"") != nullptr;
+    fprintf(stderr, "[mornye niri] -> %.*s\n[mornye niri] <- %s\n",
+            static_cast<int>(strcspn(request_line, "\n")), request_line,
+            is_query ? (std::to_string(response.size()) + " bytes").c_str()
+                     : response.substr(0, response.find('\n')).c_str());
+  }
   if (out_response != nullptr) {
     *out_response = response;
   }
@@ -499,6 +513,14 @@ bool SyncNiriMiniPlayerWindow(bool open,
   QueryNiriWindowState(effective_pid, &state);
   if (state.found) {
     g_niri_window_id = state.id;
+  }
+  if (NiriDebugEnabled()) {
+    fprintf(stderr,
+            "[mornye niri] %s pid=%d found=%d id=%llu floating=%d "
+            "tile=%dx%d active=%d\n",
+            open ? "open" : "close", effective_pid, state.found,
+            state.found ? state.id : 0ull, state.is_floating,
+            state.tile_width, state.tile_height, g_niri_mini_player_active);
   }
   const std::string id_str =
       FormatNiriIdField(g_niri_window_id > 0, g_niri_window_id);
