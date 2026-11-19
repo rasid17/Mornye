@@ -1,0 +1,78 @@
+# Packages a Linux x64 release of this fork for Arch Linux and derivatives.
+# It repackages the release's Flutter bundle (the same zip the AppImage and
+# deb are built from) with the layout scripts/package_linux.sh gives the deb.
+#
+#   cd packaging/arch && makepkg -si
+#
+# For a new release, set _tag, update the zip's sha256 (from SHA256SUMS.txt
+# in the release) and run `makepkg -g` for the rest if they changed.
+
+pkgname=mornye
+_tag=v5.4.0-fork.1
+pkgver=5.4.0.fork1
+pkgrel=1
+pkgdesc='Music player for local files and streams (rasid17 fork)'
+arch=('x86_64')
+url='https://github.com/rasid17/Mornye'
+license=('LicenseRef-Mornye')
+# libmpv is opened at run time by media_kit, so it is not in any NEEDED entry.
+depends=(
+  'alsa-lib' 'cairo' 'fontconfig' 'gdk-pixbuf2' 'glib2' 'glibc'
+  'gst-plugins-base-libs' 'gstreamer' 'gtk3' 'harfbuzz' 'json-glib'
+  'lame' 'libepoxy' 'libsecret' 'libsoxr' 'libvorbis' 'opencore-amr' 'opus'
+  'pango' 'speex' 'twolame' 'wayland' 'zlib'
+  'libgcc_s.so' 'libstdc++.so' 'libmpv.so'
+)
+# The bundle ships Flutter's AOT snapshot and prebuilt libraries; stripping
+# them can break the snapshot.
+options=('!strip' '!debug')
+provides=('mornye')
+conflicts=('mornye-bin')
+
+_raw="https://raw.githubusercontent.com/rasid17/Mornye/${_tag}"
+_zip="Mornye-${_tag}-linux-x64.zip"
+source=(
+  "${_zip}::${url}/releases/download/${_tag}/${_zip}"
+  "com.zarz.mornye.desktop::${_raw}/linux/packaging/com.zarz.mornye.desktop"
+  "com.zarz.mornye.metainfo.xml::${_raw}/linux/packaging/com.zarz.mornye.metainfo.xml"
+  "mornye-128.png::${_raw}/linux/packaging/icons/mornye-128.png"
+  "mornye-256.png::${_raw}/linux/packaging/icons/mornye-256.png"
+  "mornye-512.png::${_raw}/assets/brand/logo/png/mornye-badge@1x.png"
+  "mornye.svg::${_raw}/assets/brand/logo/svg/mornye-badge.svg"
+  "LICENSE::${_raw}/LICENSE"
+  "COPYING::${_raw}/COPYING"
+  "NOTICE::${_raw}/NOTICE"
+)
+noextract=("${_zip}")
+sha256sums=(
+  'f3f11ef97d2a4b610710e5d9c90d8f4abbbb7938e6e703302cbfaf720d1452e3'
+  '8d5b8ae3d7cc8420a7529b45df727b9a41ee1093e8e69330c2d4b080d9779525'
+  '59557600ad61becdd3f800f76e96e4a929661d3b14102c6354618e0846dac764'
+  '92c8e1d2438a2273cb426998634101ed87fd41aa2b23ec23f41fae6416e0e4bd'
+  '9d769aa5290faa4644668de42557160c7a883459a7aeca560d2664b68aa841ab'
+  '3d9c282abc6bb896ff7994c822df91289bd4887e8210d4e569ea65e603ab9d23'
+  'bfe02ab0168dd93230335680ab525d81fe519cc9d2ac250c166aeafc3f04afb9'
+  'da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768'
+  'fb981668c18a279e285fc4d83fba1e836cc84dd4daa73c9697d3cfd2d8aca6e0'
+  'f84ef882f6d0d26d1919866a4ba051986318ae2de336b1a2bd5a19e72cbfe671'
+)
+
+package() {
+  local app_id=com.zarz.mornye
+
+  install -d "${pkgdir}/usr/lib/${pkgname}" "${pkgdir}/usr/bin"
+  bsdtar -xf "${srcdir}/${_zip}" -C "${pkgdir}/usr/lib/${pkgname}"
+  ln -s "../lib/${pkgname}/${pkgname}" "${pkgdir}/usr/bin/${pkgname}"
+
+  install -Dm644 "${app_id}.desktop" "${pkgdir}/usr/share/applications/${app_id}.desktop"
+  install -Dm644 "${app_id}.metainfo.xml" "${pkgdir}/usr/share/metainfo/${app_id}.metainfo.xml"
+  local size
+  for size in 128 256 512; do
+    install -Dm644 "mornye-${size}.png" \
+      "${pkgdir}/usr/share/icons/hicolor/${size}x${size}/apps/${app_id}.png"
+  done
+  install -Dm644 mornye.svg "${pkgdir}/usr/share/icons/hicolor/scalable/apps/${app_id}.svg"
+
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  install -m644 COPYING NOTICE "${pkgdir}/usr/share/licenses/${pkgname}/"
+}
