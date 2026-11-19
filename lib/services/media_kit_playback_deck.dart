@@ -68,6 +68,24 @@ class MediaKitEngine implements MpvEngine, MpvPlaylistEngine {
       // Mornye reads sidecar lyrics itself. A failed mpv subtitle autoload
       // must not turn an otherwise playable song into a source error.
       setProperty('sub-auto', 'no'),
+      // mpv's built-in Lua scripts serve its own window, which Mornye never
+      // shows. A Lua error unwinds through _Unwind_RaiseException, and on
+      // Linux that can resolve to the unwinder libflutter exports, which
+      // cannot walk LuaJIT frames and crashes the app. media_kit loads the
+      // scripts during mpv_initialize; turning these off stops them again.
+      for (final script in const [
+        'osc',
+        'ytdl',
+        'load-stats-overlay',
+        'load-console',
+        'load-auto-profiles',
+        'load-select',
+        'load-positioning',
+        'load-commands',
+        'load-context-menu',
+        'load-scripts',
+      ])
+        setProperty(script, 'no'),
       // Music playback needs scheduling headroom rather than the shortest
       // device period, which can underrun on otherwise working endpoints.
       if (defaultTargetPlatform == TargetPlatform.windows)
