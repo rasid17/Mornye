@@ -12,6 +12,10 @@ pub struct CueSheet {
     pub title: String,
     pub file_name: String,
     pub file_type: String,
+    /// The sheet names more than one audio file, one per track or a few
+    /// tracks each, as rippers write beside the files they already split.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub several_files: bool,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub genre: String,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -56,6 +60,7 @@ pub fn parse(
         title: String::new(),
         file_name: String::new(),
         file_type: String::new(),
+        several_files: false,
         genre: String::new(),
         date: String::new(),
         comment: String::new(),
@@ -118,6 +123,9 @@ pub fn parse(
 
         if let Some(rest) = command_rest(&line, "FILE ") {
             let (file_name, file_type) = parse_file_line(rest);
+            if !sheet.file_name.is_empty() && sheet.file_name != file_name {
+                sheet.several_files = true;
+            }
             sheet.file_name = file_name;
             sheet.file_type = file_type;
             continue;
@@ -339,6 +347,17 @@ mod tests {
     use super::*;
     use std::cell::Cell;
     use std::io::Cursor;
+
+    #[test]
+    fn a_sheet_naming_one_file_per_track_names_several_files() {
+        let single = "FILE \"album.flac\" WAVE\nTRACK 01 AUDIO\nINDEX 01 00:00:00\nFILE \"album.flac\" WAVE\nTRACK 02 AUDIO\nINDEX 01 03:00:00\n";
+        let sheet = parse(&mut Cursor::new(single.as_bytes()), &|| Ok(())).unwrap();
+        assert!(!sheet.several_files);
+
+        let split = "FILE \"01. One.wav\" WAVE\nTRACK 01 AUDIO\nINDEX 01 00:00:00\nFILE \"02. Two.wav\" WAVE\nTRACK 02 AUDIO\nINDEX 01 00:00:00\n";
+        let sheet = parse(&mut Cursor::new(split.as_bytes()), &|| Ok(())).unwrap();
+        assert!(sheet.several_files);
+    }
 
     #[test]
     fn parse_cue_semantics_and_bounds() {

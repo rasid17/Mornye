@@ -538,10 +538,25 @@ impl Backend {
             let (file_name, sheet) = match reused {
                 Some(cue) => (cue.file_name, None),
                 None => match self.parse_cue_file(&file.path, &check) {
+                    // Its tracks are the files it names, which the walk
+                    // scans as songs of their own.
+                    Ok(sheet) if sheet.several_files => (String::new(), None),
                     Ok(sheet) => (sheet.file_name.clone(), Some(sheet)),
                     Err(_) => continue,
                 },
             };
+            if file_name.is_empty()
+                && let Some(existing) = existing
+            {
+                // Rows earlier scans made from a sheet that names several
+                // files; those files are the songs.
+                deleted.extend(
+                    existing
+                        .keys()
+                        .filter(|path| cue_base(path) == Some(file.path.as_str()))
+                        .cloned(),
+                );
+            }
             sheets.insert(
                 file.path.clone(),
                 KnownCue {
@@ -1526,6 +1541,39 @@ mod tests {
                     .into_owned()
             })
             .collect()
+    }
+
+    #[test]
+    fn a_cue_sheet_naming_one_file_per_track_adds_no_tracks() {
+        let root = tempfile::tempdir().unwrap();
+        let library = fs::canonicalize(root.path()).unwrap().join("library");
+        // A ripper's sheet beside the files it split; its file names no
+        // longer match them, as when it was saved in a legacy code page.
+        let cue = cue_beside_two_songs(&library, "a.wav");
+        fs::write(
+            &cue,
+            "FILE \"01. ....wav\" WAVE\nTRACK 01 AUDIO\nTITLE \"....\"\nINDEX 01 00:00:00\n\
+             FILE \"b.wav\" WAVE\nTRACK 02 AUDIO\nINDEX 01 00:00:00\n",
+        )
+        .unwrap();
+        let backend = backend(root.path(), &library);
+
+        let mut scanned = scanned_beside_cue(&backend, &library, &cue, 0);
+        scanned.sort();
+        assert_eq!(scanned, ["a.flac", "b.flac"]);
+
+        // Rows an earlier scan made from the sheet go away, also when the
+        // sheet itself has not changed since.
+        let row = format!("{}#track01", cue.to_string_lossy());
+        let snapshot = json!({&row: modified_millis(&cue)});
+        let result = backend
+            .scan_library_folder_incremental(
+                &library.to_string_lossy(),
+                &snapshot.to_string(),
+                &|| Ok(()),
+            )
+            .unwrap();
+        assert_eq!(result["deletedPaths"], json!([row]));
     }
 
     #[test]
