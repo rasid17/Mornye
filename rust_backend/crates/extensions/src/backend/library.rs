@@ -350,6 +350,11 @@ impl Backend {
             })
         };
         let sheet = self.parse_cue_file(path, &check)?;
+        if sheet.several_files {
+            // A sheet naming one file per track sits beside files that are
+            // scanned as songs themselves; it adds no tracks of its own.
+            return Ok(Value::Array(Vec::new()));
+        }
         let audio =
             self.resolve_cue_audio(path, &sheet.file_name, audio_directory, None, &check)?;
         self.scan_cue_sheet(
