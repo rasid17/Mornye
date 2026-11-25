@@ -13,6 +13,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mornye/l10n/l10n.dart';
 import 'package:mornye/services/saf_migration_prompt_store.dart';
 import 'package:mornye/providers/download_queue_provider.dart';
+import 'package:mornye/providers/explore_provider.dart';
 import 'package:mornye/providers/extension_auto_update_provider.dart';
 import 'package:mornye/providers/extension_provider.dart';
 import 'package:mornye/providers/music_player_provider.dart';
@@ -49,6 +50,7 @@ import 'package:mornye/widgets/animation_utils.dart';
 import 'package:mornye/widgets/nav_destination_icons.dart';
 import 'package:mornye/widgets/settings_group.dart';
 import 'package:mornye/widgets/mini_player.dart';
+import 'package:mornye/widgets/player_underlay.dart';
 import 'package:mornye/widgets/tv_shell.dart';
 import 'package:mornye/widgets/lazy_tab_view.dart';
 import 'package:mornye/widgets/link/link_actions.dart';
@@ -60,8 +62,10 @@ import 'package:mornye/widgets/mornye_chrome.dart';
 import 'package:mornye/theme/app_motion.dart';
 import 'package:mornye/theme/material_expressive.dart';
 import 'package:mornye/theme/mornye_theme.dart';
+import 'package:mornye/theme/page_transitions.dart';
 import 'package:mornye/theme/player_artwork_theme.dart';
 import 'package:mornye/widgets/selection_bottom_bar.dart';
+import 'package:mornye/widgets/search_moved_hint.dart';
 import 'package:mornye/widgets/desktop/desktop_commands.dart';
 import 'package:mornye/widgets/desktop/desktop_inspector.dart';
 import 'package:mornye/widgets/desktop/desktop_link_transfer_actions.dart';
@@ -75,6 +79,7 @@ import 'package:mornye/utils/saf_download_tree.dart';
 part 'main_shell_startup_prompts.dart';
 
 final _log = AppLogger('MainShell');
+final _materialBottomBarBlur = ImageFilter.blur(sigmaX: 10, sigmaY: 10);
 
 /// The badge counts on Library (queued downloads) and Store (extension
 /// updates). Only the navigation chrome watches them, so a finished
@@ -85,17 +90,14 @@ int _watchQueuedCount(WidgetRef ref) =>
 int _watchRepoUpdatesCount(WidgetRef ref) =>
     ref.watch(repoProvider.select((s) => s.updatesAvailableCount));
 
-/// The tab at [index] in a style's destination order.
+/// The tab at [index]: Home, Library, the Store when shown, Search, then
+/// Settings where the style has it as a destination.
 @visibleForTesting
-ShellTab shellTabAt(
-  int index, {
-  required bool mornye,
-  required bool showStore,
-}) {
+ShellTab shellTabAt(int index, {required bool showStore}) {
   if (index == 0) return ShellTab.home;
   if (index == 1) return ShellTab.library;
   if (showStore && index == 2) return ShellTab.repository;
-  if (mornye && index == (showStore ? 3 : 2)) return ShellTab.search;
+  if (index == (showStore ? 3 : 2)) return ShellTab.search;
   return ShellTab.settings;
 }
 
@@ -111,15 +113,9 @@ int? shellIndexOfTab(
   ShellTab.home => 0,
   ShellTab.library => 1,
   ShellTab.repository => showStore ? 2 : null,
-  // Material searches from Home.
-  ShellTab.search => mornye ? (showStore ? 3 : 2) : 0,
+  ShellTab.search => showStore ? 3 : 2,
   // Mornye phones open Settings as a page, not a destination.
-  ShellTab.settings =>
-    !mornye
-        ? (showStore ? 3 : 2)
-        : desktop
-        ? (showStore ? 4 : 3)
-        : null,
+  ShellTab.settings => !mornye || desktop ? (showStore ? 4 : 3) : null,
 };
 
 class MainShell extends ConsumerStatefulWidget {
@@ -171,6 +167,7 @@ class _MainShellState extends ConsumerState<MainShell>
   StreamSubscription<String>? _shareSubscription;
   StreamSubscription<List<OpenAudioFile>>? _audioOpenSubscription;
   DateTime? _lastBackPress;
+  late final PageBackSwipe _backSwipe = PageBackSwipe(_backNavigators);
   final GlobalKey<NavigatorState> _homeTabNavigatorKey =
       ShellNavigationService.homeTabNavigatorKey;
   final GlobalKey<NavigatorState> _libraryTabNavigatorKey =
@@ -190,13 +187,16 @@ class _MainShellState extends ConsumerState<MainShell>
   late final _libraryDepthObserver = _PageDepthObserver(
     onRoot: () => desktopSidebarLink.value = null,
   );
+  late final Listenable _chromeSurfaceListenable = Listenable.merge([
+    ShellNavigationService.chromeBrightness,
+    ShellNavigationService.chromeSurface,
+  ]);
 
   /// The style the current tab index was chosen under.
   bool? _indexStyleMornye;
 
-  /// The two styles order their destinations differently, so switching
-  /// styles keeps the same tab rather than the same index (Settings would
-  /// otherwise become Mornye's Search).
+  /// Mornye phones have no Settings destination, so switching styles keeps
+  /// the same tab rather than an index the new style lacks.
   void _keepTabAcrossStyles() {
     final mornye = context.isMornye;
     final previous = _indexStyleMornye;
@@ -205,11 +205,7 @@ class _MainShellState extends ConsumerState<MainShell>
     final showStore = ref.read(
       settingsProvider.select((s) => s.showExtensionStore),
     );
-    final tab = shellTabAt(
-      _currentIndex,
-      mornye: previous,
-      showStore: showStore,
-    );
+    final tab = shellTabAt(_currentIndex, showStore: showStore);
     final index =
         shellIndexOfTab(
           tab,
@@ -267,6 +263,7 @@ class _MainShellState extends ConsumerState<MainShell>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addObserver(_backSwipe);
     usbAudioStatus.addListener(_onUsbAudioStatusChanged);
     _homePreviewStopObserver = _PreviewStopNavigatorObserver(
       () => ref.read(previewPlayerProvider.notifier).stop(),
@@ -301,11 +298,16 @@ class _MainShellState extends ConsumerState<MainShell>
       showRepoTab: false,
     );
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // Null when the startup check gave no answer: it is then asked again.
+      final safLost = await ref.read(initialSafValidationProvider);
+      if (!mounted) return;
       await _repairSafAccessIfNeeded(
-        knownLost: ref.read(initialSafAccessLostProvider),
+        knownLost: safLost ?? false,
+        alreadyChecked: safLost != null,
       );
       _initialSafRepairComplete = true;
       if (!mounted) return;
+      unawaited(_pointAtMovedSearch());
       unawaited(_restorePlayback());
       // Off the startup path: waits for extensions, then fills the Store
       // badge and installs updates without the Store tab being opened.
@@ -323,6 +325,17 @@ class _MainShellState extends ConsumerState<MainShell>
         await _checkAppAnnouncement();
       }
     });
+  }
+
+  /// Shows the pointer to the Search tab over Home when it is owed. The
+  /// migration that notes it runs with the settings load.
+  Future<void> _pointAtMovedSearch() async {
+    try {
+      await ref.read(settingsProvider.notifier).ensureLoaded();
+      if (mounted && _currentIndex == 0) await SearchMovedHint.showIfOwed();
+    } on Object catch (error) {
+      _log.w('Could not show the Search hint: $error');
+    }
   }
 
   /// Restores the last session, then its song's cover from the file once
@@ -408,10 +421,7 @@ class _MainShellState extends ConsumerState<MainShell>
 
     Navigator.of(context).popUntil((route) => route.isFirst);
     _onShellTabRequested(ShellTab.search);
-    final searchNavigator = context.isMornye
-        ? _searchTabNavigatorKey
-        : _homeTabNavigatorKey;
-    searchNavigator.currentState?.popUntil((route) => route.isFirst);
+    _searchTabNavigatorKey.currentState?.popUntil((route) => route.isFirst);
     // Mount the lazy Search page before the metadata listener handles the link.
     await WidgetsBinding.instance.endOfFrame;
     if (!mounted) return;
@@ -465,6 +475,7 @@ class _MainShellState extends ConsumerState<MainShell>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    WidgetsBinding.instance.removeObserver(_backSwipe);
     usbAudioStatus.removeListener(_onUsbAudioStatusChanged);
     ShellNavigationService.unregisterTabSelectionHandler(this);
     _shareSubscription?.cancel();
@@ -486,10 +497,33 @@ class _MainShellState extends ConsumerState<MainShell>
     );
     final homeNavigator = _navigatorForTab(0, showStore);
     homeNavigator?.popUntil((route) => route.isFirst);
+    FocusManager.instance.primaryFocus?.unfocus();
+  }
+
+  /// Tapping Search again returns to its opening page: the field is emptied
+  /// and the feed shows instead of results or recent searches.
+  void _resetSearchToMain() {
+    ref.read(previewPlayerProvider.notifier).stop();
+    _searchTabNavigatorKey.currentState?.popUntil((route) => route.isFirst);
     // Unfocus BEFORE clear so _onTrackStateChanged can properly
     // clear _urlController (it checks !_searchFocusNode.hasFocus)
     FocusManager.instance.primaryFocus?.unfocus();
-    if (!context.isMornye) ref.read(trackProvider.notifier).clear();
+    ref.read(trackProvider.notifier).clear();
+  }
+
+  int _searchIndex(bool showStore) => showStore ? 3 : 2;
+
+  /// The Mornye bar's search button opens Search on its feed; pressed there,
+  /// or with no feed to open on, it goes to the field.
+  void _openSearchFromBar() {
+    final index = _searchIndex(
+      ref.read(settingsProvider.select((s) => s.showExtensionStore)),
+    );
+    if (_currentIndex == index || ref.read(homeFeedExtensionProvider) == null) {
+      ShellNavigationService.requestSearch();
+    } else {
+      _onNavTap(index);
+    }
   }
 
   /// Desktop and TV show Settings after Search in the content pane.
@@ -497,8 +531,7 @@ class _MainShellState extends ConsumerState<MainShell>
   bool get _mornyeSettingsTab =>
       context.isMornye && (isDesktopPlatform || isAndroidTv);
 
-  int _settingsIndex(bool showStore) =>
-      context.isMornye ? (showStore ? 4 : 3) : (showStore ? 3 : 2);
+  int _settingsIndex(bool showStore) => showStore ? 4 : 3;
 
   void _onShellTabRequested(ShellTab tab) {
     // Picking a destination returns from Now Playing to the content pane.
@@ -512,7 +545,7 @@ class _MainShellState extends ConsumerState<MainShell>
     );
     final index = switch (tab) {
       ShellTab.home => 0,
-      ShellTab.search => context.isMornye ? (showStore ? 3 : 2) : 0,
+      ShellTab.search => _searchIndex(showStore),
       ShellTab.library => 1,
       ShellTab.repository => showStore ? 2 : null,
       ShellTab.settings => _settingsIndex(showStore),
@@ -549,6 +582,13 @@ class _MainShellState extends ConsumerState<MainShell>
     if (index == 0 && _currentIndex == 0) {
       return;
     }
+    // A request to search (a shortcut, a shared link) keeps what is typed.
+    if (resetHome &&
+        index == _currentIndex &&
+        index == _searchIndex(showStore)) {
+      _resetSearchToMain();
+      return;
+    }
 
     if (_currentIndex != index) {
       HapticFeedback.selectionClick();
@@ -559,7 +599,6 @@ class _MainShellState extends ConsumerState<MainShell>
       ShellNavigationService.syncState(
         currentTabIndex: _currentIndex,
         showRepoTab: showStore,
-        showSearchTab: context.isMornye,
       );
       if (!isAndroidTv) FocusManager.instance.primaryFocus?.unfocus();
       if (context.isMornye || isAndroidTv) {
@@ -597,7 +636,7 @@ class _MainShellState extends ConsumerState<MainShell>
     _tabExitController
         .animateTo(
           0,
-          duration: _tabExitDuration * shown,
+          duration: MotionPace.duration(_tabExitDuration) * shown,
           curve: Easing.standardAccelerate,
         )
         .whenCompleteOrCancel(() {
@@ -658,7 +697,6 @@ class _MainShellState extends ConsumerState<MainShell>
       ShellNavigationService.syncState(
         currentTabIndex: _currentIndex,
         showRepoTab: showStore,
-        showSearchTab: context.isMornye,
       );
       FocusManager.instance.primaryFocus?.unfocus();
     }
@@ -685,6 +723,18 @@ class _MainShellState extends ConsumerState<MainShell>
     return _canMinimizeChromeAt(media.size.width, media.textScaler);
   }
 
+  /// The navigators a back press pops from, in [_handleBackPress]'s order.
+  Iterable<NavigatorState?> _backNavigators() {
+    if (!mounted) return const [];
+    final showStore = ref.read(
+      settingsProvider.select((s) => s.showExtensionStore),
+    );
+    return [
+      Navigator.of(context, rootNavigator: true),
+      _navigatorForTab(_currentIndex, showStore),
+    ];
+  }
+
   Future<void> _handleBackPress() async {
     final rootNavigator = Navigator.of(context, rootNavigator: true);
     final handledByRootNavigator = await rootNavigator.maybePop();
@@ -707,8 +757,7 @@ class _MainShellState extends ConsumerState<MainShell>
     if (!mounted) return;
 
     final trackState = ref.read(trackProvider);
-    final isSearchTab =
-        _currentIndex == (context.isMornye ? (showStore ? 3 : 2) : 0);
+    final isSearchTab = _currentIndex == _searchIndex(showStore);
 
     if (isSearchTab &&
         trackState.isShowingRecentAccess &&
@@ -781,10 +830,8 @@ class _MainShellState extends ConsumerState<MainShell>
     if (index == 0) return ShellTab.home;
     if (index == 1) return ShellTab.library;
     if (showStore && index == 2) return ShellTab.repository;
-    if (_mornyeSettingsTab && index == _settingsIndex(showStore)) {
-      return ShellTab.settings;
-    }
-    return context.isMornye ? ShellTab.search : ShellTab.settings;
+    if (index == _searchIndex(showStore)) return ShellTab.search;
+    return ShellTab.settings;
   }
 
   List<DesktopDestination> _desktopDestinations({
@@ -795,10 +842,7 @@ class _MainShellState extends ConsumerState<MainShell>
     final l10n = context.l10n;
     final mornye = context.isMornye;
     return [
-      for (final tab in desktopDestinationTabs(
-        mornye: mornye,
-        showStore: showStore,
-      ))
+      for (final tab in desktopDestinationTabs(showStore: showStore))
         switch (tab) {
           ShellTab.home => DesktopDestination(
             tab: tab,
@@ -830,8 +874,8 @@ class _MainShellState extends ConsumerState<MainShell>
           ),
           ShellTab.search => DesktopDestination(
             tab: tab,
-            icon: CupertinoIcons.search,
-            selectedIcon: CupertinoIcons.search,
+            icon: mornye ? CupertinoIcons.search : Icons.search,
+            selectedIcon: mornye ? CupertinoIcons.search : Icons.search,
             label: l10n.mornyeSearch,
           ),
           ShellTab.settings => DesktopDestination(
@@ -991,7 +1035,7 @@ class _MainShellState extends ConsumerState<MainShell>
           ShellNavigationService.activeBackNavigator() ?? Navigator.of(context);
       unawaited(
         navigator.push(
-          MaterialPageRoute<void>(
+          SteadyPageRoute<void>(
             builder: (_) => MornyeSettingsTheme(
               child: ProfileSettingsPage(profile: profile),
             ),
@@ -1006,7 +1050,7 @@ class _MainShellState extends ConsumerState<MainShell>
     if (index == 0) return _homeTabNavigatorKey.currentState;
     if (index == 1) return _libraryTabNavigatorKey.currentState;
     if (showStore && index == 2) return _repoTabNavigatorKey.currentState;
-    if (context.isMornye && index == (showStore ? 3 : 2)) {
+    if (index == _searchIndex(showStore)) {
       return _searchTabNavigatorKey.currentState;
     }
     return null;
@@ -1057,7 +1101,6 @@ class _MainShellState extends ConsumerState<MainShell>
     ShellNavigationService.syncState(
       currentTabIndex: _currentIndex,
       showRepoTab: showStore,
-      showSearchTab: context.isMornye,
     );
 
     final tabs = <Widget>[
@@ -1089,16 +1132,16 @@ class _MainShellState extends ConsumerState<MainShell>
           heroAnimationsEnabled: heroAnimationsEnabled,
           child: const RepoTab(),
         ),
-      if (!context.isMornye) const SettingsTab(),
-      if (context.isMornye)
-        _TabNavigator(
-          key: const ValueKey('tab-search'),
-          navigatorKey: _searchTabNavigatorKey,
-          observers: [_searchPreviewStopObserver],
-          heroAnimationsEnabled: heroAnimationsEnabled,
-          child: const HomeTab(mode: HomeTabMode.search),
-        ),
-      if (_mornyeSettingsTab) const SettingsTab(key: ValueKey('tab-settings')),
+      _TabNavigator(
+        key: const ValueKey('tab-search'),
+        navigatorKey: _searchTabNavigatorKey,
+        observers: [_searchPreviewStopObserver],
+        heroAnimationsEnabled: heroAnimationsEnabled,
+        child: const HomeTab(mode: HomeTabMode.search),
+      ),
+      // Mornye phones open Settings as a page instead.
+      if (!context.isMornye || _mornyeSettingsTab)
+        const SettingsTab(key: ValueKey('tab-settings')),
     ];
 
     final maxIndex = tabs.length - 1;
@@ -1146,7 +1189,7 @@ class _MainShellState extends ConsumerState<MainShell>
             )
           : FadeTransition(
               opacity: _tabOpacity,
-              child: ScaleTransition(
+              child: PictureScaleTransition(
                 scale: _tabJumpScale,
                 child: PageView.builder(
                   controller: _pageController,
@@ -1263,7 +1306,11 @@ class _MainShellState extends ConsumerState<MainShell>
         ),
       ),
     );
-    return DownloadQueueFeedback(child: shell);
+    return DownloadQueueFeedback(
+      // Mornye's glass bar is the costly part of a page under a moving
+      // player. Material flies its cover as a Hero out of the live page.
+      child: PlayerUnderlay(enabled: context.isMornye, child: shell),
+    );
   }
 
   /// Phone, tablet and TV destinations, with the download count on Library.
@@ -1334,17 +1381,24 @@ class _MainShellState extends ConsumerState<MainShell>
           ),
           label: l10n.navStore,
         ),
-      if (!context.isMornye)
+      if (context.isMornye)
+        NavigationDestination(
+          icon: const Icon(CupertinoIcons.search),
+          label: l10n.mornyeSearch,
+        )
+      else ...[
+        NavigationDestination(
+          // Home's search field moved here; people who had it are shown once.
+          icon: const SearchMovedHintAnchor(child: AppIcon(Icons.search)),
+          selectedIcon: BouncingIcon(child: const AppIcon(Icons.search)),
+          label: l10n.mornyeSearch,
+        ),
         NavigationDestination(
           icon: const AppIcon(Icons.settings_outlined),
           selectedIcon: SpinIcon(child: const AppIcon(Icons.settings)),
           label: l10n.navSettings,
         ),
-      if (context.isMornye)
-        NavigationDestination(
-          icon: const Icon(CupertinoIcons.search),
-          label: l10n.mornyeSearch,
-        ),
+      ],
       if (context.isMornye && isAndroidTv)
         NavigationDestination(
           icon: const Icon(CupertinoIcons.gear_alt),
@@ -1386,17 +1440,23 @@ class _MainShellState extends ConsumerState<MainShell>
       body: useNavigationRail
           ? Row(
               children: [
-                SafeArea(
-                  right: false,
-                  bottom: false,
-                  child: ExpressiveNavigationRail(
-                    selectedIndex: selectedDestination,
-                    onDestinationSelected: _onNavTap,
-                    backgroundColor: Theme.of(
-                      context,
-                    ).colorScheme.surfaceContainer,
-                    destinations: destinations,
-                  ),
+                Builder(
+                  builder: (context) {
+                    final rtl = Directionality.of(context) == TextDirection.rtl;
+                    return SafeArea(
+                      left: !rtl,
+                      right: rtl,
+                      bottom: false,
+                      child: ExpressiveNavigationRail(
+                        selectedIndex: selectedDestination,
+                        onDestinationSelected: _onNavTap,
+                        backgroundColor: Theme.of(
+                          context,
+                        ).colorScheme.surfaceContainer,
+                        destinations: destinations,
+                      ),
+                    );
+                  },
                 ),
                 const VerticalDivider(width: 1),
                 // Width-based layout (centered columns, grids) measures
@@ -1405,6 +1465,8 @@ class _MainShellState extends ConsumerState<MainShell>
                   child: LayoutBuilder(
                     builder: (context, constraints) {
                       final mediaQuery = MediaQuery.of(context);
+                      final rtl =
+                          Directionality.of(context) == TextDirection.rtl;
                       return MediaQuery(
                         data: mediaQuery
                             .copyWith(
@@ -1413,7 +1475,7 @@ class _MainShellState extends ConsumerState<MainShell>
                                 mediaQuery.size.height,
                               ),
                             )
-                            .removePadding(removeLeft: true),
+                            .removePadding(removeLeft: !rtl, removeRight: rtl),
                         child: pageView,
                       );
                     },
@@ -1425,11 +1487,9 @@ class _MainShellState extends ConsumerState<MainShell>
       bottomNavigationBar: Builder(
         builder: (context) {
           if (context.isMornye) {
+            final mornyeBlurEnabled = ref.watch(mornyeBlurEnabledProvider);
             return ListenableBuilder(
-              listenable: Listenable.merge([
-                ShellNavigationService.chromeBrightness,
-                ShellNavigationService.chromeSurface,
-              ]),
+              listenable: _chromeSurfaceListenable,
               builder: (context, child) => Theme(
                 data: ShellNavigationService.chromeBrightness.value == null
                     ? Theme.of(context)
@@ -1455,19 +1515,22 @@ class _MainShellState extends ConsumerState<MainShell>
                     ),
                     child: useNavigationRail
                         ? const MiniPlayer()
-                        : ValueListenableBuilder<bool>(
-                            valueListenable: _mornyeChrome,
-                            builder: (context, collapsed, _) => MornyeBottomBar(
-                              collapsed:
-                                  canMinimizeChrome &&
-                                  collapsed &&
-                                  MediaQuery.viewInsetsOf(context).bottom == 0,
-                              destinations: destinations,
-                              selectedIndex: selectedDestination,
-                              onSelected: _onNavTap,
-                              onHome: () => _onNavTap(0),
-                              onSearch: ShellNavigationService.requestSearch,
-                              blurEnabled: ref.watch(mornyeBlurEnabledProvider),
+                        : _KeyboardOpenProvider(
+                            child: ValueListenableBuilder<bool>(
+                              valueListenable: _mornyeChrome,
+                              builder: (context, collapsed, _) =>
+                                  MornyeBottomBar(
+                                    collapsed:
+                                        canMinimizeChrome &&
+                                        collapsed &&
+                                        !_KeyboardOpenScope.of(context),
+                                    destinations: destinations,
+                                    selectedIndex: selectedDestination,
+                                    onSelected: _onNavTap,
+                                    onHome: () => _onNavTap(0),
+                                    onSearch: _openSearchFromBar,
+                                    blurEnabled: mornyeBlurEnabled,
+                                  ),
                             ),
                           ),
                   ),
@@ -1480,6 +1543,8 @@ class _MainShellState extends ConsumerState<MainShell>
           // takes the playing track's artwork scheme too; with nothing
           // playing both keep the app scheme. Only this scope listens
           // to the track, so a cover change does not rebuild the shell.
+          // Only the fills fade; a whole-scheme move rebuilt the bar on
+          // every frame of a song change.
           return Consumer(
             builder: (context, ref, child) => PlayerArtworkTheme(
               artUri: ref.watch(
@@ -1487,6 +1552,7 @@ class _MainShellState extends ConsumerState<MainShell>
                   (item) => item.value?.artUri?.toString(),
                 ),
               ),
+              fadesSurfaceOnly: true,
               child: child!,
             ),
             child: Builder(
@@ -1498,14 +1564,17 @@ class _MainShellState extends ConsumerState<MainShell>
                     // The bar's container fill separates it; no divider,
                     // so the mini player and the bar read as one surface.
                     if (!useNavigationRail)
-                      ExpressiveNavigationBar(
-                        selectedIndex: _currentIndex.clamp(0, maxIndex),
-                        onDestinationSelected: _onNavTap,
-                        isTablet: isTablet,
-                        backgroundColor: settingsGroupColor(
-                          context,
-                        ).withValues(alpha: 0.72),
-                        destinations: destinations,
+                      PlayerArtworkSurface(
+                        surface: Theme.of(context).colorScheme.surface,
+                        overlay: settingsGroupOverlay(context),
+                        opacity: 0.72,
+                        child: ExpressiveNavigationBar(
+                          selectedIndex: _currentIndex.clamp(0, maxIndex),
+                          onDestinationSelected: _onNavTap,
+                          isTablet: isTablet,
+                          backgroundColor: Colors.transparent,
+                          destinations: destinations,
+                        ),
                       ),
                   ],
                 );
@@ -1514,16 +1583,25 @@ class _MainShellState extends ConsumerState<MainShell>
                 // opaque base instead unless the user forces blur on in
                 // appearance settings.
                 if (!blurEnabled) {
-                  return ColoredBox(
-                    color: settingsGroupColor(context),
+                  return PlayerArtworkSurface(
+                    surface: Theme.of(context).colorScheme.surface,
+                    overlay: settingsGroupOverlay(context),
                     child: bottomBar,
                   );
                 }
                 return ClipRect(
-                  child: BackdropFilter(
-                    filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-                    blendMode: BlendMode.src,
-                    child: bottomBar,
+                  child: Stack(
+                    fit: StackFit.passthrough,
+                    children: [
+                      Positioned.fill(
+                        child: BackdropFilter(
+                          filter: _materialBottomBarBlur,
+                          blendMode: BlendMode.src,
+                          child: const SizedBox.expand(),
+                        ),
+                      ),
+                      RepaintBoundary(child: bottomBar),
+                    ],
                   ),
                 );
               },
@@ -1533,6 +1611,33 @@ class _MainShellState extends ConsumerState<MainShell>
       ),
     );
   }
+}
+
+/// Tells the Mornye bottom bar only whether the keyboard is open, so the
+/// frames of the keyboard's own animation do not rebuild the bar.
+class _KeyboardOpenProvider extends StatelessWidget {
+  const _KeyboardOpenProvider({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => _KeyboardOpenScope(
+    open: MediaQuery.viewInsetsOf(context).bottom > 0,
+    child: child,
+  );
+}
+
+class _KeyboardOpenScope extends InheritedWidget {
+  const _KeyboardOpenScope({required this.open, required super.child});
+
+  final bool open;
+
+  static bool of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<_KeyboardOpenScope>()!.open;
+
+  @override
+  bool updateShouldNotify(_KeyboardOpenScope oldWidget) =>
+      open != oldWidget.open;
 }
 
 class _TabNavigator extends StatefulWidget {
@@ -1705,9 +1810,7 @@ class _HomeTabRoot extends StatelessWidget {
   const _HomeTabRoot();
 
   @override
-  Widget build(BuildContext context) => HomeTab(
-    mode: context.isMornye ? HomeTabMode.browse : HomeTabMode.combined,
-  );
+  Widget build(BuildContext context) => const HomeTab();
 }
 
 /// Library's root page: one [QueueTab] for the life of the tab. A switch of

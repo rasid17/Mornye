@@ -52,10 +52,12 @@ import 'package:mornye/widgets/network_offline_actions.dart';
 import 'package:mornye/widgets/network_upload_actions.dart';
 import 'package:mornye/widgets/disc_separator_chip.dart';
 import 'package:mornye/widgets/album_detail_header.dart';
+import 'package:mornye/widgets/header_toolbar_actions.dart';
 import 'package:mornye/widgets/mornye_artist_header.dart';
 import 'package:mornye/widgets/motion_header_banner.dart';
 import 'package:mornye/widgets/app_loading_indicator.dart';
 import 'package:mornye/widgets/queue_swipe.dart';
+import 'package:mornye/widgets/track_card.dart';
 
 class DownloadedAlbumScreen extends ConsumerStatefulWidget {
   final String albumName;
@@ -293,7 +295,8 @@ class _DownloadedAlbumScreenState extends ConsumerState<DownloadedAlbumScreen>
     }
 
     final tracks = order.tracks;
-    pruneSelection(tracks.map((t) => t.id).toSet());
+    slideSelectIds = [for (final track in tracks) track.id];
+    pruneSelection(slideSelectIds.toSet());
 
     if (context.isMornye) {
       return MornyeArtistSurface(
@@ -391,32 +394,34 @@ class _DownloadedAlbumScreenState extends ConsumerState<DownloadedAlbumScreen>
     final expandedHeight = calculateExpandedHeight(context);
     final embeddedCoverPath = _resolveAlbumEmbeddedCoverPath(tracks);
     final commonQuality = _getCommonQuality(tracks, qualityLabelMode);
+    // Only a found cover changes the header, not the lookup finishing.
     final motion = context.isMornye && !MediaQuery.disableAnimationsOf(context)
-        ? ref
-              .watch(
-                songMotionArtworkProvider((
-                  album: widget.albumName,
-                  artist: tracks.isEmpty
-                      ? widget.artistName
-                      : tracks.first.artistName,
-                  source: tracks.firstOrNull?.filePath ?? '',
-                )),
-              )
-              .value
+        ? ref.watch(
+            songMotionArtworkProvider((
+              album: widget.albumName,
+              artist: tracks.isEmpty
+                  ? widget.artistName
+                  : tracks.first.artistName,
+              source: tracks.firstOrNull?.filePath ?? '',
+            )).select((lookup) => lookup.value),
+          )
         : null;
 
-    final cacheWidth = coverCacheWidthForViewport(context);
+    final cacheWidth = detailHeaderCoverCacheWidth(context);
+    final bgCacheWidth = !context.isMornye
+        ? metadataBackdropCacheExtent(context)
+        : cacheWidth;
     final Widget background = embeddedCoverPath != null
         ? LocalOrNetworkCoverImage(
             url: embeddedCoverPath,
-            localCacheWidth: cacheWidth,
+            localCacheWidth: bgCacheWidth,
             placeholder: (_) => Container(color: colorScheme.surface),
           )
         : widget.coverUrl != null
         ? CachedNetworkImage(
             imageUrl: highResCoverUrl(widget.coverUrl) ?? widget.coverUrl!,
             fit: BoxFit.cover,
-            memCacheWidth: cacheWidth,
+            memCacheWidth: bgCacheWidth,
             cacheManager: CoverCacheManager.instance,
             placeholder: (_, _) => Container(color: colorScheme.surface),
             errorWidget: (_, _, _) => Container(color: colorScheme.surface),
@@ -474,30 +479,25 @@ class _DownloadedAlbumScreenState extends ConsumerState<DownloadedAlbumScreen>
           ? _buildDownloadedHeaderMeta(context, tracks, commonQuality)
           : null,
       appBarActions: [
-        if (tracks.isNotEmpty)
-          AlbumTrackSortButton(
-            albumKey: _sortKey,
-            songs: [for (final track in tracks) track.trackName],
-          ),
-        NetworkOfflineButton(
-          items: [
-            for (final track in tracks)
-              UnifiedLibraryItem.fromDownloadHistory(track),
-          ],
-        ),
-        NetworkUploadButton(
-          items: [
-            for (final track in tracks)
-              UnifiedLibraryItem.fromDownloadHistory(track),
-          ],
-        ),
-        if (ref.watch(linkPhoneClientProvider) != null)
-          LinkTransferButtons(
-            items: [
+        HeaderToolbarActions(
+          sort: tracks.isNotEmpty
+              ? AlbumTrackSortButton(
+                  albumKey: _sortKey,
+                  songs: [for (final track in tracks) track.trackName],
+                )
+              : null,
+          actions: (context, ref) {
+            final items = [
               for (final track in tracks)
                 UnifiedLibraryItem.fromDownloadHistory(track),
-            ],
-          ),
+            ];
+            return [
+              ?networkOfflineItemsAction(context, ref, items),
+              ?networkUploadAction(context, ref, items),
+              ...linkTransferActions(context, ref, items),
+            ];
+          },
+        ),
       ],
       actions: tracks.isNotEmpty
           ? AlbumPlayActions(
@@ -505,6 +505,7 @@ class _DownloadedAlbumScreenState extends ConsumerState<DownloadedAlbumScreen>
               shuffleTooltip: context.l10n.actionShuffle,
               onPlay: () => _playAll(tracks),
               onShuffle: () => _shuffleAll(tracks),
+              showShuffle: ref.watch(playerUiEnabledProvider),
               onAddToPlaylist: () => showAddTracksToPlaylistSheet(
                 Navigator.of(context, rootNavigator: true).context,
                 ref,
@@ -663,12 +664,17 @@ class _DownloadedAlbumScreenState extends ConsumerState<DownloadedAlbumScreen>
     if (isDesktopPlatform) return _buildDesktopTable(context, tracks);
     if (discMap.length <= 1) {
       return SliverPadding(
-        padding: EdgeInsets.symmetric(horizontal: wideListInset(context)),
+        padding: EdgeInsets.symmetric(
+          horizontal: wideListInset(context),
+        ).copyWith(top: collectionRunTopGap(context)),
         sliver: SliverList(
           delegate: SliverChildBuilderDelegate((context, index) {
             final track = tracks[index];
-            return KeyedSubtree(
+            // Material joins the rows into one connected list.
+            return TrackCardSegment.at(
               key: ValueKey(track.id),
+              index: index,
+              count: tracks.length,
               child: StaggeredListItem(
                 index: index,
                 child: _buildTrackItem(context, track, tracks, index),
@@ -700,8 +706,10 @@ class _DownloadedAlbumScreenState extends ConsumerState<DownloadedAlbumScreen>
         SliverList(
           delegate: SliverChildBuilderDelegate((context, index) {
             final track = discTracks[index];
-            return KeyedSubtree(
+            return TrackCardSegment.at(
               key: ValueKey(track.id),
+              index: index,
+              count: discTracks.length,
               child: StaggeredListItem(
                 index: discRevealStart + index,
                 child: _buildTrackItem(
@@ -763,7 +771,7 @@ class _DownloadedAlbumScreenState extends ConsumerState<DownloadedAlbumScreen>
               playback: mediaItemPlaybackUiProvider(_playbackKey(track)),
               trailing: _TrackPlaybackBuilder(
                 playbackKey: _playbackKey(track),
-                builder: (context, playback, toggle) => AlbumTrackPlayButton(
+                builder: (context, _, playback, toggle) => AlbumTrackPlayButton(
                   isPlaying: playback.isPlaying,
                   onPlay: playback.isCurrent
                       ? toggle
@@ -834,29 +842,32 @@ class _DownloadedAlbumScreenState extends ConsumerState<DownloadedAlbumScreen>
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
     );
-    return _TrackPlaybackBuilder(
-      playbackKey: _playbackKey(track),
-      builder: (context, playback, toggle) => AlbumTrackTile(
-        trackNumber: track.trackNumber,
-        trackName: track.trackName,
-        subtitle: subtitle,
-        isSelectionMode: isSelectionMode,
-        isSelected: selectedIds.contains(track.id),
-        isCurrent: playback.isCurrent,
-        isPlaying: playback.isPlaying,
-        onToggleSelection: () => toggleSelection(track.id),
-        onOpen: () => _navigateToMetadataScreen(
-          track,
-          navigationItems: navigationItems,
-          navigationIndex: navigationIndex,
-        ),
-        onEnterSelectionMode: () => enterSelectionMode(track.id),
-        onPlay: playback.isCurrent
-            ? toggle
-            : () => _openFile(track, queueItems: navigationItems),
-        queueSwipe: libraryItemQueueSwipe(
-          ref,
-          UnifiedLibraryItem.fromDownloadHistory(track),
+    return slideSelectRow(
+      track.id,
+      _TrackPlaybackBuilder(
+        playbackKey: _playbackKey(track),
+        builder: (context, rowRef, playback, toggle) => AlbumTrackTile(
+          trackNumber: track.trackNumber,
+          trackName: track.trackName,
+          subtitle: subtitle,
+          isSelectionMode: isSelectionMode,
+          isSelected: selectedIds.contains(track.id),
+          isCurrent: playback.isCurrent,
+          isPlaying: playback.isPlaying,
+          onToggleSelection: () => toggleSelection(track.id),
+          onOpen: () => _navigateToMetadataScreen(
+            track,
+            navigationItems: navigationItems,
+            navigationIndex: navigationIndex,
+          ),
+          onEnterSelectionMode: () => holdToSelect(track.id),
+          onPlay: playback.isCurrent
+              ? toggle
+              : () => _openFile(track, queueItems: navigationItems),
+          queueSwipe: libraryItemQueueSwipe(
+            rowRef,
+            UnifiedLibraryItem.fromDownloadHistory(track),
+          ),
         ),
       ),
     );
@@ -940,6 +951,7 @@ class _TrackPlaybackBuilder extends ConsumerWidget {
   final PlaybackRowKey playbackKey;
   final Widget Function(
     BuildContext context,
+    WidgetRef ref,
     MediaPlaybackUi playback,
     VoidCallback toggle,
   )
@@ -950,6 +962,7 @@ class _TrackPlaybackBuilder extends ConsumerWidget {
     final playback = ref.watch(mediaItemPlaybackUiProvider(playbackKey));
     return builder(
       context,
+      ref,
       playback,
       () => ref
           .read(musicPlayerControllerProvider)

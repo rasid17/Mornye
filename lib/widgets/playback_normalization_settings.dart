@@ -3,8 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mornye/l10n/l10n.dart';
 import 'package:mornye/providers/settings_provider.dart';
 import 'package:mornye/theme/mornye_theme.dart';
-import 'package:mornye/widgets/app_choice_chip.dart';
 import 'package:mornye/widgets/app_slider.dart';
+import 'package:mornye/widgets/settings_group.dart';
 import 'package:mornye/widgets/slider_value_header.dart';
 
 /// Gain mode and pre-amp shown under the volume normalization switch.
@@ -35,6 +35,9 @@ class _PlaybackNormalizationSettingsState
     final savedPreamp = ref.watch(
       settingsProvider.select((s) => s.playbackNormalizationPreamp),
     );
+    final boost = ref.watch(
+      settingsProvider.select((s) => s.playbackNormalizationBoost),
+    );
     final notifier = ref.read(settingsProvider.notifier);
     final l10n = context.l10n;
     final preamp = (_preamp ?? savedPreamp).round();
@@ -51,21 +54,19 @@ class _PlaybackNormalizationSettingsState
         children: [
           Text(l10n.playbackNormalizationMode),
           const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            children: [
-              for (final (id, label) in [
-                ('track', l10n.playbackNormalizationModeTrack),
-                ('album', l10n.playbackNormalizationModeAlbum),
-              ])
-                AppChoiceChip(
-                  label: Text(label),
-                  selected: mode == id,
-                  singleChoice: true,
-                  onSelected: widget.enabled
-                      ? (_) => notifier.setPlaybackNormalizationMode(id)
-                      : null,
-                ),
+          SettingsSegmentedChoice<String>(
+            selected: mode,
+            enabled: widget.enabled,
+            onChanged: notifier.setPlaybackNormalizationMode,
+            options: [
+              SettingsSegmentOption(
+                value: 'track',
+                label: l10n.playbackNormalizationModeTrack,
+              ),
+              SettingsSegmentOption(
+                value: 'album',
+                label: l10n.playbackNormalizationModeAlbum,
+              ),
             ],
           ),
           const SizedBox(height: 16),
@@ -95,7 +96,9 @@ class _PlaybackNormalizationSettingsState
                 : null,
           ),
           Text(
-            l10n.playbackNormalizationPreampHint,
+            boost
+                ? l10n.playbackNormalizationPreampHintBoost
+                : l10n.playbackNormalizationPreampHint,
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
               color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),

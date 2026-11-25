@@ -5,7 +5,8 @@ import 'package:material_ui/material_ui.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:liquid_glass_easy/liquid_glass_easy.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
+    show AdaptiveGlass, GlassBackdropGroup;
 import 'package:mornye/widgets/mornye_selection_pill.dart';
 import 'package:mornye/l10n/l10n.dart';
 import 'package:mornye/providers/music_player_provider.dart';
@@ -19,6 +20,7 @@ import 'package:mornye/widgets/mini_player.dart';
 import 'package:mornye/widgets/mornye_artist_header.dart';
 import 'package:mornye/widgets/mornye_bottom_bar.dart';
 import 'package:mornye/widgets/mornye_chrome.dart';
+import 'package:mornye/widgets/mornye_liquid_backdrop.dart';
 
 import 'support/tooltip_finder.dart';
 
@@ -192,22 +194,33 @@ void main() {
         MornyeGlass.debugShaderFilterSupport = true;
         addTearDown(() => MornyeGlass.debugShaderFilterSupport = null);
         await pumpShell(tester, blur: true, withPlayer: withPlayer);
-        // Every painted lens carries a batch key, so each takes the single
-        // composed pass, and lenses with the same key share one read.
+        // Every lens of the bar sits in a backdrop group, and lenses with the
+        // same key share one read.
         List<Element> lenses() => find
             .descendant(
               of: find.byType(MornyeBottomBar),
-              matching: find.byType(LiquidGlassLens),
+              matching: find.byType(AdaptiveGlass),
             )
             .evaluate()
             .toList();
-        List<int> keys(List<Element> lenses) => [
-          for (final lens in lenses) LiquidGlassBatch.backdropIdOf(lens)!,
+        List<BackdropKey> keys(List<Element> lenses) => [
+          for (final lens in lenses) GlassBackdropGroup.keyOf(lens)!,
         ];
 
         final expanded = keys(lenses());
         expect(expanded, hasLength(withPlayer ? 2 : 1));
         expect(expanded.toSet(), hasLength(1));
+        // At the default clarity the bar and the player are the material's
+        // own glass, not a tint of the app's.
+        for (final lens in lenses()) {
+          final settings = (lens.widget as AdaptiveGlass).settings;
+          final material = MornyeLiquidBackdrop.material(
+            Theme.of(lens).brightness,
+          );
+          expect(settings.glassColor, material.glassColor);
+          expect(settings.bodyMode, material.bodyMode);
+          expect(settings.frost, material.frost);
+        }
 
         chrome.value = true;
         await tester.pump();
@@ -226,7 +239,7 @@ void main() {
         final resting = lenses();
         expect(resting, hasLength(withPlayer ? 3 : 2));
         expect(keys(resting).toSet(), expanded.toSet());
-        // Switching batches reparents the search capsule's lens instead of
+        // Switching groups reparents the search capsule's lens instead of
         // rebuilding it. The leading circle takes over from the bar only here.
         expect(resting.where(folding.contains), hasLength(withPlayer ? 2 : 1));
 
@@ -546,6 +559,26 @@ void main() {
     );
   }
 
+  testWidgets('a tab switch keeps the player as made', (tester) async {
+    final activeTab = ValueNotifier(0);
+    addTearDown(activeTab.dispose);
+    await pumpShell(tester, activeTab: activeTab);
+    final player = tester.widget<MiniPlayer>(find.byType(MiniPlayer));
+    activeTab.value = 1;
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<MornyeBottomBar>(find.byType(MornyeBottomBar)),
+      isA<MornyeBottomBar>().having((bar) => bar.selectedIndex, 'tab', 1),
+    );
+    expect(tester.widget(find.byType(MiniPlayer)), same(player));
+
+    // The fold still makes the compact player.
+    chrome.value = true;
+    await tester.pumpAndSettle();
+    expect(tester.widget<MiniPlayer>(find.byType(MiniPlayer)).compact, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
   for (final withPlayer in [false, true]) {
     testWidgets('compact transition has no height jump (player: $withPlayer)', (
       tester,
@@ -673,6 +706,35 @@ void main() {
       }
     }
   }
+
+  testWidgets('a fold moves the compact buttons without making them again', (
+    tester,
+  ) async {
+    await pumpShell(tester);
+    await tester.drag(find.byType(ListView), const Offset(0, -240));
+    await tester.pump();
+    expect(chrome.value, isTrue);
+    await tester.pump(const Duration(milliseconds: 16));
+    final buttons = [
+      find.byKey(const ValueKey('mornye-compact-leading')),
+      find.byKey(const ValueKey('mornye-compact-search')),
+    ];
+    final made = <Widget>{};
+    for (var i = 0; i < 20; i++) {
+      await tester.pump(const Duration(milliseconds: 16));
+      for (final button in buttons) {
+        made.add(tester.widget(button));
+      }
+    }
+    expect(made, hasLength(2));
+    await tester.pumpAndSettle();
+
+    // The kept buttons still act.
+    await tester.tap(buttons.last);
+    await tester.pumpAndSettle();
+    expect(searches, 1);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('downward scroll folds the tabs without replacing the player', (
     tester,

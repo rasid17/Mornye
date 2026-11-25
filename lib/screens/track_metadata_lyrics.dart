@@ -690,7 +690,7 @@ extension _TrackMetadataLyricsAndSaving on _TrackMetadataScreenState {
         if (picked == null) return null;
         return (treeUri: null, path: picked.path, bookmark: picked.bookmark);
       default:
-        final path = await FilePicker.getDirectoryPath();
+        final path = await pickDesktopDirectoryPath();
         if (path == null) return null;
         return (treeUri: null, path: path, bookmark: null);
     }
@@ -1323,7 +1323,7 @@ extension _TrackMetadataLyricsAndSaving on _TrackMetadataScreenState {
             );
           });
         }
-        await ref.read(localLibraryProvider.notifier).reloadFromStorage();
+        ref.read(localLibraryProvider.notifier).notifyTrackMetadataChanged();
       } catch (e) {
         _log.w('Failed to sync local library explicit metadata: $e');
       }

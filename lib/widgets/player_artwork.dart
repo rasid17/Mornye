@@ -31,6 +31,10 @@ class PlayerArtwork extends StatelessWidget {
   /// while it fades in.
   final AppMotionSpec? crossfadeScale;
 
+  /// A song file on this device whose own artwork shows when [artUri]
+  /// cannot load. Not read with [crossfade].
+  final String? songFile;
+
   const PlayerArtwork({
     super.key,
     required this.artUri,
@@ -39,6 +43,7 @@ class PlayerArtwork extends StatelessWidget {
     this.iconSize = 40,
     this.crossfade,
     this.crossfadeScale,
+    this.songFile,
   });
 
   /// Share one full-size decode while artwork moves between player panels.
@@ -55,6 +60,23 @@ class PlayerArtwork extends StatelessWidget {
       color: colorScheme.onSurfaceVariant,
     ),
   );
+
+  /// What shows when the cover cannot load: the artwork inside [songFile]
+  /// when there is one, otherwise the placeholder.
+  Widget _unavailable(Widget placeholder) {
+    if (songFile == null) return placeholder;
+    return EmbeddedCoverFallback(
+      key: ValueKey(artUri),
+      songFile: songFile,
+      placeholder: placeholder,
+      builder: (_, preview) => Image(
+        image: coverImageProvider(preview, cacheWidth: cacheWidth)!,
+        fit: BoxFit.cover,
+        gaplessPlayback: true,
+        errorBuilder: (_, _, _) => placeholder,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -82,7 +104,7 @@ class PlayerArtwork extends StatelessWidget {
         fadeOutDuration: const Duration(milliseconds: 0),
         useOldImageOnUrlChange: true,
         placeholder: (_, _) => placeholder,
-        errorWidget: (_, _, _) => placeholder,
+        errorWidget: (_, _, _) => _unavailable(placeholder),
       );
     }
     final image = coverImageProvider(uri, cacheWidth: cacheWidth);
@@ -93,7 +115,7 @@ class PlayerArtwork extends StatelessWidget {
       image: image,
       fit: BoxFit.cover,
       gaplessPlayback: true,
-      errorBuilder: (_, _, _) => placeholder,
+      errorBuilder: (_, _, _) => _unavailable(placeholder),
     );
   }
 
@@ -128,10 +150,13 @@ class PlayerArtwork extends StatelessWidget {
 }
 
 class _ArtworkLayer {
-  _ArtworkLayer(this.uri, this.opacity);
+  _ArtworkLayer(this.uri, this.opacity, {this.swaps = false});
 
   final String? uri;
   final AnimationController opacity;
+
+  /// Arrived while the crossfade was hidden: shows at once when it can.
+  final bool swaps;
   final key = UniqueKey();
   bool shown = false;
 }
@@ -184,6 +209,17 @@ class _ArtworkCrossfadeState extends State<_ArtworkCrossfade>
   AnimationController _opacity(double value) =>
       AnimationController(vsync: this, value: value, duration: _total);
 
+  /// Whether the crossfade showed when it last checked. A cover that comes
+  /// while it is hidden, as under the full player, or in the frame it shows
+  /// again, swaps instead of fading in late.
+  bool _onScreen = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _onScreen = TickerMode.valuesOf(context).enabled;
+  }
+
   @override
   void didUpdateWidget(_ArtworkCrossfade oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -204,7 +240,7 @@ class _ArtworkCrossfadeState extends State<_ArtworkCrossfade>
         ..clear()
         ..add(base);
     }
-    _layers.add(_ArtworkLayer(widget.artUri, _opacity(0)));
+    _layers.add(_ArtworkLayer(widget.artUri, _opacity(0), swaps: !_onScreen));
     _showWhenUnavailable(_current);
   }
 
@@ -245,6 +281,11 @@ class _ArtworkCrossfadeState extends State<_ArtworkCrossfade>
     // Runs during build: start the fade once this frame is done.
     SchedulerBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_layers.contains(layer)) return;
+      if (layer.swaps) {
+        layer.opacity.value = 1;
+        _dropBelow(layer);
+        return;
+      }
       final fade = layer.opacity.animateTo(1);
       fade.whenCompleteOrCancel(() {
         if (!mounted || !_layers.contains(layer)) return;

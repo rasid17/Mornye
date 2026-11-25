@@ -2,7 +2,7 @@ import 'dart:ui' show ImageFilter, lerpDouble;
 
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:liquid_glass_easy/liquid_glass_easy.dart';
+import 'package:mornye/models/theme_settings.dart';
 import 'package:mornye/providers/runtime_profile_provider.dart';
 import 'package:mornye/theme/mornye_theme.dart';
 import 'package:mornye/utils/desktop_platform.dart';
@@ -186,9 +186,28 @@ class MornyeGlass extends ConsumerWidget {
       ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
   ];
 
+  // The lens softens the backdrop with its frost; this blur adds to it as the
+  // clarity setting falls below its default.
+  static const _tintedLensBlur = 6.0;
+
+  // How much of the material's frost the clearest setting drops.
+  static const _thinnedShare = 0.5;
+
+  // A colored tint is a meaning, such as a state, and stays at every clarity.
+  // A neutral one is only density, which the material sets by itself.
+  static bool _isColored(Color? tint) {
+    if (tint == null) return false;
+    final channels = [tint.r, tint.g, tint.b]..sort();
+    return channels.last - channels.first > 0.08;
+  }
+
   /// Host tests cannot run shader filters; this lets them build the lens.
   @visibleForTesting
   static bool? debugShaderFilterSupport;
+
+  /// Whether this device can draw a lens, honoring the test override.
+  static bool get shaderFiltersSupported =>
+      debugShaderFilterSupport ?? ImageFilter.isShaderFilterSupported;
 
   final Widget child;
   final bool blurEnabled;
@@ -289,7 +308,7 @@ class MornyeGlass extends ConsumerWidget {
         firstInGroup &&
         lastInGroup &&
         level == MornyeGlassLevel.liquid &&
-        (debugShaderFilterSupport ?? ImageFilter.isShaderFilterSupported);
+        shaderFiltersSupported;
     // Clear glass softens the backdrop less. Keep the mid-range fallback at
     // its small blur budget, and reuse these filters in the lens renderer too.
     final filterIndex = level == MornyeGlassLevel.frosted
@@ -299,54 +318,72 @@ class MornyeGlass extends ConsumerWidget {
         : clarity >= 0.6
         ? 2
         : 3;
-    final clearFill = (dark ? const Color(0xff999999) : Colors.white)
-        .withValues(alpha: dark ? 0.17 : 0.46);
+    // At the default clarity the lens is the glass package's iOS 27 material
+    // untouched. Lower clarity lays Mornye's tint into it, higher thins it.
+    final material = MornyeLiquidBackdrop.material(scheme.brightness);
+    const rest = kDefaultMornyeGlassClarity;
+    final tinted = ((rest - clarity) / (rest - 0.2)).clamp(0.0, 1.0);
+    final thinned = ((clarity - rest) / (1 - rest)).clamp(0.0, 1.0);
+    final ownMaterial = useLens && !strongTint && !_isColored(tintColor);
+    final density = ownMaterial ? 1 - _thinnedShare * thinned : 1.0;
     final fill = Color.lerp(
       scheme.surfaceContainerHigh,
-      useLens && !strongTint
-          ? Color.lerp(tint, clearFill, ((clarity - 0.2) / 0.8).clamp(0, 1))
-          : tint,
+      ownMaterial ? Color.lerp(material.glassColor, tint, tinted) : tint,
       reveal,
-    );
+    )!;
     final squircle = smoothCorners && firstInGroup && lastInGroup;
+    // Child controls paint on this surface; never re-blur their parent.
+    final content = _GlassBackdropScope(child: child);
     final surface = DecoratedBox(
       decoration: squircle
           ? ShapeDecoration(color: fill, shape: MornyeSquircleBorder(radius))
           : BoxDecoration(color: fill, borderRadius: shape),
-      // Child controls paint on this surface; never re-blur their parent.
-      child: _GlassBackdropScope(child: child),
+      child: content,
     );
-    final shadows = firstInGroup && lastInGroup
-        ? [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: dark ? 0.14 : 0.08),
-              blurRadius: 8,
-              blurStyle: BlurStyle.outer,
-              offset: const Offset(0, 2),
-            ),
-          ]
-        : null;
+    final ownShadows = [
+      BoxShadow(
+        color: Colors.black.withValues(alpha: dark ? 0.14 : 0.08),
+        blurRadius: 8,
+        blurStyle: BlurStyle.outer,
+        offset: const Offset(0, 2),
+      ),
+    ];
+    // The lens takes its material's shadow, which the dark material lacks.
+    final shadows = !firstInGroup || !lastInGroup
+        ? null
+        : !useLens
+        ? ownShadows
+        : BoxShadow.lerpList(ownShadows, [
+            for (final shadow in material.shadow ?? const <BoxShadow>[])
+              BoxShadow(
+                color: shadow.color,
+                blurRadius: shadow.blurRadius,
+                blurStyle: BlurStyle.outer,
+                offset: shadow.offset,
+              ),
+          ], reveal);
+    // The lens tints, blurs and clips by itself, and reads the backdrop with
+    // its group (`GlassBackdropGroup`) or alone.
     final lens = useLens
         ? MornyeLiquidBackdrop(
             borderRadius: shape,
-            clarity: clarity,
-            blurSigma: _blurSigmas[filterIndex],
+            tint: ownMaterial && tinted == 0 && reveal == 1 ? null : fill,
+            blurSigma: lerpDouble(material.blur, _tintedLensBlur, tinted),
+            density: density,
             refractionDepth: refractionDepth * reveal,
             smoothCorners: squircle,
             highlightIntensity: highlightIntensity * reveal,
-            child: surface,
+            child: content,
           )
         : null;
-    // A batched lens composes blur and refraction into one backdrop read.
-    // Outside a batch it takes a key of its own: sharing one with the page or
-    // an overlapping menu would lose their glass.
-    final backdrop = lens != null
-        ? LiquidGlassBatch.backdropIdOf(context) == null
-              ? LiquidGlassBatch(child: lens)
-              : lens
-        : sampleBackdrop
-        ? BackdropFilter.grouped(filter: _blurs[filterIndex], child: surface)
-        : surface;
+    final backdrop =
+        lens ??
+        (sampleBackdrop
+            ? BackdropFilter.grouped(
+                filter: _blurs[filterIndex],
+                child: surface,
+              )
+            : surface);
     return DecoratedBox(
       decoration: squircle
           ? ShapeDecoration(
@@ -369,7 +406,9 @@ class MornyeGlass extends ConsumerWidget {
                 highlightIntensity: highlightIntensity * reveal,
               )
             : null,
-        child: squircle
+        child: lens != null
+            ? backdrop
+            : squircle
             ? ClipPath.shape(
                 shape: MornyeSquircleBorder(radius),
                 child: backdrop,
@@ -671,7 +710,6 @@ class MornyeTabBar extends ConsumerWidget {
                           ),
                           child: MornyeGlass.navigation(
                             blurEnabled: blurEnabled,
-                            strongTint: true,
                             tintOpacity: MornyeTheme.navigationOpacity(context),
                             refractionDepth: 0.45 + 0.15 * progress,
                             radius: lerpDouble(32, foldedSize / 2, amount)!,

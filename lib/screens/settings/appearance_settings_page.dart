@@ -4,10 +4,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:mornye/l10n/l10n.dart';
 import 'package:mornye/constants/language_choices.dart';
+import 'package:mornye/controllers/clickable_metadata.dart';
 import 'package:mornye/models/settings.dart';
 import 'package:mornye/providers/runtime_profile_provider.dart';
 import 'package:mornye/providers/settings_provider.dart';
 import 'package:mornye/providers/theme_provider.dart';
+import 'package:mornye/screens/settings/home_layout_page.dart';
 import 'package:mornye/models/theme_settings.dart';
 import 'package:mornye/theme/app_tokens.dart';
 import 'package:mornye/theme/mornye_theme.dart';
@@ -211,6 +213,7 @@ class AppearanceSettingsPage extends ConsumerWidget {
                         .read(settingsProvider.notifier)
                         .setHeroAnimationsEnabled(value),
                   ),
+                  const _AnimationSpeedSlider(),
                   const CustomFontSetting(),
                   SettingsSwitchItem(
                     icon: Icons.blur_on,
@@ -249,15 +252,35 @@ class AppearanceSettingsPage extends ConsumerWidget {
                       .read(settingsProvider.notifier)
                       .setHistoryViewMode(mode),
                 ),
+                if (settings.usesBuiltInPlayer)
+                  SettingsSwitchItem(
+                    key: const ValueKey('home-continue-listening'),
+                    icon: Icons.play_circle_outline,
+                    title: context.l10n.homeContinueListening,
+                    subtitle: context.l10n.appearanceContinueListeningSubtitle,
+                    value: settings.homeContinueListening,
+                    onChanged: ref
+                        .read(settingsProvider.notifier)
+                        .setHomeContinueListening,
+                  ),
                 SettingsSwitchItem(
-                  key: const ValueKey('home-continue-listening'),
-                  icon: Icons.play_circle_outline,
-                  title: context.l10n.homeContinueListening,
-                  subtitle: context.l10n.appearanceContinueListeningSubtitle,
-                  value: settings.homeContinueListening,
+                  key: const ValueKey('home-recommendations'),
+                  icon: Icons.auto_awesome_outlined,
+                  title: context.l10n.homeRecommendedForYou,
+                  subtitle: context.l10n.appearanceRecommendationsSubtitle,
+                  value: settings.homeRecommendations,
                   onChanged: ref
                       .read(settingsProvider.notifier)
-                      .setHomeContinueListening,
+                      .setHomeRecommendations,
+                ),
+                SettingsItem(
+                  key: const ValueKey('home-edit'),
+                  icon: Icons.tune,
+                  title: context.l10n.homeEdit,
+                  subtitle: context.l10n.homeEditSubtitle,
+                  onTap: () =>
+                      pushPage<void>(context, (_) => const HomeLayoutPage()),
+                  showDivider: false,
                 ),
               ],
             ),

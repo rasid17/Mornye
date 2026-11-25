@@ -10,6 +10,7 @@ import 'package:mornye/controllers/library_re_enrich_all.dart';
 import 'package:mornye/l10n/l10n.dart';
 import 'package:mornye/models/library_scan_failure.dart';
 import 'package:mornye/models/settings.dart';
+import 'package:mornye/theme/app_motion.dart';
 import 'package:mornye/theme/app_tokens.dart';
 import 'package:mornye/theme/mornye_theme.dart';
 import 'package:mornye/providers/settings_provider.dart';
@@ -20,6 +21,7 @@ import 'package:mornye/services/library_database.dart';
 import 'package:mornye/services/link/link_source_names.dart';
 import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/utils/adaptive_layout.dart';
+import 'package:mornye/utils/desktop_folders.dart';
 import 'package:mornye/utils/nav_bar_inset.dart';
 import 'package:mornye/widgets/duplicate_review_sheet.dart';
 import 'package:mornye/widgets/app_bottom_sheet.dart';
@@ -180,7 +182,11 @@ class _LibrarySettingsPageState extends ConsumerState<LibrarySettingsPage> {
       }
       String? result;
       try {
-        result = await FilePicker.getDirectoryPath();
+        result = Platform.isAndroid
+            // Android 9 and older scan by path; pickDirectory gives a tree URI.
+            // ignore: deprecated_member_use
+            ? await FilePicker.getDirectoryPath()
+            : await pickDesktopDirectoryPath();
       } catch (e) {
         // Linux reaches the picker through the desktop portal, which a
         // session may not run.
@@ -504,6 +510,9 @@ class _LibrarySettingsPageState extends ConsumerState<LibrarySettingsPage> {
     if (mode == AppSettings.libraryQualityLabelFileFormat) {
       return context.l10n.libraryQualityLabelFileFormat;
     }
+    if (mode == AppSettings.libraryQualityLabelSimple) {
+      return context.l10n.libraryQualityLabelSimple;
+    }
     if (mode == AppSettings.libraryQualityLabelBitDepthOnly) {
       return context.l10n.audioAnalysisBitDepth;
     }
@@ -537,6 +546,12 @@ class _LibrarySettingsPageState extends ConsumerState<LibrarySettingsPage> {
         (AppSettings.libraryQualityLabelFileFormat, Icons.audio_file_rounded),
       ])
         AppChoice(value, icon, _getQualityLabelModeLabel(context, value)),
+      AppChoice(
+        AppSettings.libraryQualityLabelSimple,
+        Icons.short_text_rounded,
+        context.l10n.libraryQualityLabelSimple,
+        subtitle: context.l10n.libraryQualityLabelSimpleSubtitle,
+      ),
     ],
     onSelected: (mode) =>
         ref.read(settingsProvider.notifier).setLibraryQualityLabelMode(mode),
@@ -606,7 +621,7 @@ class _LibrarySettingsPageState extends ConsumerState<LibrarySettingsPage> {
                     settings.libraryQualityLabelMode,
                   ),
                 ),
-                if (queueSwipeOffered)
+                if (queueSwipeOffered && settings.usesBuiltInPlayer)
                   SettingsSwitchItem(
                     icon: Icons.queue_music,
                     title: context.l10n.swipeToQueue,
@@ -846,7 +861,14 @@ class _LibrarySettingsPageState extends ConsumerState<LibrarySettingsPage> {
             SliverToBoxAdapter(
               child: Consumer(
                 builder: (context, ref, _) {
-                  final libraryState = ref.watch(localLibraryProvider);
+                  final (:isScanning, :hasLibraryItems) = ref.watch(
+                    localLibraryProvider.select(
+                      (s) => (
+                        isScanning: s.isScanning,
+                        hasLibraryItems: s.totalCount > 0,
+                      ),
+                    ),
+                  );
                   final hasDownloads = ref.watch(
                     downloadHistoryProvider.select(
                       (state) => state.totalCount > 0,
@@ -859,30 +881,51 @@ class _LibrarySettingsPageState extends ConsumerState<LibrarySettingsPage> {
                   final canCleanup =
                       !_isCleaningMissingFiles &&
                       !_isFindingMovedDownloads &&
-                      !libraryState.isScanning &&
-                      (libraryState.totalCount > 0 ||
+                      !isScanning &&
+                      (hasLibraryItems ||
                           hasDownloads ||
                           librarySources.isNotEmpty);
                   final canReEnrich =
-                      !_isLoadingReEnrich &&
-                      (libraryState.totalCount > 0 || hasDownloads);
-                  final artwork = ref.watch(libraryAlbumArtworkProvider);
-                  final canFindArtwork =
-                      !artwork.running && libraryState.totalCount > 0;
+                      !_isLoadingReEnrich && (hasLibraryItems || hasDownloads);
+                  final (:artworkRunning, :bulkArtworkRunning) = ref.watch(
+                    libraryAlbumArtworkProvider.select(
+                      (s) => (
+                        artworkRunning: s.running,
+                        bulkArtworkRunning: s.running && s.albumKey == null,
+                      ),
+                    ),
+                  );
+                  final canFindArtwork = !artworkRunning && hasLibraryItems;
                   return SettingsGroup(
                     connected: true,
                     children: [
-                      if (libraryState.isScanning)
-                        _ScanProgressTile(
-                          isFinalizing: libraryState.scanIsFinalizing,
-                          isPaused: libraryState.scanIsPaused,
-                          progress: libraryState.scanProgress,
-                          currentFile: libraryState.scanCurrentFile,
-                          scannedFiles: libraryState.scannedFiles,
-                          totalFiles: libraryState.scanTotalFiles,
-                          onPause: _pauseScan,
-                          onResume: _resumeScan,
-                          onCancel: _cancelScan,
+                      if (isScanning)
+                        Consumer(
+                          builder: (context, ref, _) {
+                            final scan = ref.watch(
+                              localLibraryProvider.select(
+                                (s) => (
+                                  isFinalizing: s.scanIsFinalizing,
+                                  isPaused: s.scanIsPaused,
+                                  progress: s.scanProgress,
+                                  currentFile: s.scanCurrentFile,
+                                  scannedFiles: s.scannedFiles,
+                                  totalFiles: s.scanTotalFiles,
+                                ),
+                              ),
+                            );
+                            return _ScanProgressTile(
+                              isFinalizing: scan.isFinalizing,
+                              isPaused: scan.isPaused,
+                              progress: scan.progress,
+                              currentFile: scan.currentFile,
+                              scannedFiles: scan.scannedFiles,
+                              totalFiles: scan.totalFiles,
+                              onPause: _pauseScan,
+                              onResume: _resumeScan,
+                              onCancel: _cancelScan,
+                            );
+                          },
                         )
                       else ...[
                         Opacity(
@@ -926,14 +969,27 @@ class _LibrarySettingsPageState extends ConsumerState<LibrarySettingsPage> {
                             onTap: canReEnrich ? _reEnrichAll : null,
                           ),
                         ),
-                        if (artwork.running && artwork.albumKey == null)
-                          _ArtworkProgressTile(
-                            done: artwork.done,
-                            total: artwork.total,
-                            stopping: artwork.cancelling,
-                            onStop: ref
-                                .read(libraryAlbumArtworkProvider.notifier)
-                                .cancel,
+                        if (bulkArtworkRunning)
+                          Consumer(
+                            builder: (context, ref, _) {
+                              final artwork = ref.watch(
+                                libraryAlbumArtworkProvider.select(
+                                  (s) => (
+                                    done: s.done,
+                                    total: s.total,
+                                    cancelling: s.cancelling,
+                                  ),
+                                ),
+                              );
+                              return _ArtworkProgressTile(
+                                done: artwork.done,
+                                total: artwork.total,
+                                stopping: artwork.cancelling,
+                                onStop: ref
+                                    .read(libraryAlbumArtworkProvider.notifier)
+                                    .cancel,
+                              );
+                            },
                           )
                         else
                           Opacity(
@@ -942,7 +998,7 @@ class _LibrarySettingsPageState extends ConsumerState<LibrarySettingsPage> {
                               icon: Icons.image_search_outlined,
                               title: context.l10n.libraryFindArtwork,
                               subtitle: context.l10n.libraryFindArtworkSubtitle,
-                              trailing: artwork.running
+                              trailing: artworkRunning
                                   ? const AppLoadingIndicator(
                                       size: 20,
                                       strokeWidth: 2,
@@ -989,14 +1045,12 @@ class _LibrarySettingsPageState extends ConsumerState<LibrarySettingsPage> {
                         ),
                       ),
                       Opacity(
-                        opacity: libraryState.totalCount > 0 ? 1.0 : 0.5,
+                        opacity: hasLibraryItems ? 1.0 : 0.5,
                         child: SettingsItem(
                           icon: Icons.delete_outline,
                           title: context.l10n.libraryClear,
                           subtitle: context.l10n.libraryClearSubtitle,
-                          onTap: libraryState.totalCount > 0
-                              ? _clearLibrary
-                              : null,
+                          onTap: hasLibraryItems ? _clearLibrary : null,
                           showDivider: false,
                         ),
                       ),

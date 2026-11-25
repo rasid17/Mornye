@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:sqflite/sqflite.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -116,6 +117,37 @@ class HistoryDatabase {
 
   HistoryDatabase._init();
 
+  /// For lock holders outside the writer queue (plain Library transactions,
+  /// native code): retry BEGIN long enough to outlast them.
+  static const List<Duration> _writeRetryDelays = [
+    Duration(milliseconds: 100),
+    Duration(milliseconds: 200),
+    Duration(milliseconds: 400),
+    Duration(milliseconds: 800),
+    Duration(milliseconds: 1600),
+    Duration(milliseconds: 3200),
+    Duration(milliseconds: 4000),
+  ];
+
+  static Future<T> _writeTransaction<T>(
+    Database db,
+    Future<T> Function(Transaction txn) action,
+  ) => sqlite.transactionWithBusyRetry(
+    db,
+    action,
+    retryDelays: _writeRetryDelays,
+  );
+
+  /// Test seam: uses [db] as the connection; null restores the real opener.
+  @visibleForTesting
+  static void debugReplaceDatabaseForTest(Database? db) {
+    _database.reset();
+    if (db != null) {
+      sqlite.joinWriterQueue(db, sqlite.historyWriterQueue);
+      _database.getOrCreate(() async => db);
+    }
+  }
+
   Future<Database> get database {
     return _database.getOrCreate(() async {
       final db = await sqlite.openAppDatabase(
@@ -139,6 +171,7 @@ class HistoryDatabase {
       // opening an existing database in case an earlier setup was
       // interrupted; unsupported SQLite builds remain on the LIKE fallback.
       _searchFtsAvailable ??= await HistorySchema.createSearchFts(db);
+      sqlite.joinWriterQueue(db, sqlite.historyWriterQueue);
       return db;
     });
   }
@@ -289,7 +322,7 @@ class HistoryDatabase {
 
   Future<void> upsert(Map<String, dynamic> json) async {
     final db = await database;
-    await db.transaction((txn) async {
+    await _writeTransaction(db, (txn) async {
       await txn.insert(
         'history',
         HistoryRowMapper.jsonToDbRow(json),
@@ -308,7 +341,7 @@ class HistoryDatabase {
   Future<void> upsertBatch(List<Map<String, dynamic>> items) async {
     if (items.isEmpty) return;
     final db = await database;
-    await db.transaction((txn) async {
+    await _writeTransaction(db, (txn) async {
       final batch = txn.batch();
       for (final json in items) {
         batch.insert(
@@ -331,7 +364,8 @@ class HistoryDatabase {
   ) async {
     if (items.isEmpty) return const {};
     final db = await database;
-    return db.transaction(
+    return _writeTransaction(
+      db,
       (txn) => updateExistingHistoryRows(
         txn,
         items.map(HistoryRowMapper.jsonToDbRow),
@@ -594,7 +628,7 @@ class HistoryDatabase {
 
   Future<void> clearAll() async {
     final db = await database;
-    await db.transaction((txn) async {
+    await _writeTransaction(db, (txn) async {
       await txn.delete('history_path_keys');
       await txn.delete('history');
     });
@@ -670,7 +704,7 @@ class HistoryDatabase {
         values['sample_rate'] = newSampleRate;
       }
     }
-    return db.transaction((txn) async {
+    return _writeTransaction(db, (txn) async {
       final changed = await txn.update(
         'history',
         values,
@@ -720,7 +754,7 @@ class HistoryDatabase {
     List<Map<String, dynamic>> entries,
   ) async {
     final db = await database;
-    return db.transaction((txn) async {
+    return _writeTransaction(db, (txn) async {
       final deletedIds = <String>[];
       for (final entry in entries) {
         final id = entry['id'] as String;
@@ -733,12 +767,20 @@ class HistoryDatabase {
           whereArgs: [id, entry['file_path'], ?downloadedAt],
         );
         if (count == 0) continue;
+        deletedIds.add(id);
+      }
+      const chunkSize = 250;
+      for (var start = 0; start < deletedIds.length; start += chunkSize) {
+        final end = start + chunkSize > deletedIds.length
+            ? deletedIds.length
+            : start + chunkSize;
+        final chunk = deletedIds.sublist(start, end);
+        final placeholders = List.filled(chunk.length, '?').join(',');
         await txn.delete(
           'history_path_keys',
-          where: 'item_id = ?',
-          whereArgs: [id],
+          where: 'item_id IN ($placeholders)',
+          whereArgs: chunk,
         );
-        deletedIds.add(id);
       }
       return deletedIds;
     });
@@ -748,7 +790,7 @@ class HistoryDatabase {
     if (ids.isEmpty) return 0;
 
     final db = await database;
-    final totalDeleted = await db.transaction((txn) async {
+    final totalDeleted = await _writeTransaction(db, (txn) async {
       var deleted = 0;
       const chunkSize = 500;
       for (var i = 0; i < ids.length; i += chunkSize) {

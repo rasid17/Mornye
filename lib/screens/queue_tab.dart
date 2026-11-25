@@ -19,6 +19,7 @@ import 'package:mornye/theme/app_motion.dart';
 import 'package:mornye/theme/app_tokens.dart';
 import 'package:mornye/theme/material_expressive.dart';
 import 'package:mornye/theme/mornye_theme.dart';
+import 'package:mornye/theme/page_transitions.dart';
 import 'package:mornye/widgets/app_bottom_sheet.dart';
 import 'package:mornye/widgets/app_icon.dart';
 import 'package:mornye/widgets/pinned_section_sliver_list.dart';
@@ -37,6 +38,7 @@ import 'package:mornye/widgets/library_track_selection_bar.dart';
 import 'package:mornye/widgets/library_view_toggle.dart';
 import 'package:mornye/widgets/library_selection_playback_actions.dart';
 import 'package:mornye/widgets/local_library_artwork_builder.dart';
+import 'package:mornye/widgets/drag_select.dart';
 import 'package:mornye/widgets/library_playlist_drag_source.dart';
 import 'package:mornye/widgets/playlist_picker_sheet.dart';
 import 'package:mornye/widgets/create_playlist_sheet.dart';
@@ -48,6 +50,7 @@ import 'package:intl/intl.dart' show DateFormat;
 import 'package:mornye/providers/library_browse_provider.dart';
 import 'package:mornye/providers/library_genres_provider.dart';
 import 'package:mornye/providers/library_counts_provider.dart';
+import 'package:mornye/providers/library_directory_provider.dart';
 import 'package:mornye/providers/library_search_provider.dart';
 import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/widgets/app_shape.dart';
@@ -62,6 +65,7 @@ import 'package:mornye/utils/library_format_filters.dart';
 import 'package:mornye/utils/ordered_range_selection.dart';
 import 'package:mornye/utils/saf_download_tree.dart';
 import 'package:mornye/models/download_item.dart';
+import 'package:mornye/models/home_pin.dart';
 import 'package:mornye/models/settings.dart';
 import 'package:mornye/models/unified_library_item.dart';
 import 'package:mornye/widgets/network_offline_actions.dart';
@@ -78,6 +82,9 @@ import 'package:mornye/services/album_completeness.dart';
 import 'package:mornye/services/local_track_redownload_service.dart';
 import 'package:mornye/services/batch_track_actions.dart';
 import 'package:mornye/services/downloaded_embedded_cover_resolver.dart';
+import 'package:mornye/services/history_database.dart';
+import 'package:mornye/services/library_collections_database.dart';
+import 'package:mornye/services/track_file_resolver.dart';
 import 'package:mornye/screens/track_metadata_screen.dart';
 import 'package:mornye/screens/listening_rewind_screen.dart';
 import 'package:mornye/screens/favorite_artists_screen.dart';
@@ -90,6 +97,9 @@ import 'package:mornye/screens/local_album_screen.dart';
 import 'package:mornye/screens/mornye_library_screen.dart';
 import 'package:mornye/controllers/clickable_metadata.dart';
 import 'package:mornye/controllers/completion_bridge_tracker.dart';
+import 'package:mornye/controllers/embedded_cover_versions.dart';
+import 'package:mornye/controllers/extension_auth_launcher.dart'
+    show extensionVerificationName;
 import 'package:mornye/controllers/local_track_batch_actions.dart';
 import 'package:mornye/controllers/queue_library_pager.dart';
 import 'package:mornye/controllers/queue_library_refresh_policy.dart';
@@ -100,9 +110,11 @@ import 'package:mornye/widgets/animation_utils.dart';
 import 'package:mornye/widgets/selection_bottom_bar.dart';
 import 'package:mornye/widgets/smoothed_progress.dart';
 import 'package:mornye/widgets/song_row_tap.dart';
+import 'package:mornye/widgets/track_collection_quick_actions.dart';
 import 'package:mornye/widgets/two_finger_pinch_listener.dart';
 import 'package:mornye/utils/desktop_platform.dart';
 import 'package:mornye/widgets/desktop/context_menu.dart';
+import 'package:mornye/widgets/home_pin_action.dart';
 import 'package:mornye/widgets/desktop/desktop_selection.dart';
 import 'package:mornye/widgets/desktop/hover_play_button.dart';
 import 'package:mornye/widgets/desktop/library_track_menu.dart';
@@ -148,14 +160,34 @@ class _QueueTabState extends ConsumerState<QueueTab> {
   static double get _libraryGridDefaultExtent => isDesktopPlatform ? 180 : 126;
   static double get _libraryGridMaxExtent => isDesktopPlatform ? 260 : 190;
   bool _embeddedCoverRefreshScheduled = false;
-  // Version counter to trigger targeted cover image rebuilds
-  // without rebuilding the entire widget tree via setState.
-  final ValueNotifier<int> _embeddedCoverVersion = ValueNotifier<int>(0);
+  // One extracted embedded cover rebuilds only the rows showing that file,
+  // not every visible cover in the tab.
+  final _embeddedCoverVersions = EmbeddedCoverVersions();
+  final Set<String> _dirtyEmbeddedCoverPaths = {};
+  bool _embeddedCoverBroadcastAll = false;
 
   bool _isSelectionMode = false;
   bool _isDraggingLibraryTrack = false;
   final Set<String> _selectedIds = {};
   String? _selectionAnchorId;
+
+  /// Follows a finger that slides over songs after a long press.
+  late final _slideSelect = DragSelectController(
+    onUpdate: _applySlideSelection,
+    onEnd: () {
+      _slideSelectBase = null;
+      _slideSelectFilter = null;
+      _slideSelectItems = const [];
+      _slideSelectItemIds = const [];
+    },
+  );
+
+  /// The filter page and song order a slide runs over, and the selection it
+  /// began with.
+  String? _slideSelectFilter;
+  List<UnifiedLibraryItem> _slideSelectItems = const [];
+  List<String> _slideSelectItemIds = const [];
+  Set<String>? _slideSelectBase;
   final SelectionOverlayController _selectionOverlay =
       SelectionOverlayController();
   List<UnifiedLibraryItem> _selectionOverlayItems = const [];
@@ -199,6 +231,24 @@ class _QueueTabState extends ConsumerState<QueueTab> {
     final mode = _filterModes[index];
     return mode == 'albums' && _albumsShowSingles ? 'singles' : mode;
   }
+
+  /// The page the pager rests on. It changes once a move has settled, so a
+  /// drag under way is never cut short by the page it is heading for.
+  int _restingPage = 0;
+
+  /// Whether the page at [index] lists song rows, which take the queue
+  /// swipe. A grid of songs, the collection pages and folder rows have none.
+  bool _pageHasSongRows(int index, String viewMode) =>
+      switch (_modeForPage(index)) {
+        'all' || 'singles' => viewMode != 'grid',
+        // Folders open on their own page; only songs beside them swipe.
+        'folders' => ref.watch(
+          libraryDirectoryIndexProvider.select(
+            (index) => index.value?.root.tracks.isNotEmpty ?? false,
+          ),
+        ),
+        _ => false,
+      };
 
   bool _isPageControllerInitialized = false;
   bool _wasTabVisible = false;
@@ -244,6 +294,12 @@ class _QueueTabState extends ConsumerState<QueueTab> {
   String? _sectionSort;
   String? _sectionLocale;
   List<_LibrarySection> _cachedTrackSections = const [];
+  List<UserPlaylistCollection>? _playlistIndexesSource;
+  String? _playlistIndexesQuery;
+  String? _playlistIndexesSort;
+  List<int> _playlistIndexesCache = const [];
+  (List<LibraryBrowseEntry>, List<_LibrarySection>)? _artistSectionsCache;
+  (List<LibraryBrowseEntry>, List<_LibrarySection>)? _genreSectionsCache;
 
   /// In-memory History snapshots and counts, regrouped only when the
   /// (immutable) History list changes.
@@ -346,6 +402,7 @@ class _QueueTabState extends ConsumerState<QueueTab> {
         ref.read(settingsProvider.notifier).setHistoryFilterMode(initialMode);
       });
     }
+    _restingPage = initialPage;
     _filterPageController = PageController(initialPage: initialPage);
   }
 
@@ -395,11 +452,11 @@ class _QueueTabState extends ConsumerState<QueueTab> {
     DownloadedEmbeddedCoverResolver.previewsCleared.removeListener(
       _onEmbeddedCoverChanged,
     );
+    _slideSelect.dispose();
     _hideSelectionOverlay();
     _hidePlaylistSelectionOverlay();
     _fileExistsCache.dispose();
     _completionBridgePlayableProbe.dispose();
-    _embeddedCoverVersion.dispose();
     _libraryGridExtent.dispose();
     _filterPageController?.dispose();
     _searchController.dispose();
@@ -576,16 +633,39 @@ class _QueueTabState extends ConsumerState<QueueTab> {
         .setHistoryFilterMode(singles ? 'singles' : 'albums');
   }
 
-  void _onEmbeddedCoverChanged() {
-    if (!mounted || _embeddedCoverRefreshScheduled) return;
+  ValueListenable<int> _embeddedCoverListenable(String? filePath) {
+    return _embeddedCoverVersions.of(
+      DownloadedEmbeddedCoverResolver.cleanFilePath(filePath),
+    );
+  }
+
+  void _onEmbeddedCoverChanged([String? filePath]) {
+    if (!mounted) return;
+    final cleanPath = DownloadedEmbeddedCoverResolver.cleanFilePath(filePath);
+    if (cleanPath.isEmpty) {
+      _embeddedCoverBroadcastAll = true;
+    } else {
+      _dirtyEmbeddedCoverPaths.add(cleanPath);
+    }
+    if (_embeddedCoverRefreshScheduled) return;
     _embeddedCoverRefreshScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _embeddedCoverRefreshScheduled = false;
-      if (mounted) {
-        _embeddedCoverVersion.value++;
-      }
+      final all = _embeddedCoverBroadcastAll;
+      final dirty = _dirtyEmbeddedCoverPaths.toList(growable: false);
+      _embeddedCoverBroadcastAll = false;
+      _dirtyEmbeddedCoverPaths.clear();
+      if (mounted) _embeddedCoverVersions.bump(all ? null : dirty);
     });
   }
+
+  /// The same callback object for a file on every build: the resolver keeps
+  /// its callbacks in a set.
+  VoidCallback _embeddedCoverChangedCallback(String? filePath) =>
+      _embeddedCoverVersions.callbackFor(
+        DownloadedEmbeddedCoverResolver.cleanFilePath(filePath),
+        _onEmbeddedCoverChanged,
+      );
 
   Future<void> _scheduleDownloadedEmbeddedCoverRefreshForPath(
     String? filePath, {
@@ -596,14 +676,14 @@ class _QueueTabState extends ConsumerState<QueueTab> {
       filePath,
       beforeModTime: beforeModTime,
       force: force,
-      onChanged: _onEmbeddedCoverChanged,
+      onChanged: _embeddedCoverChangedCallback(filePath),
     );
   }
 
   String? _resolveDownloadedEmbeddedCoverPath(String? filePath) {
     return DownloadedEmbeddedCoverResolver.resolve(
       filePath,
-      onChanged: _onEmbeddedCoverChanged,
+      onChanged: _embeddedCoverChangedCallback(filePath),
     );
   }
 
@@ -728,14 +808,28 @@ class _QueueTabState extends ConsumerState<QueueTab> {
     final hasQueueItems = ref.watch(
       downloadQueueLookupProvider.select((lookup) => lookup.itemIds.isNotEmpty),
     );
+    // Watch here in build() rather than inside PageView.builder's itemBuilder,
+    // which would leak a Riverpod .select() subscription per page build.
+    final notCompletedItemIds = hasQueueItems
+        ? ref.watch(
+            downloadQueueLookupProvider.select(
+              (lookup) => lookup.notCompletedItemIds,
+            ),
+          )
+        : const <String>[];
+    // Rewind replays what the built-in player recorded.
+    final listeningStatisticsEnabled =
+        ref.watch(playerUiEnabledProvider) &&
+        ref.watch(settingsProvider.select((s) => s.listeningStatisticsEnabled));
     final historyTotalCount = ref.watch(
       downloadHistoryProvider.select((state) => state.totalCount),
     );
     // Completion-bridge cells need the finalized in-memory history record
     // immediately, before the database-backed Library page refresh lands.
-    final inMemoryHistoryItems = ref.watch(
-      downloadHistoryProvider.select((state) => state.items),
-    );
+    // Only subscribe while the queue or bridge is active.
+    final inMemoryHistoryItems = hasQueueItems || _completionBridge.isNotEmpty
+        ? ref.watch(downloadHistoryProvider.select((state) => state.items))
+        : const <DownloadHistoryItem>[];
     final localLibraryTotalCount = localLibraryEnabled
         ? ref.watch(localLibraryProvider.select((state) => state.totalCount))
         : 0;
@@ -1112,44 +1206,67 @@ class _QueueTabState extends ConsumerState<QueueTab> {
                       hasMoreLibrary: hasMoreLibrary,
                       isPageLoading: isLibraryPageLoading,
                       inMemoryHistoryItems: inMemoryHistoryItems,
+                      notCompletedItemIds: notCompletedItemIds,
+                      listeningStatisticsEnabled: listeningStatisticsEnabled,
                     )
-                  : PageView.builder(
-                      controller: _filterPageController!,
-                      // While song rows swipe to queue, the tabs alone
-                      // change pages, so the two sideways swipes never
-                      // compete.
-                      physics: queueSwipeEnabled(ref)
-                          ? const NeverScrollableScrollPhysics()
-                          : const ClampingScrollPhysics(),
-                      onPageChanged: _onFilterPageChanged,
-                      itemCount: _filterModes.length,
-                      itemBuilder: (context, index) {
-                        if (_filterModes[index] == 'artists') {
-                          return _buildArtistsPage(context, colorScheme);
+                  : NotificationListener<ScrollEndNotification>(
+                      onNotification: (notification) {
+                        final metrics = notification.metrics;
+                        if (notification.depth != 0 ||
+                            metrics is! PageMetrics) {
+                          return false;
                         }
-                        if (_filterModes[index] == 'genres') {
-                          return _buildGenresPage(context, colorScheme);
+                        final page = metrics.page?.round();
+                        if (page != null && page != _restingPage) {
+                          setState(() => _restingPage = page);
                         }
-                        if (_filterModes[index] == 'folders') {
-                          return const LibraryDirectoryView(showHeader: false);
-                        }
-                        final filterMode = _modeForPage(index);
-                        final filterData = getFilterData(filterMode);
-                        return _buildFilterContent(
-                          context: context,
-                          colorScheme: colorScheme,
-                          filterMode: filterMode,
-                          historyViewMode: historyViewMode,
-                          hasQueueItems: hasQueueItems,
-                          filterData: filterData,
-                          collectionState: collectionState,
-                          hasMoreLibrary: filterMode == historyFilterMode
-                              ? hasMoreLibrary
-                              : false,
-                          isPageLoading: isLibraryPageLoading,
-                          inMemoryHistoryItems: inMemoryHistoryItems,
-                        );
+                        return false;
                       },
+                      child: PageView.builder(
+                        controller: _filterPageController!,
+                        // On a page of song rows that swipe to queue, the
+                        // tabs alone change pages, so the two sideways
+                        // swipes never compete.
+                        physics:
+                            queueSwipeEnabled(ref) &&
+                                _pageHasSongRows(_restingPage, historyViewMode)
+                            ? const NeverScrollableScrollPhysics()
+                            : const ClampingScrollPhysics(),
+                        onPageChanged: _onFilterPageChanged,
+                        itemCount: _filterModes.length,
+                        itemBuilder: (context, index) {
+                          if (_filterModes[index] == 'artists') {
+                            return _buildArtistsPage(context, colorScheme);
+                          }
+                          if (_filterModes[index] == 'genres') {
+                            return _buildGenresPage(context, colorScheme);
+                          }
+                          if (_filterModes[index] == 'folders') {
+                            return const LibraryDirectoryView(
+                              showHeader: false,
+                            );
+                          }
+                          final filterMode = _modeForPage(index);
+                          final filterData = getFilterData(filterMode);
+                          return _buildFilterContent(
+                            context: context,
+                            colorScheme: colorScheme,
+                            filterMode: filterMode,
+                            historyViewMode: historyViewMode,
+                            hasQueueItems: hasQueueItems,
+                            notCompletedItemIds: notCompletedItemIds,
+                            listeningStatisticsEnabled:
+                                listeningStatisticsEnabled,
+                            filterData: filterData,
+                            collectionState: collectionState,
+                            hasMoreLibrary: filterMode == historyFilterMode
+                                ? hasMoreLibrary
+                                : false,
+                            isPageLoading: isLibraryPageLoading,
+                            inMemoryHistoryItems: inMemoryHistoryItems,
+                          );
+                        },
+                      ),
                     ),
             ),
           ),
@@ -1233,97 +1350,213 @@ class _QueueTabState extends ConsumerState<QueueTab> {
             reverseDuration: fade.duration,
             // Played backwards, the entrance springs would hold the leaving
             // header open and opaque for most of its exit.
-            transitionBuilder: (child, animation) => SizeTransition(
-              sizeFactor: CurvedAnimation(
-                parent: animation,
-                curve: over(reveal),
-                reverseCurve: fade.leaving,
-              ),
-              alignment: Alignment.topCenter,
-              child: FadeTransition(
-                opacity: CurvedAnimation(
-                  parent: animation,
-                  curve: over(fade),
-                  reverseCurve: fade.leaving,
-                ),
-                child: child,
-              ),
-            ),
-            child: queueCount == 0
-                ? const SizedBox(
-                    width: double.infinity,
-                    key: ValueKey('dl_header_empty'),
-                  )
-                : Padding(
-                    key: const ValueKey('dl_header'),
-                    padding: EdgeInsetsDirectional.fromSTEB(
-                      16 + wideListInset(context),
-                      4,
-                      4 + wideListInset(context),
-                      4,
-                    ),
-                    child: Row(
-                      children: [
-                        AppIcon(
-                          Icons.downloading_rounded,
-                          size: 16,
-                          color: colorScheme.primary,
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            context.l10n.queueDownloadingCount(queueCount),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.labelLarge
-                                ?.copyWith(
-                                  color: colorScheme.onSurfaceVariant,
-                                  fontWeight: FontWeight.w600,
-                                ),
+            transitionBuilder: _QueueHeaderTransition.buildTransition,
+            child: _QueueHeaderSlot(
+              key: ValueKey(queueCount == 0 ? 'dl_header_empty' : 'dl_header'),
+              revealCurve: over(reveal),
+              fadeCurve: over(fade),
+              exitCurve: fade.leaving,
+              child: queueCount == 0
+                  ? const SizedBox(width: double.infinity)
+                  : Padding(
+                      padding: EdgeInsetsDirectional.fromSTEB(
+                        16 + wideListInset(context),
+                        4,
+                        4 + wideListInset(context),
+                        4,
+                      ),
+                      child: Row(
+                        children: [
+                          AppIcon(
+                            Icons.downloading_rounded,
+                            size: 16,
+                            color: colorScheme.primary,
                           ),
-                        ),
-                        if (failedCount > 0 && !isProcessing)
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              context.l10n.queueDownloadingCount(queueCount),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.labelLarge
+                                  ?.copyWith(
+                                    color: colorScheme.onSurfaceVariant,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                            ),
+                          ),
+                          if (failedCount > 0 && !isProcessing)
+                            AppIconButton(
+                              onPressed: () => ref
+                                  .read(downloadQueueProvider.notifier)
+                                  .retryAllFailed(),
+                              icon: const Icon(Icons.replay_rounded, size: 20),
+                              tooltip: context.l10n.queueRetryAllFailed(
+                                failedCount,
+                              ),
+                              color: colorScheme.primary,
+                              visualDensity: VisualDensity.compact,
+                            ),
                           AppIconButton(
                             onPressed: () => ref
                                 .read(downloadQueueProvider.notifier)
-                                .retryAllFailed(),
-                            icon: const Icon(Icons.replay_rounded, size: 20),
-                            tooltip: context.l10n.queueRetryAllFailed(
-                              failedCount,
+                                .togglePause(),
+                            icon: Icon(
+                              isPaused
+                                  ? Icons.play_arrow_rounded
+                                  : Icons.pause_rounded,
+                              size: 20,
                             ),
-                            color: colorScheme.primary,
+                            tooltip: isPaused
+                                ? context.l10n.actionResume
+                                : context.l10n.actionPause,
+                            color: colorScheme.onSurfaceVariant,
                             visualDensity: VisualDensity.compact,
                           ),
-                        AppIconButton(
-                          onPressed: () => ref
-                              .read(downloadQueueProvider.notifier)
-                              .togglePause(),
-                          icon: Icon(
-                            isPaused
-                                ? Icons.play_arrow_rounded
-                                : Icons.pause_rounded,
-                            size: 20,
+                          AppIconButton(
+                            onPressed: () =>
+                                _showClearAllDialog(context, ref, colorScheme),
+                            icon: const Icon(Icons.clear_all_rounded, size: 20),
+                            tooltip: context.l10n.queueClearAll,
+                            color: colorScheme.error,
+                            visualDensity: VisualDensity.compact,
                           ),
-                          tooltip: isPaused
-                              ? context.l10n.actionResume
-                              : context.l10n.actionPause,
-                          color: colorScheme.onSurfaceVariant,
-                          visualDensity: VisualDensity.compact,
-                        ),
-                        AppIconButton(
-                          onPressed: () =>
-                              _showClearAllDialog(context, ref, colorScheme),
-                          icon: const Icon(Icons.clear_all_rounded, size: 20),
-                          tooltip: context.l10n.queueClearAll,
-                          color: colorScheme.error,
-                          visualDensity: VisualDensity.compact,
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
+            ),
           ),
         );
       },
     );
   }
+}
+
+class _QueueHeaderSlot extends StatelessWidget {
+  const _QueueHeaderSlot({
+    super.key,
+    required this.revealCurve,
+    required this.fadeCurve,
+    required this.exitCurve,
+    required this.child,
+  });
+
+  final Curve revealCurve;
+  final Curve fadeCurve;
+  final Curve exitCurve;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => child;
+}
+
+class _QueueHeaderTransition extends StatefulWidget {
+  const _QueueHeaderTransition({
+    super.key,
+    required this.animation,
+    required this.revealCurve,
+    required this.fadeCurve,
+    required this.exitCurve,
+    required this.child,
+  });
+
+  final Animation<double> animation;
+  final Curve revealCurve;
+  final Curve fadeCurve;
+  final Curve exitCurve;
+  final Widget child;
+
+  static Widget buildTransition(Widget child, Animation<double> animation) {
+    final slot = child as _QueueHeaderSlot;
+    return _QueueHeaderTransition(
+      key: ValueKey(slot.key),
+      animation: animation,
+      revealCurve: slot.revealCurve,
+      fadeCurve: slot.fadeCurve,
+      exitCurve: slot.exitCurve,
+      child: slot,
+    );
+  }
+
+  @override
+  State<_QueueHeaderTransition> createState() => _QueueHeaderTransitionState();
+}
+
+class _QueueHeaderTransitionState extends State<_QueueHeaderTransition> {
+  late CurvedAnimation _size;
+  late CurvedAnimation _opacity;
+  late AnimationStatus _status;
+
+  @override
+  void initState() {
+    super.initState();
+    _initAnimations();
+    _status = widget.animation.status;
+    widget.animation.addStatusListener(_onStatus);
+  }
+
+  // A curve keeps the direction it started in, so an exit that cuts the
+  // entrance short starts new curves to leave on the exit curve.
+  void _onStatus(AnimationStatus status) {
+    final cutShort =
+        _status == AnimationStatus.forward && status == AnimationStatus.reverse;
+    _status = status;
+    if (!cutShort) return;
+    setState(() {
+      _disposeAnimations();
+      _initAnimations();
+    });
+  }
+
+  void _initAnimations() {
+    _size = CurvedAnimation(
+      parent: widget.animation,
+      curve: widget.revealCurve,
+      reverseCurve: widget.exitCurve,
+    );
+    _opacity = CurvedAnimation(
+      parent: widget.animation,
+      curve: widget.fadeCurve,
+      reverseCurve: widget.exitCurve,
+    );
+  }
+
+  void _disposeAnimations() {
+    _size.dispose();
+    _opacity.dispose();
+  }
+
+  @override
+  void didUpdateWidget(_QueueHeaderTransition oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.animation != widget.animation) {
+      oldWidget.animation.removeStatusListener(_onStatus);
+      _disposeAnimations();
+      _initAnimations();
+      _status = widget.animation.status;
+      widget.animation.addStatusListener(_onStatus);
+      return;
+    }
+    // Every build makes new but equal curves; set them in place.
+    _size
+      ..curve = widget.revealCurve
+      ..reverseCurve = widget.exitCurve;
+    _opacity
+      ..curve = widget.fadeCurve
+      ..reverseCurve = widget.exitCurve;
+  }
+
+  @override
+  void dispose() {
+    widget.animation.removeStatusListener(_onStatus);
+    _disposeAnimations();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => SizeTransition(
+    sizeFactor: _size,
+    alignment: Alignment.topCenter,
+    child: FadeTransition(opacity: _opacity, child: widget.child),
+  );
 }

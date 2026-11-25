@@ -31,7 +31,8 @@ extension _TrackMetadataHeader on _TrackMetadataScreenState {
     BuildContext from,
     BuildContext to,
   ) {
-    final header = direction == HeroFlightDirection.push ? to : from;
+    final push = direction == HeroFlightDirection.push;
+    final header = push ? to : from;
     // The desktop Mornye header clips with continuous corners instead.
     final headerCorners =
         header.findAncestorWidgetOfExactType<ClipRRect>()?.borderRadius ??
@@ -40,13 +41,48 @@ extension _TrackMetadataHeader on _TrackMetadataScreenState {
       begin: flight.tokens.borderRadiusThumb,
       end: headerCorners?.resolve(Directionality.of(flight)),
     ).animate(animation);
-    return AnimatedBuilder(
+    // A row may lay a mark over its picture (where a server's song is
+    // kept). The mark is the row's: it never rides on to the header.
+    final rowCover = ((push ? from : to).widget as Hero).child;
+    final marked = rowCover is OfflineAvailabilityCover ? rowCover : null;
+    final rowPicture = marked?.child ?? rowCover;
+    if (push) {
+      // Kept for the landing: the flight can end before the decode does.
+      _flownCover = rowPicture;
+      _flownCoverItem = _itemId;
+    }
+    final cover = AnimatedBuilder(
       animation: corners,
       builder: (context, cover) => ClipRRect(
         borderRadius: corners.value ?? BorderRadius.zero,
         child: cover,
       ),
-      child: (header.widget as Hero).child,
+      // Opening, this page's cover may still be decoding and would fly as
+      // nothing: the row's own picture flies under it until it is there.
+      child: push
+          ? Stack(
+              fit: StackFit.expand,
+              children: [rowPicture, (header.widget as Hero).child],
+            )
+          : (header.widget as Hero).child,
+    );
+    if (marked == null) return cover;
+    // The mark fades over the flight's row end, out on the way to the header
+    // and in on the way back, instead of being cut with the row's cover.
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        cover,
+        FadeTransition(
+          opacity: animation.drive(
+            Tween<double>(
+              begin: 1,
+              end: 0,
+            ).chain(CurveTween(curve: const Interval(0, 0.4))),
+          ),
+          child: Stack(children: [marked.badge]),
+        ),
+      ],
     );
   }
 
@@ -83,10 +119,13 @@ extension _TrackMetadataHeader on _TrackMetadataScreenState {
       ),
     );
 
+    // [landing] is the cover a list row's picture flies into: until its own
+    // picture is decoded it shows the row's, read when it is built.
     Widget artworkImage({
       required int cacheWidth,
       int? cacheHeight,
       required double iconSize,
+      bool landing = false,
     }) {
       final source = artworkSource;
       if (source == null) return placeholder(iconSize);
@@ -96,7 +135,9 @@ extension _TrackMetadataHeader on _TrackMetadataScreenState {
           fit: BoxFit.cover,
           memCacheWidth: cacheWidth,
           memCacheHeight: cacheHeight,
-          placeholder: (_, _) => ColoredBox(color: colorScheme.surface),
+          placeholder: (_, _) =>
+              (landing ? _landedCover : null) ??
+              ColoredBox(color: colorScheme.surface),
           errorWidget: (_, _, _) => placeholder(iconSize),
         );
       }
@@ -109,7 +150,29 @@ extension _TrackMetadataHeader on _TrackMetadataScreenState {
         cacheHeight: cacheHeight,
         gaplessPlayback: true,
         filterQuality: FilterQuality.low,
+        frameBuilder: landing
+            ? (_, picture, frame, _) =>
+                  frame == null ? _landedCover ?? picture : picture
+            : null,
         errorBuilder: (_, _, _) => placeholder(iconSize),
+      );
+    }
+
+    final backdropKey = (
+      _itemId,
+      artworkSource,
+      backdropCacheWidth,
+      colorScheme,
+    );
+    if (backdropKey != _backdropKey) {
+      _backdropKey = backdropKey;
+      _backdrop = RepaintBoundary(
+        key: ValueKey<String>('metadata_backdrop_$_itemId'),
+        child: artworkImage(
+          cacheWidth: backdropCacheWidth,
+          cacheHeight: backdropCacheWidth,
+          iconSize: 80,
+        ),
       );
     }
 
@@ -125,14 +188,7 @@ extension _TrackMetadataHeader on _TrackMetadataScreenState {
       expandedHeight: calculateExpandedHeight(context),
       showTitleInAppBar: false,
       showTitleListenable: showTitleNotifier,
-      background: RepaintBoundary(
-        key: ValueKey<String>('metadata_backdrop_$_itemId'),
-        child: artworkImage(
-          cacheWidth: backdropCacheWidth,
-          cacheHeight: backdropCacheWidth,
-          iconSize: 80,
-        ),
-      ),
+      background: _backdrop!,
       paletteSource: artworkSource == null || isHttpCoverUrl(artworkSource)
           ? artworkSource
           : coverFilePath(artworkSource),
@@ -141,10 +197,15 @@ extension _TrackMetadataHeader on _TrackMetadataScreenState {
       // it itself.
       coverBuilder: (context, coverSize) => Hero(
         tag: _coverHeroTag,
+        transitionOnUserGestures: heroFollowsBackSwipe(context),
         flightShuttleBuilder: _coverFlight,
         child: SizedBox.square(
           dimension: coverSize,
-          child: artworkImage(cacheWidth: coverCacheWidth, iconSize: 48),
+          child: artworkImage(
+            cacheWidth: coverCacheWidth,
+            iconSize: 48,
+            landing: true,
+          ),
         ),
       ),
       // Built inside the header, so it reads the header's artwork scheme.
@@ -288,9 +349,6 @@ extension _TrackMetadataHeader on _TrackMetadataScreenState {
   ) {
     return RoundedRectangleBorder(
       borderRadius: context.tokens.borderRadiusCard,
-      side: BorderSide(
-        color: colorScheme.outlineVariant.withValues(alpha: 0.5),
-      ),
     );
   }
 
@@ -303,7 +361,6 @@ extension _TrackMetadataHeader on _TrackMetadataScreenState {
     if (context.isMornye) {
       return Material(
         color: MornyeTheme.controlFill(context),
-        // The radius of Mornye's grouped lists (see SettingsGroup).
         borderRadius: BorderRadius.circular(28),
         clipBehavior: Clip.antiAlias,
         child: DividerTheme(
@@ -314,7 +371,7 @@ extension _TrackMetadataHeader on _TrackMetadataScreenState {
         ),
       );
     }
-    return Card(
+    return AppContentCard(
       elevation: 0,
       color: settingsGroupColor(context),
       shape: _sectionCardShape(context, scheme),

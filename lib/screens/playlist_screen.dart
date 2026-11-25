@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 import 'package:mornye/controllers/track_history_snapshot.dart';
 import 'package:mornye/widgets/album_detail_header.dart';
+import 'package:mornye/widgets/header_toolbar_actions.dart';
 import 'package:mornye/widgets/collection_header_actions.dart';
 import 'package:mornye/controllers/selection_mode_mixin.dart';
 import 'package:mornye/widgets/collection_scaffold.dart';
@@ -21,6 +22,7 @@ import 'package:mornye/widgets/loaded_sliver_fade_in.dart';
 import 'package:mornye/widgets/cached_cover_image.dart';
 import 'package:mornye/widgets/link/link_actions.dart';
 import 'package:mornye/widgets/motion_header_banner.dart';
+import 'package:mornye/widgets/track_card.dart';
 import 'package:mornye/widgets/track_list_tile.dart';
 import 'package:mornye/utils/desktop_platform.dart';
 import 'package:mornye/widgets/desktop/desktop_selection.dart';
@@ -269,6 +271,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen>
       for (var index = 0; index < _tracks.length; index++)
         _trackSelectionId(_tracks[index], index),
     ];
+    slideSelectIds = ids;
     pruneSelection(ids.toSet());
 
     return DesktopListScope(
@@ -309,12 +312,15 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen>
 
   Widget _buildAppBar(BuildContext context, ColorScheme colorScheme) {
     final expandedHeight = calculateExpandedHeight(context);
-    final cacheWidth = coverCacheWidthForViewport(context);
+    final cacheWidth = detailHeaderCoverCacheWidth(context);
     final motionUrl = _headerVideoUrl;
     final hasMotion =
         motionUrl != null &&
         motionUrl.trim().isNotEmpty &&
         Uri.tryParse(motionUrl)?.hasAuthority == true;
+    final bgCacheWidth = !context.isMornye && !hasMotion
+        ? metadataBackdropCacheExtent(context)
+        : cacheWidth;
     Widget playlistPlaceholder({double? size}) {
       return Container(
         color: colorScheme.surfaceContainerHighest,
@@ -330,7 +336,7 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen>
         ? CachedCoverImage(
             imageUrl: highResCoverUrl(_coverUrl) ?? _coverUrl!,
             fit: BoxFit.cover,
-            memCacheWidth: cacheWidth,
+            memCacheWidth: bgCacheWidth,
             placeholder: (_, _) => Container(color: colorScheme.surface),
             errorWidget: (_, _, _) => Container(color: colorScheme.surface),
           )
@@ -374,10 +380,16 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen>
       appBarActions: ref.watch(linkPhoneClientProvider) == null
           ? null
           : [
-              LinkDownloadOnDesktopButton(
-                tracks: _tracks,
-                service: _recommendedDownloadService(),
-                playlistName: _playlistName,
+              HeaderToolbarActions(
+                actions: (context, ref) => [
+                  ?linkDownloadOnDesktopAction(
+                    context,
+                    ref,
+                    _tracks,
+                    service: _recommendedDownloadService(),
+                    playlistName: _playlistName,
+                  ),
+                ],
               ),
             ],
       actions: CollectionHeaderActions(
@@ -462,6 +474,8 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen>
         ref,
         tracks[index],
         isInHistory: inHistory[index],
+        queue: tracks,
+        queueIndex: index,
         onDownload: ({bool forceQualityPicker = false}) => _downloadTrack(
           context,
           tracks[index],
@@ -486,57 +500,69 @@ class _PlaylistScreenState extends ConsumerState<PlaylistScreen>
       );
     }
     return SliverPadding(
-      padding: EdgeInsets.symmetric(horizontal: wideListInset(context)),
+      padding: EdgeInsets.symmetric(
+        horizontal: wideListInset(context),
+      ).copyWith(top: collectionRunTopGap(context)),
       sliver: SliverList(
         delegate: SliverChildBuilderDelegate((context, index) {
           final track = _tracks[index];
           final selectionId = _trackSelectionId(track, index);
           final isInHistory = existingHistoryKeys.contains(historyKeys[index]);
-          return KeyedSubtree(
-            key: ValueKey(track.id),
-            child: StaggeredListItem(
-              index: index,
-              child: TrackListTile(
-                track: track,
-                isInHistory: isInHistory,
-                isSelectionMode: isSelectionMode,
-                isSelected: selectedIds.contains(selectionId),
-                onToggleSelection: () => toggleSelection(selectionId),
-                onEnterSelectionMode: () => enterSelectionMode(selectionId),
-                onDownload: ({bool forceQualityPicker = false}) =>
-                    _downloadTrack(
-                      context,
-                      track,
-                      playlistPosition: index + 1,
-                      forceQualityPicker: forceQualityPicker,
-                    ),
-                leadingArtwork: true,
-                leading: track.coverUrl != null
-                    ? DownloadableCover(
-                        coverUrl: track.coverUrl,
-                        baseName: '${track.artistName} - ${track.name}',
-                        enabled: !isSelectionMode,
-                        child: CachedCoverImage(
-                          imageUrl: track.coverUrl!,
+          // Material joins the rows into one connected list.
+          return TrackCardSegment.at(
+            key: ValueKey(selectionId),
+            index: index,
+            count: _tracks.length,
+            child: slideSelectRow(
+              selectionId,
+              StaggeredListItem(
+                index: index,
+                child: TrackListTile(
+                  track: track,
+                  isInHistory: isInHistory,
+                  queue: _tracks,
+                  queueIndex: index,
+                  isSelectionMode: isSelectionMode,
+                  isSelected: selectedIds.contains(selectionId),
+                  onToggleSelection: () => toggleSelection(selectionId),
+                  onEnterSelectionMode: () => holdToSelect(selectionId),
+                  onDownload: ({bool forceQualityPicker = false}) =>
+                      _downloadTrack(
+                        context,
+                        track,
+                        playlistPosition: index + 1,
+                        forceQualityPicker: forceQualityPicker,
+                      ),
+                  leadingArtwork: true,
+                  leading: track.coverUrl != null
+                      ? DownloadableCover(
+                          coverUrl: track.coverUrl,
+                          baseName: '${track.artistName} - ${track.name}',
+                          enabled: !isSelectionMode,
+                          child: CachedCoverImage(
+                            imageUrl: track.coverUrl!,
+                            width: 48,
+                            height: 48,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        )
+                      : Container(
                           width: 48,
                           height: 48,
-                          borderRadius: BorderRadius.circular(8),
+                          decoration: BoxDecoration(
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.surfaceContainerHighest,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Icon(
+                            Icons.music_note,
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.onSurfaceVariant,
+                          ),
                         ),
-                      )
-                    : Container(
-                        width: 48,
-                        height: 48,
-                        decoration: BoxDecoration(
-                          color: Theme.of(
-                            context,
-                          ).colorScheme.surfaceContainerHighest,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Icon(
-                          Icons.music_note,
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        ),
-                      ),
+                ),
               ),
             ),
           );

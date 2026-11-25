@@ -3,6 +3,7 @@ import 'package:cupertino_ui/cupertino_ui.dart'
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/scheduler.dart' show SchedulerBinding;
 import 'package:mornye/l10n/l10n.dart';
+import 'package:mornye/theme/app_motion.dart';
 import 'package:mornye/theme/mornye_theme.dart';
 import 'package:mornye/widgets/app_icon.dart';
 import 'package:mornye/widgets/queue_swipe.dart';
@@ -20,10 +21,15 @@ class PlayerQueueDismissible extends StatefulWidget {
     required this.child,
     this.enabled = true,
     this.playNext,
+    this.materialRadius = const BorderRadius.all(Radius.circular(16)),
   });
 
   final VoidCallback onRemove;
   final Widget child;
+
+  /// Corners of the row in the Material style, which the strips under a
+  /// swipe follow.
+  final BorderRadius materialRadius;
 
   /// False (the current song, a locked queue) turns both swipes off.
   final bool enabled;
@@ -42,18 +48,20 @@ class _PlayerQueueDismissibleState extends State<PlayerQueueDismissible>
   final _haptic = SwipeCommitHaptic();
 
   // Closes the row's gap before the song leaves, so the rows below follow
-  // instead of jumping. An exit, so it is short and accelerates.
+  // instead of jumping. Configured per style and pace when removal runs.
   late final _collapse = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 200),
   );
-  late final _height = Tween<double>(
-    begin: 1,
-    end: 0,
-  ).animate(CurvedAnimation(parent: _collapse, curve: Curves.easeIn));
+  late final _heightCurve = CurvedAnimation(
+    parent: _collapse,
+    curve: Easing.standardAccelerate,
+  );
+  late final _height = Tween<double>(begin: 1, end: 0).animate(_heightCurve);
 
   @override
   void dispose() {
+    _heightCurve.dispose();
     _collapse.dispose();
     _progress.dispose();
     super.dispose();
@@ -66,6 +74,16 @@ class _PlayerQueueDismissibleState extends State<PlayerQueueDismissible>
   // disposed before it can remove anything.
   Future<bool> _confirmRemove() async {
     if (!MediaQuery.disableAnimationsOf(context)) {
+      if (context.isMornye) {
+        final motion = MornyeMotion.fast;
+        _collapse.duration = motion.duration;
+        _heightCurve.curve = motion.curve;
+      } else {
+        _collapse.duration = MotionPace.duration(
+          const Duration(milliseconds: 200),
+        );
+        _heightCurve.curve = Easing.standardAccelerate;
+      }
       try {
         await _collapse.forward().orCancel;
       } on TickerCanceled {
@@ -115,8 +133,7 @@ class _PlayerQueueDismissibleState extends State<PlayerQueueDismissible>
             padding: const EdgeInsets.symmetric(horizontal: 20),
             decoration: BoxDecoration(
               color: Theme.of(context).colorScheme.error,
-              // Matches the queue sheet's row corners.
-              borderRadius: BorderRadius.circular(16),
+              borderRadius: widget.materialRadius,
             ),
             child: AppIcon(
               Icons.delete_outline,
@@ -137,8 +154,10 @@ class _PlayerQueueDismissibleState extends State<PlayerQueueDismissible>
     return QueueSwipe(
       actions: actions,
       enabled: widget.enabled,
-      // Matches the queue sheet's row corners, as the removal strip does.
-      borderRadius: BorderRadius.circular(context.isMornye ? 12 : 16),
+      // Matches the row's corners, as the removal strip does.
+      borderRadius: context.isMornye
+          ? BorderRadius.circular(12)
+          : widget.materialRadius,
       // One node, so screen readers find Play next on the row itself.
       child: MergeSemantics(
         child: Stack(

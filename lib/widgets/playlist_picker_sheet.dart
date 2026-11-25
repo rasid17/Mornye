@@ -13,6 +13,7 @@ import 'package:mornye/widgets/app_action_button.dart';
 import 'package:mornye/widgets/app_alert_dialog.dart';
 import 'package:mornye/widgets/app_text_field.dart';
 import 'package:mornye/widgets/app_bottom_sheet.dart';
+import 'package:mornye/widgets/settings_group.dart';
 import 'package:mornye/widgets/app_loading_indicator.dart';
 import 'package:mornye/widgets/expressive_button.dart';
 import 'package:mornye/widgets/cached_cover_image.dart';
@@ -214,48 +215,52 @@ class _PlaylistPickerSheetContentState
               subtitle: Text(subtitle),
             ),
           if (context.isMornye) const Divider(height: 1),
-          _PlaylistPickerRow(
-            leading: Icon(
-              context.isMornye
-                  ? CupertinoIcons.add_circled
-                  : Icons.add_circle_outline,
-              color: Theme.of(context).colorScheme.primary,
-            ),
-            title: Text(context.l10n.collectionCreatePlaylist),
-            enabled: !_isSubmitting,
-            onTap: () async {
-              if (_isSubmitting) return;
-              final name = await promptPlaylistName(
-                context,
-                title: context.l10n.collectionCreatePlaylist,
-                confirmLabel: context.l10n.actionCreate,
-                initialName: widget.playlistNamePrefill,
-                textInputAction: TextInputAction.done,
-                isDefault: true,
-              );
-              if (name == null || name.trim().isEmpty || !context.mounted) {
-                return;
-              }
-              final playlistId = await notifier.createPlaylist(name.trim());
-              await notifier.addTracksToPlaylist(
-                playlistId,
-                widget.tracks,
-                preserveOccurrences: widget.preserveOccurrences,
-              );
-              if (!mounted) return;
-              setState(() {
-                _committedPlaylistIds.add(playlistId);
-                _selectedPlaylistIds.remove(playlistId);
-              });
-              if (!context.mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    context.l10n.collectionAddedToPlaylist(name.trim()),
+          ConnectedGroupRow(
+            index: 0,
+            count: 1,
+            child: _PlaylistPickerRow(
+              leading: Icon(
+                context.isMornye
+                    ? CupertinoIcons.add_circled
+                    : Icons.add_circle_outline,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              title: Text(context.l10n.collectionCreatePlaylist),
+              enabled: !_isSubmitting,
+              onTap: () async {
+                if (_isSubmitting) return;
+                final name = await promptPlaylistName(
+                  context,
+                  title: context.l10n.collectionCreatePlaylist,
+                  confirmLabel: context.l10n.actionCreate,
+                  initialName: widget.playlistNamePrefill,
+                  textInputAction: TextInputAction.done,
+                  isDefault: true,
+                );
+                if (name == null || name.trim().isEmpty || !context.mounted) {
+                  return;
+                }
+                final playlistId = await notifier.createPlaylist(name.trim());
+                await notifier.addTracksToPlaylist(
+                  playlistId,
+                  widget.tracks,
+                  preserveOccurrences: widget.preserveOccurrences,
+                );
+                if (!mounted) return;
+                setState(() {
+                  _committedPlaylistIds.add(playlistId);
+                  _selectedPlaylistIds.remove(playlistId);
+                });
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      context.l10n.collectionAddedToPlaylist(name.trim()),
+                    ),
                   ),
-                ),
-              );
-            },
+                );
+              },
+            ),
           ),
           Flexible(
             child: ConstrainedBox(
@@ -274,6 +279,9 @@ class _PlaylistPickerSheetContentState
                     );
                   }
                   return ListView.builder(
+                    // Small lists hug their content; long lists scroll lazily.
+                    shrinkWrap: playlists.length <= 8,
+                    padding: EdgeInsets.only(top: context.isMornye ? 0 : 8),
                     itemCount: playlists.length,
                     itemBuilder: (context, index) {
                       final playlist = playlists[index];
@@ -284,39 +292,47 @@ class _PlaylistPickerSheetContentState
                           _selectedPlaylistIds.contains(playlist.id) ||
                           isAlreadyIn;
 
-                      return _PlaylistPickerRow(
-                        leading: _PlaylistPickerThumbnail(
-                          playlist: playlist,
-                          isSelected: !context.isMornye && isSelected,
-                        ),
-                        title: Text(playlist.name),
-                        subtitle: Text(
-                          context.l10n.collectionPlaylistTracks(
-                            playlist.trackCount,
+                      return ConnectedGroupRow(
+                        index: index,
+                        count: playlists.length,
+                        child: _PlaylistPickerRow(
+                          leading: _PlaylistPickerThumbnail(
+                            playlist: playlist,
+                            isSelected: !context.isMornye && isSelected,
                           ),
+                          title: Text(playlist.name),
+                          subtitle: Text(
+                            context.l10n.collectionPlaylistTracks(
+                              playlist.trackCount,
+                            ),
+                          ),
+                          enabled: !isAlreadyIn && !_isSubmitting,
+                          selected: isSelected,
+                          onTap: !isAlreadyIn && !_isSubmitting
+                              ? () {
+                                  if (_isSubmitting) return;
+                                  setState(() {
+                                    if (_selectedPlaylistIds.contains(
+                                      playlist.id,
+                                    )) {
+                                      _selectedPlaylistIds.remove(playlist.id);
+                                    } else {
+                                      _selectedPlaylistIds.add(playlist.id);
+                                    }
+                                  });
+                                }
+                              : null,
                         ),
-                        enabled: !isAlreadyIn && !_isSubmitting,
-                        selected: isSelected,
-                        onTap: !isAlreadyIn && !_isSubmitting
-                            ? () {
-                                if (_isSubmitting) return;
-                                setState(() {
-                                  if (_selectedPlaylistIds.contains(
-                                    playlist.id,
-                                  )) {
-                                    _selectedPlaylistIds.remove(playlist.id);
-                                  } else {
-                                    _selectedPlaylistIds.add(playlist.id);
-                                  }
-                                });
-                              }
-                            : null,
                       );
                     },
                   );
                 },
-                loading: () => const Center(
-                  child: AppLoadingIndicator(size: 24, strokeWidth: 2),
+                loading: () => const Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Center(
+                    heightFactor: 1,
+                    child: AppLoadingIndicator(size: 24, strokeWidth: 2),
+                  ),
                 ),
                 error: (_, _) => Padding(
                   padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),

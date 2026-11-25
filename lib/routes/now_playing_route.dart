@@ -11,6 +11,31 @@ import 'package:mornye/theme/mornye_theme.dart';
 /// the cover visually expands when the player opens.
 const kNowPlayingArtworkHeroTag = 'now-playing-artwork';
 
+/// The Material cover flight, in step with the player's surface: its Heroes
+/// fly on the route's own time and the route says how far the surface is.
+class PlayerCoverRectTween extends RectTween {
+  PlayerCoverRectTween._(
+    this._route, {
+    required bool landing,
+    super.begin,
+    super.end,
+  }) : _landing = landing;
+
+  final NowPlayingRoute _route;
+
+  /// Onto the mini player, rather than out of it.
+  final bool _landing;
+
+  // A Tween skips lerp at either end; the route decides there too.
+  @override
+  Rect? transform(double t) => lerp(t);
+
+  @override
+  Rect? lerp(double t) => _landing
+      ? _route._landingRect(begin, end, t)
+      : _route._openingRect(begin, end, t);
+}
+
 /// Slide-up route for the full player. Supports live drag-to-dismiss: the
 /// page follows the finger (via [startDrag]/[updateDrag]/[endDrag]) and
 /// settles open or pops based on release position and velocity. Either way
@@ -19,7 +44,7 @@ const kNowPlayingArtworkHeroTag = 'now-playing-artwork';
 /// With [morph], the player instead grows out of the mini player's bounds
 /// and shrinks back into them on close, and Android's predictive back
 /// previews that shrink.
-class NowPlayingRoute extends PageRoute<void> {
+class NowPlayingRoute extends PageRoute<void> with SteadyStartRoute<void> {
   NowPlayingRoute({required this.child, this.miniPlayerGeometry, this.morph})
     : super(
         fullscreenDialog: true,
@@ -41,6 +66,66 @@ class NowPlayingRoute extends PageRoute<void> {
   /// mini player before the person lets go.
   static const _backGesturePreview = 0.25;
 
+  /// The growing surface is solid once a fifth of the way open, and the
+  /// player's content shows from a quarter of the way.
+  static const _solidBy = 0.2;
+  static const _contentFrom = 0.25;
+
+  /// The cover flight of a player that grows out of the mini player, for
+  /// the player's own Hero. Null keeps the default flight.
+  static CreateRectTween? coverFlightOf(BuildContext context) {
+    final route = routeOf(context);
+    if (route is! NowPlayingRoute || route.morph == null) return null;
+    return (begin, end) =>
+        PlayerCoverRectTween._(route, landing: false, begin: begin, end: end);
+  }
+
+  /// The mini player's half of the Material cover flight: onto it from the
+  /// player that is shrinking into it, else on the usual Material arc.
+  static Tween<Rect?> landingFlight(Rect? begin, Rect? end) {
+    final route = _shrinking;
+    return route == null
+        ? MaterialRectArcTween(begin: begin, end: end)
+        : PlayerCoverRectTween._(route, landing: true, begin: begin, end: end);
+  }
+
+  /// Both ways the Material cover flight shows the player's own cover, at
+  /// its resolution and crop, never the mini player's small one enlarged.
+  static Widget coverShuttle(
+    BuildContext flightContext,
+    Animation<double> animation,
+    HeroFlightDirection direction,
+    BuildContext fromHeroContext,
+    BuildContext toHeroContext,
+  ) {
+    final player = direction == HeroFlightDirection.push
+        ? toHeroContext
+        : fromHeroContext;
+    return (player.widget as Hero).child;
+  }
+
+  /// The player whose surface is shrinking into the mini player.
+  static NowPlayingRoute? _shrinking;
+
+  /// The player route whose page holds [context]. Unlike [ModalRoute.of], it
+  /// does not rebuild [context] when a sheet or menu opens over the player.
+  static NowPlayingRoute? maybeOf(BuildContext context) => context
+      .dependOnInheritedWidgetOfExactType<_NowPlayingRouteScope>()
+      ?.route;
+
+  /// [maybeOf], or else the [ModalRoute] of [context], such as the embedded
+  /// desktop player's.
+  static ModalRoute<Object?>? routeOf(BuildContext context) =>
+      maybeOf(context) ?? ModalRoute.of(context);
+
+  /// True while a player route is on its way open or closed, a held drag
+  /// included. The page under it is drawn as one picture meanwhile.
+  static final ValueNotifier<bool> moving = ValueNotifier(false);
+
+  /// True while a closing player flies its cover onto the mini player, which
+  /// hides its own until that cover lands.
+  static final ValueNotifier<bool> coverLanding = ValueNotifier(false);
+
   /// The mini player's bounds while the player grows out of them.
   ({Rect surface, Rect artwork})? _openFrom;
   Size? _openSize;
@@ -55,8 +140,32 @@ class NowPlayingRoute extends PageRoute<void> {
   Size? _dismissSize;
   double _dismissStartValue = 1;
 
+  /// How far open the surface was when its dismissal began.
+  double _dismissOpen = 1;
+
   bool _interactiveTransition = false;
   int _dragGeneration = 0;
+
+  static final _slideCurveTween = CurveTween(
+    curve: Easing.emphasizedDecelerate,
+  );
+  static final _slidePositionTween = Tween<Offset>(
+    begin: const Offset(0, 1),
+    end: Offset.zero,
+  );
+  Animation<double>? _cachedSlideSource;
+  Animation<double>? _cachedCurvedSlide;
+  Animation<Offset>? _cachedDirectSlidePosition;
+  Animation<Offset>? _cachedCurvedSlidePosition;
+
+  void _ensureSlideAnimations(Animation<double> animation) {
+    if (identical(_cachedSlideSource, animation)) return;
+    _cachedSlideSource = animation;
+    final curved = animation.drive(_slideCurveTween);
+    _cachedCurvedSlide = curved;
+    _cachedDirectSlidePosition = animation.drive(_slidePositionTween);
+    _cachedCurvedSlidePosition = curved.drive(_slidePositionTween);
+  }
 
   /// The finger's speed when the last drag was let go, in controller units
   /// a second (positive opens). The spring that finishes the move starts
@@ -102,6 +211,12 @@ class NowPlayingRoute extends PageRoute<void> {
     // shows the route offstage, where [animation] reads as completed.
     controller!.addStatusListener((status) {
       if (status.isCompleted) _openFrom = null;
+      moving.value = status.isAnimating;
+      // The frame that removes the closed player shows the mini player's.
+      if (status.isDismissed) {
+        coverLanding.value = false;
+        _endShrink();
+      }
     });
     if (morph != null) {
       WidgetsBinding.instance.addObserver(
@@ -129,7 +244,15 @@ class NowPlayingRoute extends PageRoute<void> {
     if (_backGesture case final observer?) {
       WidgetsBinding.instance.removeObserver(observer);
     }
+    // A route removed while it moves never reports that it stopped.
+    moving.value = false;
+    coverLanding.value = false;
+    _endShrink();
     super.dispose();
+  }
+
+  void _endShrink() {
+    if (identical(_shrinking, this)) _shrinking = null;
   }
 
   @override
@@ -143,21 +266,26 @@ class NowPlayingRoute extends PageRoute<void> {
 
   @override
   Duration get transitionDuration =>
-      morph?.duration ?? const Duration(milliseconds: 400);
+      morph?.duration ?? MotionPace.duration(const Duration(milliseconds: 400));
 
   @override
   Duration get reverseTransitionDuration => morph?.duration == Duration.zero
       ? Duration.zero
-      : const Duration(milliseconds: 300);
+      : MotionPace.duration(const Duration(milliseconds: 300));
 
-  /// Moves the Material shrink on the spring of the entrance, the slow
-  /// spatial one for full-screen surfaces, kept critically damped so the
-  /// surface never passes the mini player. It settles in about 520ms. A
-  /// spring more than twice as stiff had the player gone in an eighth of a
-  /// second, in a handful of frames.
+  /// Moves Material's full-screen slide at the stiffness of the entrance,
+  /// critically damped: about 430ms.
   static final _exitSpring = SpringDescription.withDampingRatio(
     mass: 1,
-    stiffness: M3EMotion.expressiveSpatialSlow.stiffness,
+    stiffness: M3EMotion.expressiveSpatialDefault.stiffness,
+    ratio: 1,
+  );
+
+  /// Moves the Material shrink at the pace of the entrance, critically damped
+  /// so the surface never passes the mini player: about 330ms.
+  static final _shrinkSpring = SpringDescription.withDampingRatio(
+    mass: 1,
+    stiffness: M3EMotion.expressiveSpatialFast.stiffness,
     ratio: 1,
   );
 
@@ -165,15 +293,18 @@ class NowPlayingRoute extends PageRoute<void> {
   /// judges the app's other springs.
   static const _exitTolerance = Tolerance(distance: 0.002, velocity: 0.02);
 
-  /// Mornye moves the page on its own springs, which shape the motion
-  /// themselves: the controller's value is then the page's position, as it
-  /// is while a finger moves the page. Material's slide keeps its curve.
-  bool _mornyeSprings(BuildContext? context) =>
-      morph == null && context != null && context.isMornye;
+  /// Full-screen slides run directly on a spring simulation in both styles
+  /// (Mornye's slow spring or Material's critically damped full-screen spring),
+  /// so the controller's value is the page's position.
+  bool get _usesSpringSlide => morph == null;
+
+  SpringDescription _slideSpring(BuildContext? context) =>
+      context != null && context.isMornye
+      ? MornyeMotion.slowSpring
+      : MotionPace.spring(_exitSpring);
 
   /// Where the page sits for a controller [value].
-  double _slideAt(double value) =>
-      _interactiveTransition || _mornyeSprings(navigator?.context)
+  double _slideAt(double value) => _interactiveTransition || _usesSpringSlide
       ? value
       : Easing.emphasizedDecelerate.transform(value);
 
@@ -190,25 +321,32 @@ class NowPlayingRoute extends PageRoute<void> {
     snapToEnd: true,
   );
 
-  /// Mornye opens and closes on its full-screen spring, as a system sheet
-  /// does. The Material shrink runs on [_exitSpring], and so does a
-  /// Material slide a finger let go. Each starts from wherever the page is
-  /// and from the finger's velocity, so a released drag or back gesture
-  /// carries on without a seam.
+  /// Full-screen slides (Mornye, or Material opened without a mini player)
+  /// open and close on the style's critically damped full-screen spring, and
+  /// the Material shrink on [_shrinkSpring]. Each starts from wherever the
+  /// page is and from the finger's velocity, so a released drag or back
+  /// gesture carries on without a seam.
   @override
   Simulation? createSimulation({required bool forward}) {
     final velocity = _takeReleaseVelocity();
     if (_reduceMotion) return null;
-    final mornye = _mornyeSprings(navigator?.context);
+    final context = navigator?.context;
+    final spring = _slideSpring(context);
     if (forward) {
-      return mornye ? _spring(MornyeMotion.slowSpring, 1, velocity) : null;
+      return _usesSpringSlide ? _spring(spring, 1, velocity) : null;
     }
-    if (mornye) return _spring(MornyeMotion.slowSpring, 0, velocity);
+    if (context != null && context.isMornye) {
+      return _spring(spring, 0, velocity);
+    }
     final shrinks =
         _dismissTarget != null &&
         (morph?.duration ?? Duration.zero) > Duration.zero;
-    if (!shrinks && !_interactiveTransition) return null;
-    return _spring(_exitSpring, 0, velocity);
+    if (!shrinks && !_interactiveTransition && !_usesSpringSlide) return null;
+    return _spring(
+      shrinks ? MotionPace.spring(_shrinkSpring) : spring,
+      0,
+      velocity,
+    );
   }
 
   Rect _openRect(Size size, double value) => Rect.lerp(
@@ -217,7 +355,10 @@ class NowPlayingRoute extends PageRoute<void> {
     morph!.curve.transform(value),
   )!;
 
+  // A touch that began before the player closed still ends afterwards.
+  // Driving a popped route would put the page back on screen for good.
   void startDrag() {
+    if (!isActive) return;
     _dragGeneration++;
     _releaseVelocity = 0;
     // A drag takes over a cancelled back gesture still settling open.
@@ -237,15 +378,18 @@ class NowPlayingRoute extends PageRoute<void> {
   }
 
   void updateDrag(DragUpdateDetails details, double pageHeight) {
+    if (!isActive) return;
     controller?.value -= (details.primaryDelta ?? 0) / pageHeight;
   }
 
   void endDrag(DragEndDetails details, double pageHeight) {
+    if (!isActive) return;
     final velocity = (details.primaryVelocity ?? 0) / pageHeight;
     final value = controller?.value ?? 1.0;
     // The finger moves down, the controller toward zero.
     _releaseVelocity = -velocity;
-    if (velocity > 1.0 || (velocity >= 0 && value < 0.7)) {
+    // Only the player itself is popped, never a route above or below it.
+    if (isCurrent && (velocity > 1.0 || (velocity >= 0 && value < 0.7))) {
       navigator?.pop();
     } else {
       _settleOpen();
@@ -253,6 +397,7 @@ class NowPlayingRoute extends PageRoute<void> {
   }
 
   void cancelDrag() {
+    if (!isActive) return;
     _releaseVelocity = 0;
     _settleOpen();
   }
@@ -280,7 +425,7 @@ class NowPlayingRoute extends PageRoute<void> {
     // to the entrance curve on release jumps away from the finger's position.
     final spring = (navigator?.context.isMornye ?? false)
         ? MornyeMotion.standardSpring
-        : M3EMotion.spatialDefault.toDescription();
+        : MotionPace.spring(M3EMotion.spatialDefault.toDescription());
     controller
         .animateWith(_spring(spring, 1, velocity))
         .whenCompleteOrCancel(settled);
@@ -298,13 +443,32 @@ class NowPlayingRoute extends PageRoute<void> {
   /// Where the route was when it was popped, from a finger or settled.
   double? _poppedAt;
 
-  /// The player's own [fade] over the route's animation: it comes in behind
-  /// the growing surface and follows a finger. Once the route is popped it
-  /// holds where it was, because the page fades as a whole on the way out;
-  /// left on the closing spring, which covers most of its way early, the
-  /// content was gone in a tenth of a second.
-  Animation<double> contentOpacity(Animatable<double> fade) =>
-      animation!.drive(_HeldAfterPop(this, fade));
+  /// How far open the growing surface is for a controller [value]: its own
+  /// progress while it opens or shrinks, fully open otherwise.
+  double _openFraction(double value) {
+    if (_dismissTarget != null) {
+      return (_dismissOpen * value / _dismissStartValue).clamp(0.0, 1.0);
+    }
+    if (_openFrom != null && controller?.status == AnimationStatus.forward) {
+      return morph!.curve.transform(value).clamp(0.0, 1.0);
+    }
+    return 1;
+  }
+
+  double _solid(double open) => (open / _solidBy).clamp(0.0, 1.0);
+
+  double _contentShown(double value) =>
+      ((_openFraction(value) - _contentFrom) / (1 - _contentFrom)).clamp(
+        0.0,
+        1.0,
+      );
+
+  /// The player's own content over the route's animation. A player that
+  /// grows out of the mini player shows it by how far open the surface is,
+  /// both ways; a sliding one runs [fade] and holds it from the pop.
+  Animation<double> contentOpacity(Animatable<double> fade) => animation!.drive(
+    morph == null ? _HeldAfterPop(this, fade) : _SurfaceContent(this),
+  );
 
   bool get _reduceMotion {
     final context = navigator?.context;
@@ -327,6 +491,7 @@ class NowPlayingRoute extends PageRoute<void> {
     if (target == null || target.surface.isEmpty) return false;
     final size = MediaQuery.sizeOf(context);
     _dismissStartValue = controller!.value;
+    _dismissOpen = _openFraction(_dismissStartValue);
     final opening = _openFrom != null && _openSize == size
         ? _openRect(size, _dismissStartValue)
         : null;
@@ -345,7 +510,38 @@ class NowPlayingRoute extends PageRoute<void> {
     _dismissSize = size;
     _dismissTarget = target;
     _dismissArtwork = readArtwork?.call();
+    coverLanding.value = _dismissArtwork != null;
+    _shrinking = this;
     return true;
+  }
+
+  /// The opening cover flight at [value]: as far as the surface is open, and
+  /// back with it when the player closes before the flight has ended.
+  Rect? _openingRect(Rect? from, Rect? to, double value) => Rect.lerp(
+    from,
+    to,
+    _dismissTarget != null
+        ? _dismissOpen * value / _dismissStartValue
+        : morph!.curve.transform(value),
+  );
+
+  /// The landing cover flight at [time] (0 as closing starts): from where the
+  /// page drew the cover then, a drag included, as far as the surface went.
+  Rect? _landingRect(Rect? from, Rect? to, double time) {
+    final start = _dismissStart;
+    final size = _dismissSize;
+    if (from == null || start == null || size == null) {
+      return Rect.lerp(from, to, time);
+    }
+    final scale = start.width / size.width;
+    final drawn = Rect.fromLTWH(
+      start.left + from.left * scale,
+      start.top + from.top * scale,
+      from.width * scale,
+      from.height * scale,
+    );
+    final progress = (1 - (1 - time) / _dismissStartValue).clamp(0.0, 1.0);
+    return Rect.lerp(drawn, to, progress);
   }
 
   bool _startBackGesture(PredictiveBackEvent event) {
@@ -373,12 +569,12 @@ class NowPlayingRoute extends PageRoute<void> {
   void _commitBackGesture() {
     if (!_backGestureActive) return;
     _backGestureActive = false;
-    // Popping inside the gesture skips the cover's Hero flight, which would
-    // jump from where the preview left it: the cover shrinks with the page.
+    // The cover's Hero has flown since the gesture began, so popping inside
+    // it carries that flight on to the mini player.
     final navigator = this.navigator;
     if (isCurrent) {
       navigator?.pop();
-    } else {
+    } else if (isActive) {
       // Another route arrived during the gesture; the player stays open.
       _clearDismiss();
       _interactiveTransition = false;
@@ -392,29 +588,31 @@ class NowPlayingRoute extends PageRoute<void> {
     _dismissStart = null;
     _dismissSize = null;
     _dismissArtwork = null;
+    coverLanding.value = false;
+    _endShrink();
   }
 
   void _cancelBackGesture() {
     if (!_backGestureActive) return;
     _backGestureActive = false;
     navigator?.didStopUserGesture();
+    if (!isActive) return;
     final generation = _dragGeneration;
-    const fallback = AppMotionSpec(
-      Duration(milliseconds: 220),
-      Curves.easeOutCubic,
-    );
-    final context = subtreeContext;
-    final settle = context == null
-        ? fallback
-        : AppMotion.spatialSlow(context, fallback);
+    void finish() {
+      if (generation != _dragGeneration || !isCurrent) return;
+      _clearDismiss();
+      _interactiveTransition = false;
+      changedInternalState();
+    }
+
+    if (_reduceMotion) {
+      controller?.value = 1;
+      finish();
+      return;
+    }
     controller
-        ?.animateTo(1, duration: settle.duration, curve: settle.curve)
-        .whenCompleteOrCancel(() {
-          if (generation != _dragGeneration || !isCurrent) return;
-          _clearDismiss();
-          _interactiveTransition = false;
-          changedInternalState();
-        });
+        ?.animateWith(_spring(_slideSpring(subtreeContext), 1, 0))
+        .whenCompleteOrCancel(finish);
   }
 
   @override
@@ -423,7 +621,10 @@ class NowPlayingRoute extends PageRoute<void> {
     Animation<double> animation,
     Animation<double> secondaryAnimation,
   ) {
-    return _RouteDragRegion(route: this, child: child);
+    return _NowPlayingRouteScope(
+      route: this,
+      child: _RouteDragRegion(route: this, child: child),
+    );
   }
 
   @override
@@ -433,151 +634,191 @@ class NowPlayingRoute extends PageRoute<void> {
     Animation<double> secondaryAnimation,
     Widget child,
   ) {
-    final target = _dismissTarget;
+    var target = _dismissTarget;
     final size = MediaQuery.sizeOf(context);
-    // The Mornye mini player is a rounded capsule; the Material one is a
-    // square bar, which the shrinking surface keeps square. Material dims
-    // the page behind while the player covers it.
-    final radius = context.isMornye ? 28.0 : 0.0;
+    // The Material mini player is a square bar, which its surface keeps.
+    // Material dims the page behind while the player covers it.
     final scrim = context.isMornye ? 0.0 : 0.32;
+    // Every state builds the same layers, idle ones at rest values: a new
+    // parent would move the page by its GlobalKey and rebuild all of it.
+    double? scrimOpacity;
+    Rect? bounds;
+    var radius = 0.0;
+    var surfaceOpacity = 1.0;
+    Animation<Offset> position = const AlwaysStoppedAnimation(Offset.zero);
+    Animation<double> fade = kAlwaysCompleteAnimation;
+    var cornerRadius = 0.0;
+    Widget? cover;
     // Restoring portrait can resize the window during dismissal. Geometry
     // captured in landscape no longer points at the mini player in that case.
     if (target != null && _dismissSize == size) {
+      // The page below still takes touches, and a scroll there can move the
+      // mini player: the landing follows it.
+      final live = miniPlayerGeometry?.call();
+      if (live != null && !live.surface.isEmpty) {
+        target = _dismissTarget = live;
+      }
       // The shrink runs on a spring simulation in both styles.
       final progress = (1 - animation.value / _dismissStartValue).clamp(
         0.0,
         1.0,
       );
-      final cover = _dismissArtwork;
-      return Stack(
-        fit: StackFit.expand,
-        children: [
-          if (scrim > 0) _scrim(scrim * (1 - progress)),
-          _surface(
-            key: const ValueKey('player-minimize-surface'),
-            bounds: Rect.lerp(_dismissStart, target.surface, progress)!,
-            size: size,
-            radius: radius * progress,
-            // Gone only as it reaches the mini player: fading out sooner
-            // hides most of the spring's travel and reads as a cut.
-            opacity: 1 - const Interval(0.3, 1).transform(progress),
-            child: child,
-          ),
-          if (cover != null)
-            Positioned.fromRect(
-              rect: Rect.lerp(cover.bounds, target.artwork, progress)!,
-              child: ClipRRect(
-                key: const ValueKey('player-minimize-artwork'),
-                borderRadius: BorderRadius.circular(
-                  cover.fullBleed ? 6 * progress : 12 - 6 * progress,
-                ),
-                child: cover.fullBleed
-                    ? ShaderMask(
-                        blendMode: BlendMode.dstIn,
-                        shaderCallback: (bounds) => LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          stops: const [0, 0.58, 1],
-                          colors: [
-                            Colors.white,
-                            Colors.white,
-                            Colors.white.withValues(alpha: progress),
-                          ],
-                        ).createShader(bounds),
-                        child: cover.child,
-                      )
-                    : cover.child,
-              ),
-            ),
-        ],
-      );
-    }
-    // A rotation while opening leaves the mini player's bounds stale.
-    if (_openFrom != null &&
+      if (scrim > 0) scrimOpacity = scrim * (1 - progress);
+      bounds = Rect.lerp(_dismissStart, target.surface, progress)!;
+      radius = _pageRadius(context, bounds.top);
+      // Solid for most of the way, so the page below is never read through
+      // it; it fades as it closes onto the mini player.
+      surfaceOpacity = context.isMornye
+          ? 1 - const Interval(0.3, 1).transform(progress)
+          : _solid(_dismissOpen * (1 - progress));
+      if (_dismissArtwork case final artwork?) {
+        cover = _dismissCover(artwork, target.artwork, progress);
+      }
+    } else if (_openFrom != null &&
         _openSize == size &&
         animation.status == AnimationStatus.forward) {
-      final morph = this.morph!;
-      final progress = morph.curve.transform(animation.value);
-      // The surface moves on the spatial spring; it fades in on the effects
-      // spring, over that spring's own settle time from the start.
-      final fade = AppMotion.effects(
-        context,
-        const AppMotionSpec(Duration(milliseconds: 200), Curves.easeOut),
-      );
-      final fadeShare = morph.duration > Duration.zero
-          ? (fade.duration.inMicroseconds / morph.duration.inMicroseconds)
-                .clamp(0.0, 1.0)
-          : 1.0;
-      return Stack(
-        fit: StackFit.expand,
-        children: [
-          _scrim(scrim * progress),
-          _surface(
-            key: const ValueKey('player-expand-surface'),
-            bounds: _openRect(size, animation.value),
-            size: size,
-            radius: radius * (1 - progress),
-            // The mini player shows through until the surface covers it.
-            opacity: Interval(
-              0,
-              fadeShare,
-              curve: fade.curve,
-            ).transform(animation.value),
-            child: child,
-          ),
-        ],
-      );
+      // A rotation while opening leaves the mini player's bounds stale.
+      // The spatial spring may pass its end; only the surface follows it.
+      final open = morph!.curve.transform(animation.value).clamp(0.0, 1.0);
+      if (scrim > 0) scrimOpacity = scrim * open;
+      bounds = _openRect(size, animation.value);
+      // The mini player hands over in the surface's first frames.
+      surfaceOpacity = _solid(open);
+    } else {
+      final reversing = animation.status == AnimationStatus.reverse;
+      // Mornye's full-bleed artwork travels with its panel. Material keeps
+      // the independent cover flight back to the mini-player on button/back
+      // pop.
+      final inPlacePop =
+          reversing && !_interactiveTransition && !context.isMornye;
+      _ensureSlideAnimations(animation);
+      final directSlide = _interactiveTransition || _usesSpringSlide;
+      final slide = directSlide ? animation : _cachedCurvedSlide!;
+      if (!inPlacePop) {
+        position = directSlide
+            ? _cachedDirectSlidePosition!
+            : _cachedCurvedSlidePosition!;
+      }
+      if (inPlacePop) fade = animation;
+      cornerRadius = _pageRadius(context, size.height * (1 - slide.value));
     }
-    final reversing = animation.status == AnimationStatus.reverse;
-    // Mornye's full-bleed artwork travels with its panel. Material keeps the
-    // independent cover flight back to the mini-player on button/back pop.
-    final inPlacePop =
-        reversing && !_interactiveTransition && !context.isMornye;
-    final slide = _interactiveTransition || _mornyeSprings(context)
-        ? animation
-        : animation.drive(CurveTween(curve: Easing.emphasizedDecelerate));
-    final position = inPlacePop
-        ? const AlwaysStoppedAnimation(Offset.zero)
-        : slide.drive(Tween(begin: const Offset(0, 1), end: Offset.zero));
-    final opacity = inPlacePop ? animation : kAlwaysCompleteAnimation;
-    return SlideTransition(
-      position: position,
-      child: FadeTransition(opacity: opacity, child: child),
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        IgnorePointer(
+          child: scrimOpacity == null
+              ? const SizedBox.shrink()
+              : ColoredBox(color: Colors.black.withValues(alpha: scrimOpacity)),
+        ),
+        _surface(
+          bounds: bounds,
+          size: size,
+          radius: radius,
+          opacity: surfaceOpacity,
+          child: SlideTransition(
+            position: position,
+            child: FadeTransition(
+              opacity: fade,
+              child: context.isMornye
+                  ? ClipRRect(
+                      key: const ValueKey('player-slide-corners'),
+                      clipBehavior: cornerRadius > 0
+                          ? Clip.antiAlias
+                          : Clip.none,
+                      borderRadius: BorderRadius.vertical(
+                        top: Radius.circular(cornerRadius),
+                      ),
+                      child: child,
+                    )
+                  : child,
+            ),
+          ),
+        ),
+        ?cover,
+      ],
     );
   }
 
-  Widget _scrim(double opacity) => IgnorePointer(
-    child: ColoredBox(color: Colors.black.withValues(alpha: opacity)),
+  /// The captured cover on its way from [cover]'s bounds onto [artwork].
+  Widget _dismissCover(
+    ({Rect bounds, Widget child, bool fullBleed}) cover,
+    Rect artwork,
+    double progress,
+  ) => Positioned.fromRect(
+    rect: Rect.lerp(cover.bounds, artwork, progress)!,
+    child: ClipRRect(
+      key: const ValueKey('player-minimize-artwork'),
+      borderRadius: BorderRadius.circular(
+        cover.fullBleed ? 6 * progress : 12 - 6 * progress,
+      ),
+      child: cover.fullBleed
+          ? ShaderMask(
+              blendMode: BlendMode.dstIn,
+              shaderCallback: (bounds) => LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                stops: const [0, 0.58, 1],
+                colors: [
+                  Colors.white,
+                  Colors.white,
+                  Colors.white.withValues(alpha: progress),
+                ],
+              ).createShader(bounds),
+              child: cover.child,
+            )
+          : cover.child,
+    ),
   );
+
+  /// The Mornye mini player's corner, which the page keeps while it moves.
+  static const _capsuleRadius = 32.0;
+
+  /// The corner of a page whose top edge is [top] below the screen's: square
+  /// at rest, round within the corner's own length of leaving.
+  double _pageRadius(BuildContext context, double top) =>
+      context.isMornye ? top.clamp(0.0, _capsuleRadius) : 0;
 
   /// The full-size page at [bounds], scaled to their width and clipped to
   /// their height, so its layout never changes while the surface moves.
+  /// Without [bounds] it fills the route unclipped and unscaled.
   Widget _surface({
-    required Key key,
-    required Rect bounds,
+    required Rect? bounds,
     required Size size,
     required double radius,
     required double opacity,
     required Widget child,
-  }) => Positioned.fromRect(
-    rect: bounds,
-    child: ClipRRect(
-      key: key,
+  }) {
+    final surface = ClipRRect(
+      key: const ValueKey('player-surface'),
+      clipBehavior: bounds == null ? Clip.none : Clip.antiAlias,
       borderRadius: BorderRadius.circular(radius),
       child: OverflowBox(
         alignment: Alignment.topLeft,
-        minWidth: size.width,
-        maxWidth: size.width,
-        minHeight: size.height,
-        maxHeight: size.height,
-        child: Transform.scale(
-          scale: bounds.width / size.width,
-          alignment: Alignment.topLeft,
-          child: Opacity(opacity: opacity, child: child),
+        minWidth: bounds == null ? null : size.width,
+        maxWidth: bounds == null ? null : size.width,
+        minHeight: bounds == null ? null : size.height,
+        maxHeight: bounds == null ? null : size.height,
+        // Outside the scale, so the fade joins the picture's own layer
+        // instead of taking a second full-screen pass.
+        child: Opacity(
+          opacity: opacity,
+          child: Transform.scale(
+            scale: bounds == null ? 1 : bounds.width / size.width,
+            alignment: Alignment.topLeft,
+            // Scaled as a picture, so its text is not drawn again at a new
+            // size on every frame.
+            filterQuality: bounds == null || bounds.width == size.width
+                ? null
+                : FilterQuality.low,
+            child: child,
+          ),
         ),
       ),
-    ),
-  );
+    );
+    return bounds == null
+        ? Positioned.fill(child: surface)
+        : Positioned.fromRect(rect: bounds, child: surface);
+  }
 }
 
 class _HeldAfterPop extends Animatable<double> {
@@ -588,6 +829,15 @@ class _HeldAfterPop extends Animatable<double> {
 
   @override
   double transform(double t) => fade.transform(route._poppedAt ?? t);
+}
+
+class _SurfaceContent extends Animatable<double> {
+  _SurfaceContent(this.route);
+
+  final NowPlayingRoute route;
+
+  @override
+  double transform(double t) => route._contentShown(t);
 }
 
 /// Feeds Android's predictive back to the player route while it is the
@@ -612,6 +862,17 @@ class _PlayerBackGesture with WidgetsBindingObserver {
 
   @override
   void handleCancelBackGesture() => route._cancelBackGesture();
+}
+
+/// Hands the player's page its route for [NowPlayingRoute.maybeOf].
+class _NowPlayingRouteScope extends InheritedWidget {
+  const _NowPlayingRouteScope({required this.route, required super.child});
+
+  final NowPlayingRoute route;
+
+  @override
+  bool updateShouldNotify(_NowPlayingRouteScope oldWidget) =>
+      route != oldWidget.route;
 }
 
 /// Routes vertical drags to [NowPlayingRoute]. Scrollables inside [child]

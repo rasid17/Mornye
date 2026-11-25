@@ -217,6 +217,8 @@ class LibraryDatabase {
         rethrow;
       }
     }
+    // From here every write transaction on this connection locks history.db.
+    sqlite.joinWriterQueue(db, sqlite.historyWriterQueue);
     _historyAttached = true;
   }
 
@@ -567,6 +569,26 @@ class LibraryDatabase {
     required bool includeLocal,
   }) => _queueRead(
     (store) => store.genreSpellings(includeLocal: includeLocal),
+    includeLocal: includeLocal,
+  );
+
+  /// The genre tags of the Library songs with [matchKeys]; see
+  /// [LibraryQueueStore.genresOfSongs].
+  Future<List<Map<String, Object?>>> getGenresOfSongs(
+    List<String> matchKeys, {
+    required bool includeLocal,
+  }) => _queueRead(
+    (store) => store.genresOfSongs(matchKeys, includeLocal: includeLocal),
+    includeLocal: includeLocal,
+  );
+
+  /// The release date, format and resolution of the Library songs with
+  /// [matchKeys]; see [LibraryQueueStore.detailsOfSongs].
+  Future<List<Map<String, Object?>>> getDetailsOfSongs(
+    List<String> matchKeys, {
+    required bool includeLocal,
+  }) => _queueRead(
+    (store) => store.detailsOfSongs(matchKeys, includeLocal: includeLocal),
     includeLocal: includeLocal,
   );
 

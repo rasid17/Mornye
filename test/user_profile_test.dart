@@ -9,9 +9,15 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mornye/l10n/l10n.dart';
+import 'package:mornye/providers/library_counts_provider.dart';
+import 'package:mornye/providers/library_genres_provider.dart';
+import 'package:mornye/providers/profile_overview_provider.dart';
 import 'package:mornye/providers/user_profile_provider.dart';
 import 'package:mornye/screens/settings/settings_tab.dart';
 import 'package:mornye/services/backup_service.dart';
+import 'package:mornye/services/library_database.dart';
+import 'package:mornye/services/listening_rewind.dart';
+import 'package:mornye/services/listening_statistics.dart';
 import 'package:mornye/services/shell_navigation_service.dart';
 import 'package:mornye/services/user_profile_store.dart';
 import 'package:mornye/theme/mornye_theme.dart';
@@ -20,6 +26,43 @@ import 'package:mornye/widgets/profile_avatar.dart';
 import 'package:mornye/widgets/settings_group.dart';
 
 import 'support/tooltip_finder.dart';
+
+/// The profile page with nothing heard and an empty Library, so it reads
+/// no database.
+final _emptyRecord = [
+  profileOverviewProvider.overrideWith(
+    (ref) async => ProfileOverview(
+      allTime: ListeningRewind.compute(
+        range: ListeningRewindRange(
+          start: DateTime(2000),
+          end: DateTime(2026, 11, 20),
+          previousStart: DateTime(1999),
+          previousEnd: DateTime(2000),
+        ),
+        summary: const ListeningSummary(),
+        previousMilliseconds: 0,
+      ),
+      month: ListeningRewind.compute(
+        range: ListeningRewindRange(
+          start: DateTime(2026, 10, 21),
+          end: DateTime(2026, 11, 20),
+          previousStart: DateTime(2026, 9, 21),
+          previousEnd: DateTime(2026, 10, 21),
+        ),
+        summary: const ListeningSummary(),
+        previousMilliseconds: 0,
+      ),
+    ),
+  ),
+  libraryCountsProvider.overrideWith(
+    (ref, request) async => const QueueLibraryCounts(
+      allTrackCount: 0,
+      albumCount: 0,
+      singleTrackCount: 0,
+    ),
+  ),
+  libraryGenresProvider.overrideWith((ref) async => const []),
+];
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -216,7 +259,10 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.reset);
       final container = ProviderContainer(
-        overrides: [userProfileStoreProvider.overrideWithValue(store)],
+        overrides: [
+          userProfileStoreProvider.overrideWithValue(store),
+          ..._emptyRecord,
+        ],
       );
       addTearDown(container.dispose);
       await container.read(userProfileProvider.future);
@@ -241,14 +287,19 @@ void main() {
         find.descendant(of: card, matching: find.text('Extensions')),
         findsNothing,
       );
+      // The row opens the profile, whose Edit profile opens the form.
       await tester.tap(find.text('Set up your profile'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Edit profile'));
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField), 'Listener');
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
+      // Save returns to the profile, which shows the new name.
       expect(find.text('Listener'), findsOneWidget);
+      expect(find.text('Edit profile'), findsOneWidget);
       expect(container.read(userProfileProvider).value?.name, 'Listener');
-      await tester.tap(find.text('Listener'));
+      await tester.tap(find.text('Edit profile'));
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField), 'Unsaved');
       await tester.pageBack();
@@ -259,6 +310,51 @@ void main() {
     },
   );
 
+  testWidgets('the Settings profile row names the listener type', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(393, 852);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await store.save(name: 'Listener');
+    final container = ProviderContainer(
+      overrides: [
+        userProfileStoreProvider.overrideWithValue(store),
+        ..._emptyRecord,
+        profileTraitsProvider.overrideWith(
+          (ref) async => const [
+            (trait: ProfileTrait.nightOwl, share: 0.6, count: 0, subject: ''),
+            (
+              trait: ProfileTrait.devotee,
+              share: 0.7,
+              count: 0,
+              subject: 'Jazz',
+            ),
+            (trait: ProfileTrait.onRepeat, share: 0, count: 9, subject: 'Song'),
+          ],
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+    await container.read(userProfileProvider.future);
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          theme: MornyeTheme.build(Brightness.dark),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: const Scaffold(body: SettingsTab()),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    // The two leading types, under the name.
+    expect(find.text('Listener'), findsOneWidget);
+    expect(find.text('Night owl · Jazz at heart'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('desktop Settings keeps the profile page open after Save', (
     tester,
   ) async {
@@ -268,7 +364,10 @@ void main() {
     debugDesktopPlatformOverride = true;
     addTearDown(() => debugDesktopPlatformOverride = null);
     final container = ProviderContainer(
-      overrides: [userProfileStoreProvider.overrideWithValue(store)],
+      overrides: [
+        userProfileStoreProvider.overrideWithValue(store),
+        ..._emptyRecord,
+      ],
     );
     addTearDown(container.dispose);
     await container.read(userProfileProvider.future);
@@ -286,13 +385,16 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('settings-category:profile')));
     await tester.pumpAndSettle();
+    await tester.tap(find.text('Edit profile'));
+    await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField).last, 'Listener');
     await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
 
     expect(container.read(userProfileProvider).value?.name, 'Listener');
-    // The detail pane still shows the profile page, not an empty pane.
-    expect(find.text('Save'), findsOneWidget);
+    // The detail pane is back on the profile, not left empty.
+    expect(find.text('Save'), findsNothing);
+    expect(find.text('Edit profile'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

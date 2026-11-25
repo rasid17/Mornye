@@ -59,9 +59,11 @@ import 'package:mornye/widgets/library_selection_playback_actions.dart';
 import 'package:mornye/widgets/local_library_artwork_builder.dart';
 import 'package:mornye/widgets/disc_separator_chip.dart';
 import 'package:mornye/widgets/album_detail_header.dart';
+import 'package:mornye/widgets/header_toolbar_actions.dart';
 import 'package:mornye/widgets/mornye_artist_header.dart';
 import 'package:mornye/widgets/motion_header_banner.dart';
 import 'package:mornye/widgets/queue_swipe.dart';
+import 'package:mornye/widgets/track_card.dart';
 
 class LocalAlbumScreen extends ConsumerStatefulWidget {
   final String albumName;
@@ -269,7 +271,7 @@ class _LocalAlbumScreenState extends ConsumerState<LocalAlbumScreen>
         _sortedTracksCache.firstOrNull;
     // Songs handed to the page keep the covers they had when it opened, so
     // a cover found from here shows from its record.
-    final foundCover = _albumArtwork()?.record?.coverFile;
+    final foundCover = _foundCover();
     return LocalLibraryArtworkBuilder(
       coverPath: albumCover?.isNotEmpty == true
           ? albumCover
@@ -309,7 +311,8 @@ class _LocalAlbumScreenState extends ConsumerState<LocalAlbumScreen>
       );
     }
 
-    pruneSelection(tracks.map((t) => t.id).toSet());
+    slideSelectIds = [for (final track in tracks) track.id];
+    pruneSelection(slideSelectIds.toSet());
 
     final scaffold = CollectionScaffold(
       scrollController: scrollController,
@@ -392,25 +395,27 @@ class _LocalAlbumScreenState extends ConsumerState<LocalAlbumScreen>
     String? coverPath,
   ) {
     final expandedHeight = calculateExpandedHeight(context);
+    // Only a found cover changes the header, not the lookup finishing.
     final motion = context.isMornye && !MediaQuery.disableAnimationsOf(context)
-        ? ref
-              .watch(
-                songMotionArtworkProvider((
-                  album: widget.albumName,
-                  artist:
-                      _sortedTracksCache.firstOrNull?.artistName ??
-                      widget.artistName,
-                  source: _sortedTracksCache.firstOrNull?.filePath ?? '',
-                )),
-              )
-              .value
+        ? ref.watch(
+            songMotionArtworkProvider((
+              album: widget.albumName,
+              artist:
+                  _sortedTracksCache.firstOrNull?.artistName ??
+                  widget.artistName,
+              source: _sortedTracksCache.firstOrNull?.filePath ?? '',
+            )).select((lookup) => lookup.value),
+          )
         : null;
 
-    final cacheWidth = coverCacheWidthForViewport(context);
+    final cacheWidth = detailHeaderCoverCacheWidth(context);
+    final bgCacheWidth = !context.isMornye
+        ? metadataBackdropCacheExtent(context)
+        : cacheWidth;
     final Widget background = coverPath != null
         ? LocalOrNetworkCoverImage(
             url: coverPath,
-            localCacheWidth: cacheWidth,
+            localCacheWidth: bgCacheWidth,
             placeholder: (_) => Container(color: colorScheme.surface),
           )
         : Container(
@@ -481,14 +486,20 @@ class _LocalAlbumScreenState extends ConsumerState<LocalAlbumScreen>
       ),
       meta: _buildLocalHeaderMeta(context, qualityLabelMode),
       appBarActions: [
-        AlbumTrackSortButton(
-          albumKey: _sortKey,
-          songs: [for (final track in _sortedTracksCache) track.trackName],
+        HeaderToolbarActions(
+          sort: AlbumTrackSortButton(
+            albumKey: _sortKey,
+            songs: [for (final track in _sortedTracksCache) track.trackName],
+          ),
+          actions: (context, ref) {
+            final items = _albumItems();
+            return [
+              ?networkOfflineItemsAction(context, ref, items),
+              ?networkUploadAction(context, ref, items),
+              ...linkTransferActions(context, ref, items),
+            ];
+          },
         ),
-        NetworkOfflineButton(items: _albumItems()),
-        NetworkUploadButton(items: _albumItems()),
-        if (ref.watch(linkPhoneClientProvider) != null)
-          LinkTransferButtons(items: _albumItems()),
       ],
       actions: Consumer(
         builder: (context, ref, _) {
@@ -512,6 +523,7 @@ class _LocalAlbumScreenState extends ConsumerState<LocalAlbumScreen>
                       .togglePlayPause(isPlaying)
                 : _playAll,
             onShuffle: _shuffleAll,
+            showShuffle: ref.watch(playerUiEnabledProvider),
             onAddToPlaylist: () => showAddTracksToPlaylistSheet(
               Navigator.of(context, rootNavigator: true).context,
               ref,
@@ -539,9 +551,26 @@ class _LocalAlbumScreenState extends ConsumerState<LocalAlbumScreen>
   /// The album's key and what Find Missing Artwork found for it. Null for
   /// songs from a network connection, which keep their server's covers.
   ({String albumKey, AlbumArtworkRecord? record})? _albumArtwork() {
+    final path = _artworkLookupPath;
+    if (path == null) return null;
+    return ref.read(libraryAlbumArtworkForSongProvider(path)).value;
+  }
+
+  String? get _artworkLookupPath {
     final path = _sortedTracksCache.firstOrNull?.filePath;
-    if (path == null || path.startsWith('network://')) return null;
-    return ref.watch(libraryAlbumArtworkForSongProvider(path)).value;
+    return path == null || path.startsWith('network://') ? null : path;
+  }
+
+  /// The cover Find Missing Artwork found. A lookup that finds none does not
+  /// build the page again.
+  String? _foundCover() {
+    final path = _artworkLookupPath;
+    if (path == null) return null;
+    return ref.watch(
+      libraryAlbumArtworkForSongProvider(
+        path,
+      ).select((artwork) => artwork.value?.record?.coverFile),
+    );
   }
 
   /// [groups] with Find Artwork, while the album lacks a cover or an
@@ -725,8 +754,11 @@ class _LocalAlbumScreenState extends ConsumerState<LocalAlbumScreen>
         SliverList(
           delegate: SliverChildBuilderDelegate((context, index) {
             final track = discTracks[index];
-            return KeyedSubtree(
+            // Material joins the rows of a disc into one connected list.
+            return TrackCardSegment.at(
               key: ValueKey(track.id),
+              index: index,
+              count: discTracks.length,
               child: StaggeredListItem(
                 index: index,
                 animate: widget.loadTracks == null,
@@ -739,7 +771,10 @@ class _LocalAlbumScreenState extends ConsumerState<LocalAlbumScreen>
     }
 
     return SliverPadding(
-      padding: EdgeInsets.symmetric(horizontal: wideListInset(context)),
+      // A disc label brings its own space above the first run.
+      padding: EdgeInsets.symmetric(
+        horizontal: wideListInset(context),
+      ).copyWith(top: hasMultipleDiscs ? 0 : collectionRunTopGap(context)),
       sliver: SliverMainAxisGroup(slivers: slivers),
     );
   }
@@ -856,54 +891,57 @@ class _LocalAlbumScreenState extends ConsumerState<LocalAlbumScreen>
   }
 
   Widget _buildTrackItem(BuildContext context, LocalLibraryItem track) {
-    return Consumer(
-      builder: (context, ref, _) {
-        final isCurrent = ref.watch(
-          currentMediaItemProvider.select(
-            (state) => _isCurrentTrack(state.value, track),
-          ),
-        );
-        final isPlaying = isCurrent && ref.watch(playbackPlayingProvider);
-        return AlbumTrackTile(
-          filePath: track.filePath,
-          isCurrent: isCurrent,
-          isPlaying: isPlaying,
-          trackNumber: track.trackNumber,
-          trackName: track.trackName,
-          subtitle: Row(
-            children: [
-              Flexible(
-                child: Text(
-                  track.artistName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+    return slideSelectRow(
+      track.id,
+      Consumer(
+        builder: (context, ref, _) {
+          final isCurrent = ref.watch(
+            currentMediaItemProvider.select(
+              (state) => _isCurrentTrack(state.value, track),
+            ),
+          );
+          final isPlaying = isCurrent && ref.watch(playbackPlayingProvider);
+          return AlbumTrackTile(
+            filePath: track.filePath,
+            isCurrent: isCurrent,
+            isPlaying: isPlaying,
+            trackNumber: track.trackNumber,
+            trackName: track.trackName,
+            subtitle: Row(
+              children: [
+                Flexible(
+                  child: Text(
+                    track.artistName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
-              ),
-              if (track.format != null) ...[
-                const Text(' • ', style: TextStyle(fontSize: 12)),
-                Text(
-                  track.format!.toUpperCase(),
-                  style: const TextStyle(fontSize: 12),
-                ),
+                if (track.format != null) ...[
+                  const Text(' • ', style: TextStyle(fontSize: 12)),
+                  Text(
+                    track.format!.toUpperCase(),
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ],
               ],
-            ],
-          ),
-          isSelectionMode: isSelectionMode,
-          isSelected: selectedIds.contains(track.id),
-          onToggleSelection: () => toggleSelection(track.id),
-          onOpen: () => _openMetadata(track),
-          onEnterSelectionMode: () => enterSelectionMode(track.id),
-          onPlay: isCurrent
-              ? () => ref
-                    .read(musicPlayerControllerProvider)
-                    .togglePlayPause(isPlaying)
-              : () => _openFile(track),
-          queueSwipe: libraryItemQueueSwipe(
-            ref,
-            UnifiedLibraryItem.fromLocalLibrary(track),
-          ),
-        );
-      },
+            ),
+            isSelectionMode: isSelectionMode,
+            isSelected: selectedIds.contains(track.id),
+            onToggleSelection: () => toggleSelection(track.id),
+            onOpen: () => _openMetadata(track),
+            onEnterSelectionMode: () => holdToSelect(track.id),
+            onPlay: isCurrent
+                ? () => ref
+                      .read(musicPlayerControllerProvider)
+                      .togglePlayPause(isPlaying)
+                : () => _openFile(track),
+            queueSwipe: libraryItemQueueSwipe(
+              ref,
+              UnifiedLibraryItem.fromLocalLibrary(track),
+            ),
+          );
+        },
+      ),
     );
   }
 
@@ -961,6 +999,7 @@ class _LocalAlbumScreenState extends ConsumerState<LocalAlbumScreen>
   ) {
     final allSelected =
         selectedIds.length == tracks.length && tracks.isNotEmpty;
+    final selectedUnified = _selectedUnifiedItems(tracks);
 
     return LibraryTrackSelectionBar(
       selectedCount: selectedIds.length,
@@ -972,7 +1011,7 @@ class _LocalAlbumScreenState extends ConsumerState<LocalAlbumScreen>
       bottomPadding: bottomPadding,
       albumDelete: true,
       playbackActions: LibrarySelectionPlaybackActions(
-        items: _selectedUnifiedItems(tracks),
+        items: selectedUnified,
         onClose: exitSelectionMode,
       ),
       flacEligibleCount: _selectedFlacEligibleItems(tracks).length,
@@ -981,12 +1020,12 @@ class _LocalAlbumScreenState extends ConsumerState<LocalAlbumScreen>
       onConvert: () => showBatchConvertSheet(
         context,
         ref,
-        _selectedUnifiedItems(tracks),
+        selectedUnified,
         onExitSelectionMode: exitSelectionMode,
       ),
       onReplayGain: ({required remove}) => runBatchReplayGain(
         context,
-        _selectedUnifiedItems(tracks),
+        selectedUnified,
         onExitSelectionMode: exitSelectionMode,
         remove: remove,
       ),

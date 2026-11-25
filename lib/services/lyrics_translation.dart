@@ -6,6 +6,7 @@ import 'package:crypto/crypto.dart';
 import 'package:mornye/services/lyrics_ai_client.dart';
 import 'package:mornye/services/lyrics_translation_alignment.dart';
 import 'package:mornye/utils/logger.dart';
+import 'package:mornye/utils/lyric_supplement_tags.dart';
 import 'package:mornye/utils/lyrics_draft.dart';
 import 'package:mornye/utils/lyrics_parser.dart';
 import 'package:path_provider/path_provider.dart';
@@ -298,39 +299,17 @@ bool lyricsTranslationUnsaved(ParsedLyrics original, ParsedLyrics shown) {
   return false;
 }
 
-/// `[x-romaji-words:...]` and `[x-translation-words:...]` JSON for [words],
-/// as both lyrics parsers read it.
-/// Empty when a word cannot be given a valid time range.
-String lyricWordsSupplement(List<LyricWord> words) {
-  final rows = <Map<String, Object>>[];
-  for (var i = 0; i < words.length; i++) {
-    final word = words[i];
-    final start = word.time.inMilliseconds;
-    final end =
-        word.end?.inMilliseconds ??
-        (i + 1 < words.length ? words[i + 1].time.inMilliseconds : start);
-    if (word.text.trim().isEmpty ||
-        end < start ||
-        (rows.isNotEmpty && (rows.last['startTimeMs']! as int) > start)) {
-      return '';
-    }
-    rows.add({'text': word.text, 'startTimeMs': start, 'endTimeMs': end});
-  }
-  return rows.isEmpty ? '' : jsonEncode(rows);
-}
-
-/// The `-words` JSON for [words] timing [text], or empty when they do not
+/// The `-words` value for [words] timing [text], or empty when they do not
 /// spell it: both lyrics parsers drop such timing.
 String _timedSupplement(String text, List<LyricWord> words) =>
     text.isEmpty || words.map((word) => word.text).join() != text
     ? ''
-    : lyricWordsSupplement(words);
+    : encodeLyricWordsTag(words);
 
 /// The supplement tags a lyric line written as LRC carries for [line]'s
 /// translation and pronunciation, with their word timing, as
 /// (kind, payload) in the order they are written.
 List<(String, String)> lyricLineSupplements(LyricLine line) {
-  String encode(String text) => base64.encode(utf8.encode(text));
   final romanization = _supplementText(line.romanization);
   final romanizationWords = _timedSupplement(
     romanization,
@@ -339,30 +318,53 @@ List<(String, String)> lyricLineSupplements(LyricLine line) {
   final translation = _supplementText(line.translation);
   final translationWords = _timedSupplement(translation, line.translationWords);
   return [
-    if (romanizationWords.isNotEmpty)
-      ('romaji-words', encode(romanizationWords)),
-    if (romanization.isNotEmpty) ('romaji', encode(romanization)),
-    if (translationWords.isNotEmpty)
-      ('translation-words', encode(translationWords)),
-    if (translation.isNotEmpty) ('translation', encode(translation)),
+    if (romanizationWords.isNotEmpty) ('romaji-words', romanizationWords),
+    if (romanization.isNotEmpty) ('romaji', encodeLyricTextTag(romanization)),
+    if (translationWords.isNotEmpty) ('translation-words', translationWords),
+    if (translation.isNotEmpty)
+      ('translation', encodeLyricTextTag(translation)),
   ];
 }
 
 /// [raw] LRC with each timed line carrying the translation and
-/// pronunciation [shown] gives it, as the `[x-translation:<ms>:...]` and
-/// `[x-romaji:<ms>:...]` tags both lyrics parsers read back, with their
+/// pronunciation [shown] gives it, as the `[x-translated:<ms>:...]` and
+/// `[x-romanized:<ms>:...]` tags both lyrics parsers read back, with their
 /// `-words` timing, so they stay with the song's file alongside its own
 /// lyrics. Other lines, tags and supplements stay as they are. Null when
 /// [raw] is not synced LRC or already holds these.
-String? lyricsWithTranslations(String raw, ParsedLyrics shown) {
+///
+/// With [clearMissingTranslations], a timed line whose translation [shown]
+/// no longer carries loses its old tag too, instead of keeping it: the
+/// translation editor uses this when the user cleared a line. Without it,
+/// a shown line that simply does not mention a translation leaves the
+/// saved one alone.
+String? lyricsWithTranslations(
+  String raw,
+  ParsedLyrics shown, {
+  bool clearMissingTranslations = false,
+}) {
   if (!LyricsDraft.canEdit(raw)) return null;
   final draft = LyricsDraft.parse(raw);
   if (!draft.synced) return null;
+  // Lines whose translation the user cleared: the shown line carries no
+  // supplement, so it must still reach [withTranslation] for its old tag
+  // to be removed, instead of being kept as if nothing changed.
+  final draftTranslationKeys = clearMissingTranslations
+      ? <(int, String)>{
+          for (final line in draft.lines)
+            if (line.time != null &&
+                line.supplements.any((tag) => tag.$1 == 'translation'))
+              (line.time!.inMilliseconds, translatableLyricText(line.text)),
+        }
+      : const <(int, String)>{};
   final byTime = <int, Map<String, LyricLine>>{};
   for (final line in shown.lines) {
     final text = translatableLyricText(line.text);
     if (line.isBackground || text.isEmpty) continue;
-    if (lyricLineSupplements(line).isEmpty) continue;
+    if (lyricLineSupplements(line).isEmpty &&
+        !draftTranslationKeys.contains((line.time.inMilliseconds, text))) {
+      continue;
+    }
     (byTime[line.time.inMilliseconds] ??= {}).putIfAbsent(text, () => line);
   }
   if (byTime.isEmpty) return null;
@@ -395,11 +397,19 @@ String? lyricsWithTranslations(String raw, ParsedLyrics shown) {
       if (old.isEmpty || old.first.$2 != tags[kind]) tags['$kind-words'] = '';
     }
     // The parsers keep a line's first tag of a kind, so a new one takes the
-    // old one's place and any later copy goes.
+    // old one's place and any later copy goes. With
+    // [clearMissingTranslations], a translation the shown lyrics no longer
+    // carry is cleared the same way: its old tag and its word timing go,
+    // instead of surviving as if nothing changed.
     final supplements = <(String, String)>[];
     final placed = <String>{};
     for (final supplement in line.supplements) {
       final kind = supplement.$1;
+      if (clearMissingTranslations &&
+          const {'translation', 'translation-words'}.contains(kind) &&
+          !tags.containsKey(kind)) {
+        continue;
+      }
       if (!tags.containsKey(kind)) {
         supplements.add(supplement);
       } else if (placed.add(kind) && tags[kind]!.isNotEmpty) {
@@ -507,6 +517,86 @@ class LyricsTranslationCancelToken {
   void throwIfCancelled() {
     if (_cancelled) throw const LyricsTranslationCancelled();
   }
+}
+
+/// A translation the user wrote or edited by hand, as a cache result: one
+/// entry per distinct source text, in [source] order. A line the user
+/// cleared stays null, so it shows no translation instead of the old one.
+/// Word timing is kept only for lines whose text was left alone; an edited
+/// line loses it, as [LyricLine.withTranslation] does, and is shown line by
+/// line instead. Romanization is untouched by a translation edit.
+LyricsTranslationResult manualLyricsTranslationResult({
+  required LyricsTranslationSource source,
+  required ParsedLyrics edited,
+  LyricsTranslationResult? previous,
+}) {
+  String? at(List<String?> values, int index) =>
+      index < values.length ? values[index] : null;
+  List<LyricsTranslationChunk> chunksAt(
+    List<List<LyricsTranslationChunk>> values,
+    int index,
+  ) => index < values.length ? values[index] : const [];
+  final lines = lyricsWithPlainLines(edited).lines;
+  final translations = List<String?>.filled(source.texts.length, null);
+  final romanizations = List<String?>.filled(source.texts.length, null);
+  final alignments = List<List<LyricsTranslationChunk>>.generate(
+    source.texts.length,
+    (_) => const <LyricsTranslationChunk>[],
+  );
+  final romanizationAlignments = List<List<LyricsTranslationChunk>>.generate(
+    source.texts.length,
+    (_) => const <LyricsTranslationChunk>[],
+  );
+  for (var i = 0; i < lines.length && i < source.lineSegments.length; i++) {
+    final segment = source.lineSegments[i];
+    if (segment == null) continue;
+    final line = lines[i];
+    final translation = line.translation?.trim();
+    // Repeated lines share one segment; the first non-empty edit wins.
+    if (translations[segment] == null && translation?.isNotEmpty == true) {
+      translations[segment] = translation;
+    }
+    if (romanizations[segment] == null &&
+        line.romanization?.trim().isNotEmpty == true) {
+      romanizations[segment] = line.romanization!.trim();
+    }
+    if (previous != null) {
+      if (alignments[segment].isEmpty &&
+          translations[segment] != null &&
+          translations[segment] == at(previous.translations, segment)) {
+        alignments[segment] = chunksAt(previous.alignments, segment);
+      }
+      if (romanizationAlignments[segment].isEmpty &&
+          romanizations[segment] == at(previous.romanizations, segment)) {
+        romanizationAlignments[segment] = chunksAt(
+          previous.romanizationAlignments,
+          segment,
+        );
+      }
+    }
+  }
+  for (var i = 0; i < romanizations.length; i++) {
+    final previousRomanization = at(previous?.romanizations ?? const [], i);
+    romanizations[i] ??= previousRomanization;
+    if (romanizationAlignments[i].isEmpty &&
+        previous != null &&
+        romanizations[i] == previousRomanization) {
+      romanizationAlignments[i] = chunksAt(previous.romanizationAlignments, i);
+    }
+  }
+  return LyricsTranslationResult(
+    translations,
+    romanizations: romanizations.any((value) => value != null)
+        ? romanizations
+        : const [],
+    alignments: alignments.any((line) => line.isNotEmpty)
+        ? alignments
+        : const [],
+    romanizationAlignments:
+        romanizationAlignments.any((line) => line.isNotEmpty)
+        ? romanizationAlignments
+        : const [],
+  );
 }
 
 /// The outcome of a translation: one entry per source text, null where the

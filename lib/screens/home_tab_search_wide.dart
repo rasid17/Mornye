@@ -308,7 +308,16 @@ extension _HomeTabSearchWideUI on _HomeTabState {
         option == HomeSearchSortOption.durationDesc) {
       return items;
     }
-    return sortHomeSearchItems<Track>(
+    if (_sortedCollectionsMode != option) {
+      _sortedCollectionsMode = option;
+      _sortedCollectionsCache.clear();
+    }
+    final cached = _sortedCollectionsCache[items];
+    if (cached != null) return cached;
+    if (_sortedCollectionsCache.length >= 8) {
+      _sortedCollectionsCache.clear();
+    }
+    final sorted = sortHomeSearchItems<Track>(
       items: items,
       option: option,
       nameOf: (item) => item.name,
@@ -316,6 +325,8 @@ extension _HomeTabSearchWideUI on _HomeTabState {
       durationOf: (item) => item.duration,
       dateOf: (item) => item.releaseDate,
     );
+    _sortedCollectionsCache[items] = sorted;
+    return sorted;
   }
 
   /// A filtered kind: [count] covers from [cell] in as many columns as the
@@ -616,8 +627,8 @@ class _SearchTopCollectionCard extends StatelessWidget {
       ),
       trailing: Padding(
         padding: const EdgeInsetsDirectional.only(end: 12),
-        child: Icon(
-          CupertinoIcons.chevron_forward,
+        child: AppIcon.adaptive(
+          Icons.chevron_right,
           size: 14,
           color: Theme.of(context).colorScheme.onSurfaceVariant,
         ),
@@ -758,7 +769,7 @@ class _SearchSongCoverCell extends ConsumerWidget {
                       child: PreviewButton(
                         track: track,
                         size: 28,
-                        dense: true,
+                        dense: isDesktopPlatform,
                         overArtwork: true,
                       ),
                     ),
@@ -841,17 +852,18 @@ class _SearchCoverCell extends StatelessWidget {
         color: colorScheme.onSurfaceVariant,
       ),
     );
-    // CachedCoverImage decodes at this size times the pixel ratio, on one
-    // axis so a cover that is not square keeps its proportions.
-    final image = hasCover
-        ? CachedCoverImage(
-            imageUrl: item.coverUrl!,
-            width: extent,
-            height: extent,
-            fit: BoxFit.cover,
-            errorWidget: (_, _, _) => placeholder,
-          )
-        : placeholder;
+    // No width or height inside SizedBox.square, so the cover decodes once a
+    // desktop resize settles instead of at every size on the way.
+    final image = SizedBox.square(
+      dimension: extent,
+      child: hasCover
+          ? CachedCoverImage(
+              imageUrl: item.coverUrl!,
+              fit: BoxFit.cover,
+              errorWidget: (_, _, _) => placeholder,
+            )
+          : placeholder,
+    );
     final cover = Semantics(
       label:
           '${l10n.dialogDownload} '

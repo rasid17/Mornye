@@ -98,247 +98,251 @@ class _BatchConvertSheetState extends State<BatchConvertSheet> {
       widget.sourceSampleRate,
     );
 
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: DraggableScrollableSheet(
-        initialChildSize: 0.85,
-        minChildSize: 0.5,
-        maxChildSize: 0.95,
-        expand: false,
-        builder: (context, scrollController) => _sheetSurface(
-          child: SingleChildScrollView(
-            controller: scrollController,
-            padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const AppSheetHandle(),
-                const SizedBox(height: 18),
+    // Isolate viewInsets so keyboard animation frames do not rebuild the
+    // conversion option list.
+    final sheet = AppScrollableSheet(
+      builder: (context, scrollController) => _sheetSurface(
+        child: SingleChildScrollView(
+          controller: scrollController,
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const AppSheetHandle(),
+              const SizedBox(height: 18),
+              Text(
+                widget.title,
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+              ),
+              if (widget.subtitle != null) ...[
+                const SizedBox(height: 4),
                 Text(
-                  widget.title,
+                  widget.subtitle!,
                   style: Theme.of(
                     context,
-                  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+                  ).textTheme.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
                 ),
-                if (widget.subtitle != null) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    widget.subtitle!,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: cs.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 20),
+              ],
+              const SizedBox(height: 20),
 
+              _choiceSection(
+                cs,
+                context.l10n.trackConvertTargetFormat,
+                values: widget.formats,
+                labelOf: (format) => format,
+                selected: _selectedFormat,
+                onSelect: (format) {
+                  _selectedFormat = format;
+                  _isLosslessTarget = isLosslessConversionTarget(format);
+                  if (!_isLosslessTarget) {
+                    _selectedBitrate = _defaultBitrateForFormat(format);
+                  } else {
+                    _selectedMaxBitDepth = null;
+                    _selectedMaxSampleRate = null;
+                    _selectedDither = 'auto';
+                    _smartDitherHighPass = false;
+                    _selectedResampler = 'swr';
+                    _selectedResamplerQuality = null;
+                  }
+                },
+              ),
+
+              if (!_isLosslessTarget)
                 _choiceSection(
                   cs,
-                  context.l10n.trackConvertTargetFormat,
-                  values: widget.formats,
-                  labelOf: (format) => format,
-                  selected: _selectedFormat,
-                  onSelect: (format) {
-                    _selectedFormat = format;
-                    _isLosslessTarget = isLosslessConversionTarget(format);
-                    if (!_isLosslessTarget) {
-                      _selectedBitrate = _defaultBitrateForFormat(format);
-                    } else {
-                      _selectedMaxBitDepth = null;
-                      _selectedMaxSampleRate = null;
-                      _selectedDither = 'auto';
-                      _smartDitherHighPass = false;
+                  context.l10n.trackConvertBitrate,
+                  values: _bitrates,
+                  labelOf: (br) => br,
+                  selected: _selectedBitrate,
+                  onSelect: (br) => _selectedBitrate = br,
+                ),
+
+              if (_isLosslessTarget && bitDepthOptions.isNotEmpty)
+                _choiceSection<int?>(
+                  cs,
+                  context.l10n.audioAnalysisBitDepth,
+                  values: [null, ...bitDepthOptions],
+                  labelOf: (depth) => losslessBitDepthLabel(
+                    depth,
+                    originalLabel: labels.original,
+                  ),
+                  selected: _selectedMaxBitDepth,
+                  onSelect: (depth) {
+                    _selectedMaxBitDepth = depth;
+                    if (depth == null) _selectedDither = 'auto';
+                  },
+                ),
+
+              if (_isLosslessTarget && sampleRateOptions.isNotEmpty)
+                _choiceSection<int?>(
+                  cs,
+                  context.l10n.audioAnalysisSampleRate,
+                  values: [null, ...sampleRateOptions],
+                  labelOf: (rate) => losslessSampleRateLabel(
+                    rate,
+                    originalLabel: labels.original,
+                  ),
+                  selected: _selectedMaxSampleRate,
+                  onSelect: (rate) {
+                    _selectedMaxSampleRate = rate;
+                    if (rate == null) {
                       _selectedResampler = 'swr';
                       _selectedResamplerQuality = null;
                     }
                   },
                 ),
 
-                if (!_isLosslessTarget)
-                  _choiceSection(
-                    cs,
-                    context.l10n.trackConvertBitrate,
-                    values: _bitrates,
-                    labelOf: (br) => br,
-                    selected: _selectedBitrate,
-                    onSelect: (br) => _selectedBitrate = br,
-                  ),
-
-                if (_isLosslessTarget && bitDepthOptions.isNotEmpty)
-                  _choiceSection<int?>(
-                    cs,
-                    context.l10n.audioAnalysisBitDepth,
-                    values: [null, ...bitDepthOptions],
-                    labelOf: (depth) => losslessBitDepthLabel(
-                      depth,
-                      originalLabel: labels.original,
-                    ),
-                    selected: _selectedMaxBitDepth,
-                    onSelect: (depth) {
-                      _selectedMaxBitDepth = depth;
-                      if (depth == null) _selectedDither = 'auto';
-                    },
-                  ),
-
-                if (_isLosslessTarget && sampleRateOptions.isNotEmpty)
-                  _choiceSection<int?>(
-                    cs,
-                    context.l10n.audioAnalysisSampleRate,
-                    values: [null, ...sampleRateOptions],
-                    labelOf: (rate) => losslessSampleRateLabel(
-                      rate,
-                      originalLabel: labels.original,
-                    ),
-                    selected: _selectedMaxSampleRate,
-                    onSelect: (rate) {
-                      _selectedMaxSampleRate = rate;
-                      if (rate == null) {
-                        _selectedResampler = 'swr';
-                        _selectedResamplerQuality = null;
-                      }
-                    },
-                  ),
-
-                if (_isLosslessTarget && _selectedMaxBitDepth != null)
-                  _choiceSection(
-                    cs,
-                    context.l10n.trackConvertDithering,
-                    values: losslessDitherOptions,
-                    labelOf: context.l10n.losslessDitherOptionLabel,
-                    selected: _selectedDither,
-                    onSelect: (mode) => _selectedDither = mode,
-                    description: _selectedDither == 'auto'
-                        ? context.l10n.trackConvertDitherSmartDescription
-                        : null,
-                    footer: _selectedDither == 'auto'
-                        ? _smartDitherType(cs)
-                        : null,
-                  ),
-
-                if (_isLosslessTarget && _selectedMaxSampleRate != null)
-                  _choiceSection(
-                    cs,
-                    context.l10n.trackConvertResampler,
-                    values: losslessResamplerOptions,
-                    labelOf: context.l10n.losslessResamplerOptionLabel,
-                    selected: _selectedResampler,
-                    onSelect: (mode) {
-                      if (mode == _selectedResampler) return;
-                      _selectedResampler = mode;
-                      // Each resampler has its own levels and default.
-                      _selectedResamplerQuality = null;
-                    },
-                    footer: _resamplerQuality(cs),
-                  ),
-
-                if (_isLosslessTarget && widget.sourceIsLossless)
-                  Container(
-                    width: double.infinity,
-                    margin: const EdgeInsets.only(bottom: 12),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 12,
-                    ),
-                    decoration: context.isMornye
-                        ? null
-                        : BoxDecoration(
-                            color: cs.primaryContainer.withValues(alpha: 0.4),
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                    child: Row(
-                      children: [
-                        Icon(
-                          context.isMornye
-                              ? CupertinoIcons.checkmark_seal
-                              : Icons.verified,
-                          size: 18,
-                          color: cs.primary,
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            _selectedMaxBitDepth == null &&
-                                    _selectedMaxSampleRate == null
-                                ? context.l10n.trackConvertLosslessHint
-                                : context.l10n
-                                      .trackConvertLosslessOutputWithCap(
-                                        losslessQualityLabel(
-                                          LosslessConversionQuality(
-                                            maxBitDepth: _selectedMaxBitDepth,
-                                            maxSampleRate:
-                                                _selectedMaxSampleRate,
-                                          ),
-                                          originalLabel: labels.original,
-                                          originalQualityLabel:
-                                              labels.originalQuality,
-                                        ),
-                                      ),
-                            style: Theme.of(
-                              context,
-                            ).textTheme.bodySmall?.copyWith(color: cs.primary),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                _card(
+              if (_isLosslessTarget && _selectedMaxBitDepth != null)
+                _choiceSection(
                   cs,
-                  child: AppSwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: Text(context.l10n.trackConvertKeepOriginal),
-                    subtitle: Text(
-                      context.l10n.trackConvertKeepOriginalDescription,
-                    ),
-                    value: _keepOriginal,
-                    onChanged: (value) => setState(() => _keepOriginal = value),
+                  context.l10n.trackConvertDithering,
+                  values: losslessDitherOptions,
+                  labelOf: context.l10n.losslessDitherOptionLabel,
+                  selected: _selectedDither,
+                  onSelect: (mode) => _selectedDither = mode,
+                  description: _selectedDither == 'auto'
+                      ? context.l10n.trackConvertDitherSmartDescription
+                      : null,
+                  footer: _selectedDither == 'auto'
+                      ? _smartDitherType(cs)
+                      : null,
+                ),
+
+              if (_isLosslessTarget && _selectedMaxSampleRate != null)
+                _choiceSection(
+                  cs,
+                  context.l10n.trackConvertResampler,
+                  values: losslessResamplerOptions,
+                  labelOf: context.l10n.losslessResamplerOptionLabel,
+                  selected: _selectedResampler,
+                  onSelect: (mode) {
+                    if (mode == _selectedResampler) return;
+                    _selectedResampler = mode;
+                    // Each resampler has its own levels and default.
+                    _selectedResamplerQuality = null;
+                  },
+                  footer: _resamplerQuality(cs),
+                ),
+
+              if (_isLosslessTarget && widget.sourceIsLossless)
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(bottom: 12),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 12,
+                  ),
+                  decoration: context.isMornye
+                      ? null
+                      : BoxDecoration(
+                          color: cs.primaryContainer,
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        context.isMornye
+                            ? CupertinoIcons.checkmark_seal
+                            : Icons.verified,
+                        size: 18,
+                        color: context.isMornye
+                            ? cs.primary
+                            : cs.onPrimaryContainer,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _selectedMaxBitDepth == null &&
+                                  _selectedMaxSampleRate == null
+                              ? context.l10n.trackConvertLosslessHint
+                              : context.l10n.trackConvertLosslessOutputWithCap(
+                                  losslessQualityLabel(
+                                    LosslessConversionQuality(
+                                      maxBitDepth: _selectedMaxBitDepth,
+                                      maxSampleRate: _selectedMaxSampleRate,
+                                    ),
+                                    originalLabel: labels.original,
+                                    originalQualityLabel:
+                                        labels.originalQuality,
+                                  ),
+                                ),
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                color: context.isMornye
+                                    ? cs.primary
+                                    : cs.onPrimaryContainer,
+                              ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
 
-                const SizedBox(height: 8),
-                SizedBox(
-                  width: double.infinity,
-                  child: AppActionButton(
-                    onPressed: () => widget.onConvert(
-                      _selectedFormat,
-                      _selectedBitrate,
-                      LosslessConversionQuality(
-                        maxBitDepth: _selectedMaxBitDepth,
-                        maxSampleRate: _selectedMaxSampleRate,
-                      ),
-                      LosslessConversionProcessing(
-                        dither: _selectedDither,
-                        resampler: _selectedResampler,
-                        resamplerQuality: _selectedResamplerQuality,
-                        highPass: _smartDitherHighPass,
-                      ),
-                      _keepOriginal,
+              _card(
+                cs,
+                showDivider: false,
+                child: AppSwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(context.l10n.trackConvertKeepOriginal),
+                  subtitle: Text(
+                    context.l10n.trackConvertKeepOriginalDescription,
+                  ),
+                  value: _keepOriginal,
+                  onChanged: (value) => setState(() => _keepOriginal = value),
+                ),
+              ),
+
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: AppActionButton(
+                  onPressed: () => widget.onConvert(
+                    _selectedFormat,
+                    _selectedBitrate,
+                    LosslessConversionQuality(
+                      maxBitDepth: _selectedMaxBitDepth,
+                      maxSampleRate: _selectedMaxSampleRate,
                     ),
-                    icon: const Icon(Icons.swap_horiz),
-                    style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
+                    LosslessConversionProcessing(
+                      dither: _selectedDither,
+                      resampler: _selectedResampler,
+                      resamplerQuality: _selectedResamplerQuality,
+                      highPass: _smartDitherHighPass,
                     ),
-                    label: Text(
-                      widget.confirmLabelBuilder?.call(
-                            _selectedFormat,
-                            _selectedBitrate,
-                            _isLosslessTarget,
-                            LosslessConversionQuality(
-                              maxBitDepth: _selectedMaxBitDepth,
-                              maxSampleRate: _selectedMaxSampleRate,
-                            ),
-                          ) ??
-                          widget.confirmLabel!,
-                    ),
+                    _keepOriginal,
+                  ),
+                  icon: const Icon(Icons.swap_horiz),
+                  style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                  ),
+                  label: Text(
+                    widget.confirmLabelBuilder?.call(
+                          _selectedFormat,
+                          _selectedBitrate,
+                          _isLosslessTarget,
+                          LosslessConversionQuality(
+                            maxBitDepth: _selectedMaxBitDepth,
+                            maxSampleRate: _selectedMaxSampleRate,
+                          ),
+                        ) ??
+                        widget.confirmLabel!,
                   ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
+      ),
+    );
+    return Builder(
+      builder: (context) => Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.viewInsetsOf(context).bottom,
+        ),
+        child: sheet,
       ),
     );
   }
@@ -438,7 +442,11 @@ class _BatchConvertSheetState extends State<BatchConvertSheet> {
     );
   }
 
-  Widget _card(ColorScheme cs, {required Widget child}) {
+  Widget _card(
+    ColorScheme cs, {
+    required Widget child,
+    bool showDivider = true,
+  }) {
     if (context.isMornye) {
       return Padding(
         padding: const EdgeInsets.only(bottom: 20),
@@ -446,8 +454,10 @@ class _BatchConvertSheetState extends State<BatchConvertSheet> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             child,
-            const SizedBox(height: 20),
-            const Divider(height: 1),
+            if (showDivider) ...[
+              const SizedBox(height: 20),
+              const Divider(height: 1),
+            ],
           ],
         ),
       );

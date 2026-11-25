@@ -242,6 +242,8 @@
   "extensionAccountRequiredValue": "Harap diisi.",
   "extensionAccountInvalidNumber": "Beri angka yang valid.",
   "settingsPlaybackSubtitle": "Pemutar, volume, AutoMix, dan output audio",
+  "settingsPlaybackExternalSubtitle": "Lagu dibuka di aplikasi musik lain",
+  "playbackExternalHidden": "Lagu dibuka di aplikasi musik lain, jadi pemutar dan setelannya disembunyikan di seluruh aplikasi. Pilih Pemutar bawaan untuk menampilkannya lagi.",
   "sectionPlayer": "Pemutar",
   "sectionVolumeAndTransitions": "Volume dan transisi",
   "sectionAudioOutput": "Output audio",
@@ -280,6 +282,7 @@
   "queueNoDuplicates": "Tanpa duplikat di antrean",
   "queueNoDuplicatesDescription": "Menambahkan lagu yang sudah ada di antrean berikutnya akan memindahkannya, bukan menambah salinan kedua. Lagu yang sedang diputar dan yang sudah diputar tetap di tempatnya.",
   "queueLock": "Kunci antrean",
+  "queueSaveAsPlaylist": "Simpan antrean sebagai playlist",
   "queueUnlock": "Buka kunci antrean",
   "queueLockDescription": "Mencegah lagu di antrean digeser urutannya atau diusap untuk dihapus. Menambah lagu tetap bisa. Tombol yang sama ada di antrean.",
   "usbBitPerfect": "Audio Hi-Res dan Bit-Perfect",
@@ -313,7 +316,13 @@
   "usbDirectDescription": "Gunakan audio USB eksklusif dengan izin USB Android. FLAC, WAV, ALAC, DSF/DFF, dan WavPack DSD tetap bit-perfect; AAC, MP3, Opus, dan Vorbis di-decode oleh ponsel lalu dikirim langsung. DSD Native butuh DAC yang didukung dan dikenali. Berlaku di lagu selanjutnya.",
   "usbDsdOverPcm": "DSD melalui PCM (DoP)",
   "usbDsdOverPcmDescription": "Hidupkan bila DAC Anda mendukung DoP. Mengirim DSF/DFF & WavPack DSD dalam carrier PCM saat DSD native tidak tersedia. Bila tak didukung mungkin membuat suara desis; biarkan mati bila menggunakan headset USB biasa.",
-  "usbDsdUnsupported": "Format DSD/DAC terhubung tidak didukung. Pemutaran berhenti.",
+  "usbMaxSampleRate": "Sample rate tertinggi",
+  "usbMaxSampleRateDescription": "Lagu di atas rate ini dikonversi turun ke rate ini. Atur bila DAC diam saat memutar lagu resolusi tinggi. Berlaku di lagu selanjutnya.",
+  "usbMaxSampleRateAuto": "Otomatis",
+  "usbDitherType": "Jenis dither",
+  "usbDitherPlainDescription": "Dipakai saat sample rate lagu dikonversi untuk keluaran 16-bit. TPDF biasa menyebarkan derau tambahan merata di semua frekuensi. Berlaku di lagu selanjutnya.",
+  "usbDitherHighPassDescription": "Dipakai saat sample rate lagu dikonversi untuk keluaran 16-bit. TPDF high-pass memindahkan derau tambahan ke frekuensi tinggi sehingga lebih sulit terdengar. Berlaku di lagu selanjutnya.",
+  "usbDsdUnsupported":"Format DSD/DAC terhubung tidak didukung. Pemutaran berhenti.",
   "usbPermissionDenied": "Izin USB tidak diberikan. Menggunakan pemutaran normal.",
   "usbPermissionDeclined": "Akses USB ditolak. Matikan lalu nyalakan lagi Driver Direct USB, atau colok ulang DAC, agar diminta lagi. Menggunakan pemutaran normal.",
   "usbBitPerfectPending": "Menunggu lagu selanjutnya dan output USB yang didukung.",
@@ -336,6 +345,7 @@
   "usbDecodeFailed": "Decoding lagu ini berhenti saat pemutaran langsung. Pemutaran dijeda; pilih lagu untuk melanjutkan.",
   "usbAndroidVersion": "Output USB Bit-Perfect butuh Android 14 atau lebih baru. Coba driver Direct USB. Menggunakan pemutaran normal.",
   "usbOutputLossySource": "{codec}, sumber lossy",
+  "usbOutputResampled": "{rate}, di-resample ke {output}",
   "upgradeIntroContinue": "Lanjut",
   "cacheMotionArtwork": "Cover bergerak offline",
   "cacheMotionArtworkDesc": "Video album yang didownload. Menghapusnya tidak akan menghapus file musik dan cover biasa.",
@@ -417,11 +427,15 @@
   },
   "homeNothingYetTitle": "Belum ada apa-apa",
   "@homeNothingYetTitle": {
-    "description": "Title on the Mornye Home when the Library is empty and nothing was played"
+    "description": "Title on Home when the Library is empty and nothing was played"
   },
   "homeNothingYetMessage": "Lagu yang Anda tambahkan ke Koleksi atau putar akan muncul di sini.",
   "@homeNothingYetMessage": {
     "description": "Message under homeNothingYetTitle"
+  },
+  "homeFindMusic": "Cari musik",
+  "@homeFindMusic": {
+    "description": "Button under homeNothingYetMessage that opens the Search page"
   },
   "homeRecent": "Terbaru",
   "@homeRecent": {
@@ -864,9 +878,9 @@
   "@aboutMobileDeveloper": {
     "description": "Role description for mobile dev"
   },
-  "aboutLogoArtist": "Artist berbakat yang membuat logo indah untuk aplikasi kami!",
-  "@aboutLogoArtist": {
-    "description": "Role description for logo artist"
+  "aboutAppManager": "Manajer aplikasi dan moderator",
+  "@aboutAppManager": {
+    "description": "Role description for the contributor who manages the app's community and moderates it"
   },
   "aboutTranslators": "Penerjemah",
   "@aboutTranslators": {
@@ -1959,6 +1973,33 @@
   "lyricsKeepScreenOnSubtitle": "Mencegah layar mati saat sedang membuka layar lirik, berlaku saat pemutaran dijeda.",
   "lyricsPlayerPreview": "Baris lirik di pemutar",
   "lyricsPlayerPreviewSubtitle": "Tampilkan baris yang sedang dinyanyikan di bawah judul lagu. Ketuk untuk membuka lirik lengkap.",
+  "lyricsPlayerPreviewTranslation": "Terjemahan di baris lirik",
+  "lyricsPlayerPreviewTranslationSubtitle": "Tampilkan terjemahan, bukan baris aslinya, jika lagu punya terjemahan.",
+  "lyricsTranslationEditTitle": "Edit terjemahan",
+  "lyricsTranslationAddTitle": "Tambah terjemahan",
+  "lyricsTranslationEditSubtitle": "Terjemahan ke {language}",
+  "lyricsTranslationEditWordTimingNote": "Mengedit baris menghapus timing per kata pada baris itu. Kolom yang dikosongkan menghapus terjemahan baris itu.",
+  "lyricsTranslationEditSaved": "Terjemahan disimpan",
+  "lyricsEditTitle": "Edit lirik",
+  "lyricsEditWrite": "Tulis lirik",
+  "lyricsEditSetTime": "Atur waktu",
+  "lyricsEditSetTimeTooltip": "Beri baris terpilih posisi saat ini",
+  "lyricsEditEarlier": "−0,1",
+  "lyricsEditLater": "+0,1",
+  "lyricsEditEarlierTooltip": "Majukan 0,1 detik",
+  "lyricsEditLaterTooltip": "Mundurkan 0,1 detik",
+  "lyricsEditNoTime": "Tanpa waktu",
+  "lyricsEditPlayFrom": "Putar dari {time}",
+  "lyricsEditOutOfOrder": "Lebih awal dari baris sebelumnya",
+  "lyricsEditLineHint": "Baris lirik",
+  "lyricsEditAddLine": "Tambah baris",
+  "lyricsEditInsertBelow": "Sisipkan baris di bawah",
+  "lyricsEditRemoveTime": "Hapus waktu",
+  "lyricsEditDeleteLine": "Hapus baris",
+  "lyricsEditLineActions": "Tindakan baris",
+  "lyricsEditSaved": "Lirik disimpan",
+  "lyricsEditSaveFailed": "Tidak bisa menyimpan lirik ke file ini",
+  "lyricsEditReadOnly": "Lirik tidak bisa disimpan ke file lagu ini",
   "lyricsRomanize": "Romanisasi lirik",
   "lyricsRomanizeSubtitle": "Tampilkan cara lirik bahasa Korea, Sirilik, Hindi, Punjabi, Mandarin, dan kana Jepang dinyanyikan, diolah di perangkat ini. Terjemahan AI dapat meromanisasi sisanya.",
   "lyricsRomanizedMainLine": "Romanisasi sebagai baris utama",
@@ -2697,6 +2738,22 @@
   "appearanceInterfaceSizeLarger": "Lebih besar",
   "@appearanceInterfaceSizeLarger": {
     "description": "Label at the large end of the Interface size slider"
+  },
+  "appearanceAnimationSpeed": "Kecepatan animasi",
+  "@appearanceAnimationSpeed": {
+    "description": "Title of the slider that makes the app's animations play slower or faster"
+  },
+  "appearanceAnimationSpeedDescription": "Seberapa cepat halaman, lembar, dan kontrol bergerak. Lirik tetap mengikuti lagu.",
+  "@appearanceAnimationSpeedDescription": {
+    "description": "Explanation under the Animation speed slider"
+  },
+  "appearanceAnimationSpeedSlower": "Lebih lambat",
+  "@appearanceAnimationSpeedSlower": {
+    "description": "Label at the slow end of the Animation speed slider"
+  },
+  "appearanceAnimationSpeedFaster": "Lebih cepat",
+  "@appearanceAnimationSpeedFaster": {
+    "description": "Label at the fast end of the Animation speed slider"
   },
   "queueClearAll": "Hapus Semua",
   "@queueClearAll": {
@@ -3677,6 +3734,18 @@
   "playbackNormalizationPreampHint": "Nilai lebih rendah terdengar lebih pelan. Normalisasi hanya menurunkan volume, jadi tidak pernah clipping.",
   "@playbackNormalizationPreampHint": {
     "description": "Hint under the normalization pre-amp slider"
+  },
+  "playbackNormalizationPreampHintBoost": "Nilai lebih rendah terdengar lebih pelan.",
+  "@playbackNormalizationPreampHintBoost": {
+    "description": "Hint under the normalization pre-amp slider while quiet songs are also turned up"
+  },
+  "playbackNormalizationBoost": "Naikkan lagu yang pelan",
+  "@playbackNormalizationBoost": {
+    "description": "Switch title: volume normalization also raises songs that are quieter than the target, instead of only lowering loud ones"
+  },
+  "playbackNormalizationBoostSubtitle": "Lagu yang di-master lebih pelan dari target ikut dinaikkan. Bagian terkerasnya bisa terdengar tertekan atau clipping.",
+  "@playbackNormalizationBoostSubtitle": {
+    "description": "Subtitle of the switch that lets volume normalization raise quiet songs, warning about clipping"
   },
   "confirmLoudVolume": "Konfirmasi volume keras",
   "@confirmLoudVolume": {
@@ -6004,23 +6073,32 @@
       }
     }
   },
+  "hiResBatchSpectrumSemantics": "Spektrum rata-rata {count} lagu, satu garis untuk tiap lagu",
+  "@hiResBatchSpectrumSemantics": {
+    "description": "Screen reader description of the chart that draws the spectra of several checked songs together",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "audioAnalysisRescanning": "Menganalisis ulang audio...",
   "@audioAnalysisRescanning": {
     "description": "Loading text while audio is being re-analyzed after an explicit refresh"
   },
-  "extensionsHomeFeedProvider": "Provider Feed Beranda",
+  "extensionsHomeFeedProvider": "Provider Feed Telusuri",
   "@extensionsHomeFeedProvider": {
     "description": "Extensions page - label for home feed provider selector"
   },
-  "extensionsHomeFeedCountry": "Negara beranda",
+  "extensionsHomeFeedCountry": "Negara feed Telusuri",
   "@extensionsHomeFeedCountry": {
     "description": "Country picker for the active Home feed extension"
   },
-  "extensionsHomeFeedCountryDescription": "Pilih rekomendasi beranda suatu negara tanpa VPN.",
+  "extensionsHomeFeedCountryDescription": "Pilih rekomendasi suatu negara tanpa VPN.",
   "@extensionsHomeFeedCountryDescription": {
     "description": "Help for choosing regional Home recommendations"
   },
-  "extensionsHomeFeedDescription": "Pilih ekstensi provider feed beranda di layar utama",
+  "extensionsHomeFeedDescription": "Pilih ekstensi yang mengisi halaman Telusuri sebelum Anda mengetik",
   "@extensionsHomeFeedDescription": {
     "description": "Extensions page - description for home feed provider picker"
   },
@@ -6036,11 +6114,11 @@
   "@extensionsHomeFeedOff": {
     "description": "Extensions page - home feed provider option: off"
   },
-  "extensionsHomeFeedOffSubtitle": "Jangan tampilkan feed beranda di layar utama",
+  "extensionsHomeFeedOffSubtitle": "Jangan tampilkan feed di halaman Telusuri",
   "@extensionsHomeFeedOffSubtitle": {
     "description": "Extensions page - subtitle for off home feed option"
   },
-  "extensionsHomeFeedUse": "Pakai feed beranda {extensionName}",
+  "extensionsHomeFeedUse": "Pakai feed {extensionName}",
   "@extensionsHomeFeedUse": {
     "description": "Extensions page - subtitle for a specific extension home feed option",
     "placeholders": {
@@ -6365,6 +6443,25 @@
   "@homeChangeSearchProviderTooltip": {
     "description": "Tooltip for the Home search provider picker"
   },
+  "homeEdit": "Atur Beranda",
+  "homeEditSubtitle": "Bagian mana yang tampil, dan urutannya",
+  "homeEditHint": "Seret untuk mengurutkan. Bagian yang belum ada isinya tidak tampil di Beranda.",
+  "homeSectionAboutDownloads": "Yang sedang diunduh, menunggu, dan selesai hari ini",
+  "homeSectionAboutTopPicks": "Mix dan playlist hari ini sebagai banner",
+  "homeSectionAboutRecentlyPlayed": "Album yang baru kamu putar",
+  "homeSectionAboutQuickPlay": "Lagu yang paling sering kamu putar dan pilihan hari ini dari Koleksimu, sekali ketuk langsung putar",
+  "homeSectionAboutShortcuts": "Jalan cepat ke alat dan koleksi, dan yang kamu sematkan",
+  "homeSectionAboutPins": "Album, playlist, artis, genre, dan folder yang kamu sematkan",
+  "homeSectionLink": "Perangkat terhubung",
+  "homeSectionAboutLink": "Tampil selama perangkat lain terhubung ke perangkat ini",
+  "homeSectionAboutHiRes": "Album Hi-Res milikmu, selama DAC atau output eksklusif memutar",
+  "homeSectionAboutMixes": "Mix harian dari lagumu sendiri",
+  "homeSectionAboutRecentlyAdded": "Lagu terbaru di Koleksimu",
+  "homeSectionAboutUnfinished": "Lagu wishlist, album yang lagunya kurang, dan unduhan gagal",
+  "homeSectionAboutNewReleases": "Musik baru dari artis favoritmu",
+  "homeSectionAboutOnRepeat": "Lagu yang paling sering kamu putar, atau album dari Koleksi selama pemutaran tidak dicatat",
+  "homeReset": "Atur ulang Beranda",
+  "homeResetMessage": "Bagian Beranda kembali ke urutan semula, tampil atau tersembunyi seperti awalnya, dan pintasan bawaan kembali. Yang kamu sematkan tetap ada.",
   "actionPaste": "Tempel",
   "@actionPaste": {
     "description": "Generic action - paste from clipboard"
@@ -7266,6 +7363,22 @@
   "@openInOtherServices": {
     "description": "Title and tooltip for finding the current collection in other services"
   },
+  "shareSongName": "Bagikan nama",
+  "@shareSongName": {
+    "description": "Share sheet option that shares a song's title and artist as text"
+  },
+  "shareSongLink": "Bagikan tautan",
+  "@shareSongLink": {
+    "description": "Share sheet option, and the title of the list it opens, for sharing a song's link on a music service"
+  },
+  "shareSongLinkSubtitle": "Cari lagu ini di layanan kamu",
+  "@shareSongLinkSubtitle": {
+    "description": "Subtitle of the Share link option: the song is searched for on the installed services"
+  },
+  "shareSongLinkNoServices": "Belum ada extension terpasang yang bisa mencari tautan lagu",
+  "@shareSongLinkNoServices": {
+    "description": "Empty state of the Share link list when no metadata extension is installed"
+  },
   "shareSheetNoExtensions": "Tidak ada layanan yang kompatibel",
   "@shareSheetNoExtensions": {
     "description": "Empty state when no extensions can be searched for cross-service links"
@@ -8045,6 +8158,7 @@
     "description": "Metadata menu action that copies the selected key and value"
   },
   "mornyeSearch": "Telusuri",
+  "searchMovedHint": "Pencarian sekarang ada di sini",
   "mornyeContinuePlaying": "Lanjut Memutar",
   "metadataCopyAll": "Salin semua metadata",
   "@metadataCopyAll": {
@@ -8148,6 +8262,9 @@
   "autoplayLearningWaiting": "Peringkat standar sampai ada lagu Autoplay terbaru yang kamu dengarkan dan yang kamu lewati",
   "autoplayLearningTuned": "Disesuaikan untukmu: akurasi {learned}% pada lagu terbarumu (standar {starting}%)",
   "autoplayLearningStandard": "Peringkat standar: penyesuaian tidak lebih akurat pada lagu terbarumu ({learned}% vs {starting}%)",
+  "suggestionOutcomesTitle": "Mix dan rekomendasi",
+  "suggestionOutcomesMixes": "Mix: {percent}% lagu didengarkan, bukan dilewati",
+  "suggestionOutcomesRecommendations": "Rekomendasi untukmu: {percent}% lagu diputar preview-nya, dibuka, atau disimpan",
   "songAnalysis": "Analisis lagu",
   "songAnalysisDescription": "Pelajari bunyi setiap lagu di Koleksi secara privat di perangkat ini, agar Autoplay memilih lagu yang terdengar seperti yang kamu putar dan menyambung dengan mulus.",
   "songAnalysisOnlyWhileCharging": "Hanya saat mengisi daya",
@@ -8168,6 +8285,390 @@
   "profileRemovePhoto": "Hapus foto",
   "profilePhotoError": "Pilih foto yang di bawah 20MB.",
   "profileSaveError": "Tidak dapat menyimpan profil Anda. Coba lagi.",
+  "profileEditAction": "Edit profil",
+  "profileNowPlaying": "Sedang diputar",
+  "profileListeningSince": "Mendengarkan sejak {date}",
+  "@profileListeningSince": {
+    "description": "Line under the profile name; date is the month and year of the first recorded listening, such as November 2026",
+    "placeholders": {
+      "date": {
+        "type": "String"
+      }
+    }
+  },
+  "profileHours": "{hours} jam",
+  "@profileHours": {
+    "description": "A listening time in hours; hours is an already formatted number such as 12.5 or 240",
+    "placeholders": {
+      "hours": {
+        "type": "String"
+      }
+    }
+  },
+  "profileAllTime": "Sepanjang waktu",
+  "profileStatListening": "Waktu mendengarkan",
+  "profileStatSongs": "Lagu diputar",
+  "profileStatArtists": "Artis diputar",
+  "profileStatActiveDays": "Hari mendengarkan",
+  "profileStatStreak": "Rentetan saat ini",
+  "profileDays": "{count} hari",
+  "@profileDays": {
+    "description": "A number of days, as the value of a streak or of the days with listening",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "profileLast30Days": "30 hari terakhir",
+  "profileTaste": "Selera musik",
+  "profileTasteNote": "Bagian dari waktu mendengarkan Anda, untuk lagu yang genrenya diketahui Koleksi.",
+  "profileTasteEmpty": "Lagu yang Anda putar belum punya genre di Koleksi.",
+  "profileTasteMostly": "Kebanyakan {genre}",
+  "@profileTasteMostly": {
+    "description": "Line under the profile name when one genre takes at least half of the listening time",
+    "placeholders": {
+      "genre": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTasteMostlyWith": "Kebanyakan {genre}, dengan {others}",
+  "@profileTasteMostlyWith": {
+    "description": "Line under the profile name when one genre takes at least half of the listening time; others is one or two more genres, such as Rock, Jazz",
+    "placeholders": {
+      "genre": {
+        "type": "String"
+      },
+      "others": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTasteMix": "Campuran {genres}",
+  "@profileTasteMix": {
+    "description": "Line under the profile name when no genre takes half of the listening time; genres is two or three genres, such as Pop, Rock, Jazz",
+    "placeholders": {
+      "genres": {
+        "type": "String"
+      }
+    }
+  },
+  "profileHabits": "Kebiasaan mendengarkan",
+  "profileAverageDay": "Pada hari mendengarkan",
+  "profileTopAlbums": "Album teratas",
+  "profileCollection": "Koleksi Anda",
+  "profileListeningOff": "Catat waktu mendengarkan sedang mati, jadi kebiasaan mendengarkan Anda tidak ditampilkan di sini.",
+  "profileWeekdayChart": "Waktu mendengarkan per hari dalam seminggu, terbanyak pada {day}",
+  "@profileWeekdayChart": {
+    "description": "Screen reader description of the chart of listening time per weekday; day is a weekday name such as Saturday",
+    "placeholders": {
+      "day": {
+        "type": "String"
+      }
+    }
+  },
+  "profileRecentChart": "Waktu mendengarkan pada tiap hari dalam 30 hari terakhir",
+  "profileNowPlayingProgress": "{position} dari {duration}",
+  "@profileNowPlayingProgress": {
+    "placeholders": {
+      "position": {
+        "type": "String"
+      },
+      "duration": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTasteOther": "Lainnya",
+  "profileTasteChart": "Bagian waktu mendengarkan per genre",
+  "profileLast12Months": "12 bulan terakhir",
+  "profileBestMonth": "Bulan terbaik",
+  "profileMonthChart": "Waktu mendengarkan pada tiap bulan dalam 12 bulan terakhir",
+  "profileTraits": "Tipe pendengar",
+  "profileTraitStreak": "Sedang beruntun",
+  "profileTraitStreakBody": "{count} hari berturut-turut dengan musik",
+  "@profileTraitStreakBody": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "profileTraitAudiophile": "Audiophile",
+  "profileTraitAudiophileBody": "{percent} dari waktu mendengarkan Anda dalam Hi-Res",
+  "@profileTraitAudiophileBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitNightOwl": "Burung hantu",
+  "profileTraitNightOwlBody": "{percent} lagu Anda diputar larut malam",
+  "@profileTraitNightOwlBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitEarlyBird": "Si pagi",
+  "profileTraitEarlyBirdBody": "{percent} lagu Anda diputar pada pagi hari",
+  "@profileTraitEarlyBirdBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitWeekender": "Pendengar akhir pekan",
+  "profileTraitWeekenderBody": "{percent} dari waktu mendengarkan Anda jatuh pada Sabtu dan Minggu",
+  "@profileTraitWeekenderBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitLoyal": "Penggemar setia",
+  "profileTraitLoyalBody": "{artist} mengambil {percent} dari waktu mendengarkan Anda",
+  "@profileTraitLoyalBody": {
+    "placeholders": {
+      "artist": {
+        "type": "String"
+      },
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitExplorer": "Penjelajah",
+  "profileTraitExplorerBody": "{count} artis baru dalam 30 hari terakhir",
+  "@profileTraitExplorerBody": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "profileTraitEclectic": "Serba ragam",
+  "profileTraitEclecticBody": "{count} genre, yang terbesar {percent}",
+  "@profileTraitEclecticBody": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      },
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitOnRepeat": "Diulang terus",
+  "profileTraitOnRepeatBody": "{title}, {count} kali dalam sehari",
+  "@profileTraitOnRepeatBody": {
+    "placeholders": {
+      "title": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "profileTraitDailyRitual": "Ritual harian",
+  "profileTraitDailyRitualBody": "Musik di {percent} hari sejak Anda mulai",
+  "@profileTraitDailyRitualBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitMarathon": "Maraton musik",
+  "profileTraitMarathonBody": "{duration} musik dalam satu hari",
+  "@profileTraitMarathonBody": {
+    "placeholders": {
+      "duration": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitOnTheRise": "Makin rajin",
+  "profileTraitOnTheRiseBody": "{percent} lebih banyak dari 30 hari sebelumnya",
+  "@profileTraitOnTheRiseBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitLosslessPurist": "Penjaga lossless",
+  "profileTraitLosslessPuristBody": "{percent} dari waktu mendengarkan Anda lossless",
+  "@profileTraitLosslessPuristBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitDaytime": "Pendengar siang",
+  "profileTraitDaytimeBody": "{percent} lagu Anda diputar pada siang hari",
+  "@profileTraitDaytimeBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitSunset": "Pendengar senja",
+  "profileTraitSunsetBody": "{percent} lagu Anda diputar pada sore hari",
+  "@profileTraitSunsetBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitWorkday": "Teman hari kerja",
+  "profileTraitWorkdayBody": "{percent} dari waktu mendengarkan Anda jatuh pada hari kerja",
+  "@profileTraitWorkdayBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitDevotee": "Jiwa {genre}",
+  "@profileTraitDevotee": {
+    "placeholders": {
+      "genre": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitDevoteeBody": "{percent} dari waktu mendengarkan Anda adalah {genre}",
+  "@profileTraitDevoteeBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      },
+      "genre": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitSongHunter": "Pemburu lagu",
+  "profileTraitSongHunterBody": "{count} lagu berbeda dalam 30 hari terakhir",
+  "@profileTraitSongHunterBody": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "profileTraitThrowback": "Pecinta lagu lawas",
+  "profileTraitThrowbackBody": "{percent} dari waktu mendengarkan Anda rilis sebelum 2000",
+  "@profileTraitThrowbackBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitFreshEars": "Selalu kekinian",
+  "profileTraitFreshEarsBody": "{percent} dari waktu mendengarkan Anda rilis dalam dua tahun terakhir",
+  "@profileTraitFreshEarsBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitPatient": "Sabar mendengar",
+  "profileTraitPatientBody": "{percent} lagu Anda diputar tanpa dilewati",
+  "@profileTraitPatientBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitQuickSkipper": "Cepat pindah",
+  "profileTraitQuickSkipperBody": "Anda melewati {percent} lagu Anda",
+  "@profileTraitQuickSkipperBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileDecades": "Dekade",
+  "profileDecade": "{decade}-an",
+  "@profileDecade": {
+    "placeholders": {
+      "decade": {
+        "type": "String"
+      }
+    }
+  },
+  "profileEra": "Dekade paling sering diputar",
+  "profileDecadeChart": "Waktu mendengarkan per dekade rilis, terbanyak pada {decade}",
+  "@profileDecadeChart": {
+    "placeholders": {
+      "decade": {
+        "type": "String"
+      }
+    }
+  },
+  "profileDecadesNote": "Untuk lagu yang tahun rilisnya diketahui Koleksi.",
+  "profileSound": "Kualitas suara",
+  "profileQualityHiRes": "Hi-Res",
+  "profileQualityLossless": "Lossless",
+  "profileQualityLossy": "Lossy",
+  "profileTopFormat": "Format paling sering diputar",
+  "profileSoundNote": "Bagian dari waktu mendengarkan Anda, untuk lagu yang filenya diketahui Koleksi.",
+  "profileSoundChart": "Bagian waktu mendengarkan per kualitas suara",
+  "profileTimeOfDay": "Waktu dalam sehari",
+  "profilePeakHour": "Jam tersibuk",
+  "profileMostActive": "Paling aktif",
+  "profileDaypartMorning": "Pagi",
+  "profileDaypartAfternoon": "Siang",
+  "profileDaypartEvening": "Sore",
+  "profileDaypartNight": "Malam",
+  "profileNotSkipped": "Lagu yang tidak dilewati",
+  "profileHourChart": "Lagu yang diputar pada tiap jam dalam sehari, terbanyak pada {hour}",
+  "@profileHourChart": {
+    "placeholders": {
+      "hour": {
+        "type": "String"
+      }
+    }
+  },
+  "profileRhythmNote": "Dari {count} lagu terakhir Anda.",
+  "@profileRhythmNote": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "profileArtistsHalf": "Separuh waktu mendengarkan Anda untuk {count} artis.",
+  "@profileArtistsHalf": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "profileShare": "Bagikan profil",
+  "profileShareShow": "Tampilkan",
+  "profileShareIdentity": "Nama dan foto",
+  "profileShareHighlights": "Sorotan",
+  "profileShareHeadline": "Musik saya",
+  "profileShareText": "Profil mendengarkan saya",
+  "profileShareSaved": "Kartu profil disimpan",
+  "profileShareError": "Tidak dapat membuat gambar profil",
   "homeGreetingMorning1": "Selamat pagi",
   "homeGreetingMorning2": "Pagi yang cerah",
   "homeGreetingMorning3": "Awali harimu",
@@ -8192,21 +8693,47 @@
       }
     }
   },
-  "homeTaglineListening": "Mau dengar apa hari ini?",
-  "@homeTaglineListening": {
-    "description": "Rotating Home prompt under the greeting"
-  },
-  "homeTaglineLink": "Punya link? Tempel saja di pencarian",
-  "@homeTaglineLink": {
-    "description": "Rotating Home prompt explaining that links can be pasted into search"
-  },
-  "homeTaglineDiscover": "Temukan album favoritmu berikutnya",
-  "@homeTaglineDiscover": {
-    "description": "Rotating Home prompt under the greeting"
-  },
+  "homeStatusAddedSinceYesterday": "{count, plural, other{{count} lagu ditambahkan sejak kemarin}}",
+  "homeStatusAddedSinceLastVisit": "{count, plural, other{{count} lagu ditambahkan sejak kunjungan terakhir}}",
+  "homeStatusDownloading": "{count, plural, other{{count} sedang diunduh}}",
+  "homeDownloadsNothing": "Tidak ada yang diunduh",
+  "homeDownloadsPaused": "Unduhan dijeda",
+  "homeDownloadsWaiting": "{count, plural, other{{count} menunggu}}",
+  "homeDownloadsFinishedToday": "{count, plural, other{{count} selesai hari ini}}",
+  "homeDownloadsFailed": "{count, plural, other{{count} gagal}}",
   "homeContinueListening": "Lanjutkan mendengarkan",
   "@homeContinueListening": {
     "description": "Home section header for the track currently loaded in the player"
+  },
+  "homeRecommendedForYou": "Rekomendasi untukmu",
+  "@homeRecommendedForYou": {
+    "description": "Home section header for songs outside the Library that resemble the ones the user plays and downloads"
+  },
+  "homeHiResInYourLibrary": "Hi-Res di Koleksimu",
+  "@homeHiResInYourLibrary": {
+    "description": "Home section header, shown while a DAC or an exclusive hi-res output plays, for the user's own albums above CD quality"
+  },
+  "homeLinkConnectedTo": "Terhubung ke {name}",
+  "@homeLinkConnectedTo": {
+    "description": "Home row shown while a Mornye Link device is attached; opens the Devices sheet",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "homeLinkConnectedDevices": "{count, plural, other{Terhubung ke {count} perangkat}}",
+  "@homeLinkConnectedDevices": {
+    "description": "Home row shown while several phones are connected to this Mornye Link host",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "appearanceRecommendationsSubtitle": "Tampilkan lagu yang mirip dengan yang kamu putar dan unduh di Beranda",
+  "@appearanceRecommendationsSubtitle": {
+    "description": "Subtitle of the switch that shows or hides Home's Recommended for you shelf"
   },
   "homeRecentlyAdded": "Baru ditambahkan",
   "@homeRecentlyAdded": {
@@ -8216,6 +8743,31 @@
   "@homeOnRepeat": {
     "description": "Home section header for the most played tracks of the last four weeks"
   },
+  "homeNewRelease": "Rilis baru",
+  "@homeNewRelease": {
+    "description": "Mornye Home: small label on a Top Picks album card, for a new album by a favorite artist"
+  },
+  "homeFromYourLibrary": "Dari Koleksimu",
+  "@homeFromYourLibrary": {
+    "description": "Home section header for the day's albums from the Library, shown in On repeat's place while listening is not recorded"
+  },
+  "homeFromSource": "Dari {source}",
+  "@homeFromSource": {
+    "description": "Top Picks page: header of the shelf of playlists and albums from the Home feed extension, named by its display name",
+    "placeholders": {"source": {"type": "String"}}
+  },
+  "homeRecommendedFromLibrary": "Berdasarkan Koleksimu",
+  "@homeRecommendedFromLibrary": {
+    "description": "Recommended page: header of the day's recommended songs, which start from songs the user plays, adds and loves; genre shelves follow"
+  },
+  "homeUnfinishedTitle": "Lengkapi koleksimu",
+  "homeUnfinishedWishlist": "{count, plural, other{{count} lagu di wishlist}}",
+  "homeUnfinishedAlbums": "{count, plural, other{{count} album belum lengkap}}",
+  "homeUnfinishedRecognized": "{count, plural, other{{count} lagu yang dikenali belum ada di Koleksi}}",
+  "homeUnfinishedFailed": "{count, plural, other{{count} download gagal}}",
+  "homeUnfinishedAlbumProgress": "{present} dari {expected} lagu",
+  "homeUnfinishedAlbumSomeMissing": "{count, plural, other{{count} lagu, sebagian belum ada}}",
+  "homeQuickPlay": "Putar cepat",
   "homeShortcuts": "Pintasan",
   "@homeShortcuts": {
     "description": "Home section header for quick links to player tools"
@@ -8231,6 +8783,51 @@
   "homeShortcutsReset": "Atur ulang pintasan",
   "@homeShortcutsReset": {
     "description": "Menu item that restores the default Home shortcuts"
+  },
+  "homeShortcutRemove": "Hapus pintasan",
+  "@homeShortcutRemove": {
+    "description": "Menu item that takes one shortcut off Home"
+  },
+  "homeShortcutAdd": "Tambah pintasan",
+  "@homeShortcutAdd": {
+    "description": "Menu item and sheet title for adding a shortcut to Home after one was removed"
+  },
+  "homePinAdd": "Sematkan ke Beranda",
+  "@homePinAdd": {
+    "description": "Menu item that adds a Library album, playlist, artist, genre or folder to Home"
+  },
+  "homePinRemove": "Lepas dari Beranda",
+  "@homePinRemove": {
+    "description": "Menu item that takes a pinned Library album, playlist, artist, genre or folder off Home"
+  },
+  "homePinUnpin": "Lepas sematan",
+  "@homePinUnpin": {
+    "description": "Menu item of a pin on Home, and the snackbar action for a pin whose target is gone, that takes the pin off Home"
+  },
+  "homePinMoveToFront": "Pindahkan ke depan",
+  "@homePinMoveToFront": {
+    "description": "Menu item of a pin on Home that makes it the first pin"
+  },
+  "homePinned": "Disematkan",
+  "@homePinned": {
+    "description": "Home section header for the albums, playlists, artists, genres and folders the person pinned"
+  },
+  "homePinLimit": "Beranda memuat paling banyak {count} sematan. Lepas satu dulu.",
+  "@homePinLimit": {
+    "description": "Snackbar when pinning to Home while Home already holds the most pins it can",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "homePinMissing": "Item ini sudah tidak ada di Koleksi",
+  "@homePinMissing": {
+    "description": "Snackbar when a pin on Home is tapped but its album, playlist, artist, genre or folder is gone"
+  },
+  "homePinFolder": "Folder",
+  "@homePinFolder": {
+    "description": "Subtitle of a pinned Library folder on Home"
   },
   "artistUpcomingConcerts": "Konser Mendatang",
   "artistAllUpcomingConcerts": "Semua Konser Mendatang",
@@ -8524,6 +9121,13 @@
   "autoMixPitch": "Nada (semitone)",
   "autoMixEcho": "Gema",
   "autoMixLowPass": "Filter redam",
+  "autoMixMatching": "Pencocokan ketukan",
+  "autoMixMatchingStandard": "Standar",
+  "autoMixMatchingStandardHint": "Hanya lagu dengan ketukan yang jelas",
+  "autoMixMatchingMore": "Lebih sering",
+  "autoMixMatchingMoreHint": "Juga lagu dengan ketukan yang kurang jelas",
+  "autoMixMatchingMost": "Paling sering",
+  "autoMixMatchingMostHint": "Sebanyak mungkin lagu. Mix kadang bisa terdengar meleset.",
   "autoMixMixing": "Mixing",
   "autoMixCrossfading": "Crossfade",
   "playbackAutomation": "Pemutaran otomatis",
@@ -8546,7 +9150,7 @@
   "appearanceCustomFontInvalid": "Font tidak dapat dimuat. Pilih file TTF atau OTF yang valid, maksimal 10 MB.",
   "appearanceCustomFontReset": "Gunakan font tema",
   "equalizerTitle": "Equalizer",
-  "equalizerDescription": "5–31 band, kontrol nada, preamp, dan dinamika",
+  "equalizerDescription": "5–31 band atau filter parametrik, preamp, dan dinamika",
   "equalizerEnable": "Aktifkan equalizer",
   "equalizerBands": "Band",
   "equalizerTone": "Nada & stereo",
@@ -8570,7 +9174,7 @@
   "equalizerPresetName": "Nama preset",
   "equalizerImport": "Impor preset",
   "equalizerExport": "Bagikan preset",
-  "equalizerImportInvalid": "Pilih preset equalizer Mornye yang valid (JSON, maksimal 64 KB).",
+  "equalizerImportInvalid": "Pilih preset equalizer Mornye (JSON) atau daftar filter (teks), maksimal 64 KB.",
   "equalizerSaved": "Preset disimpan",
   "equalizerResetTitle": "Reset equalizer?",
   "equalizerResetDescription": "Kembalikan kurva datar serta pengaturan nada dan dinamika bawaan. Preset tersimpan tetap disimpan.",
@@ -8581,6 +9185,49 @@
   "equalizerDeletePreset": "Hapus preset",
   "equalizerCustom": "Kustom",
   "equalizerManagePresets": "Kelola preset",
+  "equalizerModeGraphic": "Grafis",
+  "equalizerModeParametric": "Parametrik",
+  "equalizerFilters": "Filter",
+  "equalizerFilterCount": "{count, plural, other{{count} filter}}",
+  "@equalizerFilterCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "equalizerFilterNumber": "Filter {number}",
+  "@equalizerFilterNumber": {
+    "placeholders": {
+      "number": {
+        "type": "int"
+      }
+    }
+  },
+  "equalizerAddFilter": "Tambah filter",
+  "equalizerRemoveFilter": "Hapus filter",
+  "equalizerFiltersEmpty": "Belum ada filter. Tambahkan satu, atau impor daftar filter.",
+  "equalizerFilterPeak": "Peak",
+  "equalizerFilterLowShelf": "Low shelf",
+  "equalizerFilterHighShelf": "High shelf",
+  "equalizerFilterFrequency": "Frekuensi",
+  "equalizerFilterGain": "Gain",
+  "equalizerFilterQ": "Q",
+  "@equalizerFilterQ": {
+    "description": "The quality factor (width) of a parametric equalizer filter; keep the letter Q"
+  },
+  "equalizerFilterTypeValue": "Ketik nilainya",
+  "equalizerNeedsEngine": "Filter parametrik diputar lewat mesin pemutar baru. Aktifkan untuk mendengarnya. Berlaku mulai lagu berikutnya.",
+  "equalizerNeedsEngineAction": "Aktifkan",
+  "equalizerExportFilters": "Bagikan daftar filter",
+  "equalizerImportSkipped": "{count, plural, other{Diimpor. {count} filter dari jenis yang tidak didukung dilewati.}}",
+  "@equalizerImportSkipped": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "lyricsShareTitle": "Bagikan lirik",
   "@lyricsShareTitle": {
     "description": "Screen that turns selected lyric lines into an image for stories"
@@ -8705,6 +9352,7 @@
     "description": "Audio info sheet, Bit-perfect row on iPhone and iPad: iOS sends every app's sound through its mixer, so no setting can make playback bit-perfect"
   },
   "audioInfoBitPerfectLossy": "Tidak, di-decode dari sumber lossy",
+  "audioInfoBitPerfectResampled": "Tidak, di-resample ke rate yang diterima DAC",
   "audioInfoDevice": "Perangkat",
   "audioInfoDeviceType": "{type, select, speaker{Speaker ponsel} earpiece{Speaker telepon} wired_headphones{Headphone kabel} wired_headset{Headset kabel} line{Line out} bluetooth{Bluetooth} bluetooth_le{Bluetooth LE Audio} usb{Audio USB} usb_headset{Headset USB} hdmi{HDMI} dock{Dock} cast{Cast} hearing_aid{Alat bantu dengar} airplay{AirPlay} car{Audio mobil} other{Lainnya}}",
   "@audioInfoDeviceType": {
@@ -9212,9 +9860,13 @@
   "listenBrainzReauthenticate": "Token ListenBrainz Anda tidak berlaku lagi. Hubungkan kembali dengan token baru untuk melanjutkan scrobbling.",
   "audioOutputSystem": "Perangkat ini dan Bluetooth",
   "audioOutputCast": "Cast ke TV",
-  "audioOutputCastDescription": "Perangkat Google Cast di jaringan Wi-Fi yang sama",
+  "audioOutputCastDescription": "Perangkat {kinds} di jaringan Wi-Fi yang sama",
+  "audioOutputCastOther": "TV dan speaker lain",
+  "audioOutputCastKindList": "{first} dan {last}",
+  "audioOutputCastSearching": "Mencari perangkat {kinds}…",
   "audioOutputStopCasting": "Hentikan casting",
   "audioOutputCastUnavailable": "Google Cast tidak dapat dibuka. Periksa Google Play services dan akses jaringan lokal.",
+  "audioOutputCastNetworkUnavailable": "Tidak dapat menjangkau perangkat cast. Periksa akses jaringan lokal.",
   "lyricsAiMode": "Mode Terjemahan",
   "lyricsAiModeFast": "Cepat",
   "lyricsAiModeFastDescription": "Menerjemahkan per baris tanpa timing kata. Lebih cepat dengan keluaran lebih sedikit.",
@@ -9238,5 +9890,25 @@
   "offlineNoSongs": "Tidak ada lagu Library jaringan dalam pilihan ini.",
   "offlineCopyUnavailable": "Salinan offline tidak tersedia. Simpan kembali sebelum menghapus salinan server.",
   "offlinePlayingLocal": "Memutar dari perangkat ini",
-  "offlineStreaming": "Streaming dari {server}"
+  "offlineStreaming": "Streaming dari {server}",
+  "linkMetadataUpdateTitle": "Perbarui metadata",
+  "linkMetadataUpdateSubtitle": "Bawa perubahan tag di {name} ke lagu yang disimpan darinya",
+  "linkMetadataUpdateDescription": "Lagu tersimpan di ponsel ini yang detailnya berbeda di {name}. Pilih yang ingin dibawa. Tidak ada yang berubah sampai Anda memperbarui.",
+  "linkMetadataUpdateComparing": "Membandingkan dengan {name}…",
+  "linkMetadataUpdateFailedTitle": "Tidak bisa membandingkan dengan {name}",
+  "linkMetadataUpdateFailedMessage": "Pastikan {name} masih terhubung, lalu coba lagi.",
+  "linkMetadataUpdateNoneTitle": "Semua sudah sama",
+  "linkMetadataUpdateNoneMessage": "Lagu yang disimpan dari {name} punya detail yang sama dengan di {name}.",
+  "linkMetadataUpdateDiffers": "{count, plural, =1{1 detail berbeda} other{{count} detail berbeda}}",
+  "linkMetadataUpdateChosen": "{chosen} dari {count} dipilih",
+  "linkMetadataUpdateApply": "{count, plural, =1{Perbarui 1 lagu} other{Perbarui {count} lagu}}",
+  "linkMetadataUpdateUpdating": "Memperbarui {done} dari {total}…",
+  "linkMetadataUpdateResult": "{count, plural, =0{Tidak ada lagu yang diperbarui} =1{1 lagu diperbarui} other{{count} lagu diperbarui}}",
+  "linkMetadataUpdateResultFailed": "{count, plural, =1{1 lagu tidak bisa diperbarui} other{{count} lagu tidak bisa diperbarui}}",
+  "linkMetadataUpdateSelectAll": "Pilih semua",
+  "linkMetadataUpdateSelectNone": "Batalkan semua",
+  "linkMetadataUpdateOnPhone": "Di ponsel ini: {value}",
+  "linkMetadataUpdateOnHost": "Di {name}: {value}",
+  "linkMetadataUpdateEmpty": "Kosong",
+  "linkMetadataFieldYear": "Tahun"
 }

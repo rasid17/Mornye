@@ -68,37 +68,43 @@ class _LibrarySourceSettingsItem extends StatelessWidget {
       builder: (context) => Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          AppSheetOption(
-            enabled: canScan,
-            leading: const AppIcon(Icons.refresh_rounded),
-            title: Text(context.l10n.libraryScan),
-            subtitle: Text(context.l10n.libraryScanSubtitle),
-            onTap: canScan ? () => Navigator.pop(context, 'scan') : null,
-          ),
-          AppSheetOption(
-            enabled: canScan,
-            leading: const AppIcon(Icons.sync_rounded),
-            title: Text(context.l10n.libraryForceFullScan),
-            subtitle: Text(context.l10n.libraryForceFullScanSubtitle),
-            onTap: canScan ? () => Navigator.pop(context, 'full_scan') : null,
-          ),
-          if (hasFailures)
-            AppSheetOption(
-              leading: const AppIcon(Icons.report_outlined),
-              title: Text(context.l10n.libraryUnreadableFilesTitle),
-              subtitle: Text(context.l10n.libraryUnreadableFilesAction),
-              onTap: () => Navigator.pop(context, 'failures'),
-            ),
-          AppSheetOption(
-            leading: AppIcon(
-              Icons.delete_outline,
-              color: Theme.of(context).colorScheme.error,
-            ),
-            title: Text(
-              context.l10n.libraryRemoveFolder,
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
-            ),
-            onTap: () => Navigator.pop(context, 'remove'),
+          AppSheetOptions(
+            children: [
+              AppSheetOption(
+                enabled: canScan,
+                leading: const AppIcon(Icons.refresh_rounded),
+                title: Text(context.l10n.libraryScan),
+                subtitle: Text(context.l10n.libraryScanSubtitle),
+                onTap: canScan ? () => Navigator.pop(context, 'scan') : null,
+              ),
+              AppSheetOption(
+                enabled: canScan,
+                leading: const AppIcon(Icons.sync_rounded),
+                title: Text(context.l10n.libraryForceFullScan),
+                subtitle: Text(context.l10n.libraryForceFullScanSubtitle),
+                onTap: canScan
+                    ? () => Navigator.pop(context, 'full_scan')
+                    : null,
+              ),
+              if (hasFailures)
+                AppSheetOption(
+                  leading: const AppIcon(Icons.report_outlined),
+                  title: Text(context.l10n.libraryUnreadableFilesTitle),
+                  subtitle: Text(context.l10n.libraryUnreadableFilesAction),
+                  onTap: () => Navigator.pop(context, 'failures'),
+                ),
+              AppSheetOption(
+                leading: AppIcon(
+                  Icons.delete_outline,
+                  color: Theme.of(context).colorScheme.error,
+                ),
+                title: Text(
+                  context.l10n.libraryRemoveFolder,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+                onTap: () => Navigator.pop(context, 'remove'),
+              ),
+            ],
           ),
           const SizedBox(height: 8),
         ],
@@ -274,18 +280,29 @@ class _AnimatedScanCount extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 2),
-          TweenAnimationBuilder<double>(
-            tween: Tween<double>(begin: 0, end: count.toDouble()),
-            duration: const Duration(milliseconds: 250),
-            curve: Curves.easeOut,
-            builder: (context, value, _) => Text(
-              value.round().toString(),
-              maxLines: 1,
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-                fontFeatures: const [FontFeature.tabularFigures()],
-              ),
-            ),
+          Builder(
+            builder: (context) {
+              final motion = AppMotion.effectsFast(
+                context,
+                const AppMotionSpec(
+                  Duration(milliseconds: 250),
+                  Curves.easeOut,
+                ),
+              );
+              return TweenAnimationBuilder<double>(
+                tween: Tween<double>(begin: 0, end: count.toDouble()),
+                duration: motion.duration,
+                curve: motion.curve,
+                builder: (context, value, _) => Text(
+                  value.round().toString(),
+                  maxLines: 1,
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+              );
+            },
           ),
         ],
       ),
@@ -366,8 +383,8 @@ class _LibraryHeroCard extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child: Stack(
         children: [
-          Positioned(
-            right: -20,
+          PositionedDirectional(
+            end: -20,
             top: -20,
             child: AppIcon(
               Icons.library_music,
@@ -375,8 +392,8 @@ class _LibraryHeroCard extends StatelessWidget {
               color: colorScheme.primary.withValues(alpha: 0.05),
             ),
           ),
-          Positioned(
-            left: -40,
+          PositionedDirectional(
+            start: -40,
             bottom: -40,
             child: Container(
               width: 150,

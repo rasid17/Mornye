@@ -15,6 +15,7 @@ import 'package:mornye/theme/app_motion.dart';
 import 'package:mornye/theme/mornye_theme.dart';
 import 'package:mornye/theme/player_artwork_theme.dart';
 import 'package:mornye/services/cast_output.dart';
+import 'package:mornye/services/link/desktop/link_desktop_host.dart';
 import 'package:mornye/utils/lyrics_parser.dart';
 import 'package:mornye/utils/lyrics_timeline.dart';
 import 'package:mornye/utils/string_utils.dart';
@@ -32,6 +33,7 @@ import 'package:mornye/widgets/desktop/desktop_link_devices_button.dart';
 import 'package:mornye/widgets/desktop/desktop_row_ink.dart';
 import 'package:mornye/widgets/desktop/desktop_window.dart';
 import 'package:mornye/widgets/desktop/desktop_volume_scroll.dart';
+import 'package:mornye/widgets/connected_icon_buttons.dart';
 import 'package:mornye/widgets/expressive_playback_transport.dart';
 import 'package:mornye/widgets/link/link_devices_sheet.dart';
 import 'package:mornye/widgets/mornye_chrome.dart';
@@ -40,6 +42,7 @@ import 'package:mornye/widgets/mornye_player_background.dart';
 import 'package:mornye/widgets/overflow_marquee.dart';
 import 'package:mornye/widgets/player_artwork.dart';
 import 'package:mornye/widgets/player_lyrics.dart';
+import 'package:mornye/widgets/player_playback_controls.dart';
 import 'package:mornye/widgets/player_track_crossfade.dart';
 import 'package:mornye/widgets/player_volume_control.dart';
 import 'package:mornye/widgets/playback_seek_slider.dart';
@@ -92,9 +95,12 @@ class DesktopPlayerBar extends ConsumerWidget {
     return context.isMornye
         ? _MornyePlayerBar(mediaItem: mediaItem)
         // The bar takes the track's artwork scheme; the downloads popover
-        // it hosts keeps the app scheme.
+        // it hosts keeps the app scheme. Only the fill fades: moving the
+        // whole scheme rebuilt the bar on every frame of a song change.
         : PlayerArtworkTheme(
             artUri: mediaItem?.artUri?.toString(),
+            fadesSurfaceOnly: true,
+            background: _barFill,
             child: _MaterialPlayerBar(
               mediaItem: mediaItem,
               appTheme: Theme.of(context),
@@ -102,6 +108,10 @@ class DesktopPlayerBar extends ConsumerWidget {
           );
   }
 }
+
+/// The fill of the bar and of the mini player, which fades on a song change
+/// while the scheme swaps.
+Color _barFill(ColorScheme scheme) => scheme.surfaceContainer;
 
 /// Shows Now Playing in the content pane, or returns to the content when it
 /// is already showing.
@@ -124,57 +134,103 @@ class _MaterialPlayerBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final loaded = mediaItem != null;
-    return Material(
-      color: colorScheme.surfaceContainer,
-      child: SafeArea(
-        top: false,
-        child: SizedBox(
-          height: DesktopPlayerBar.materialHeight,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final sideWidth = math.max(
-                  _sideControlsMinWidth,
-                  (constraints.maxWidth - 32) * 0.3,
-                );
-                return Row(
-                  children: [
-                    SizedBox(
-                      width: sideWidth,
-                      child: Align(
-                        alignment: AlignmentDirectional.centerStart,
-                        child: _TrackSummary(mediaItem: mediaItem),
+    // Made outside the LayoutBuilder, so a resize frame only lays them out.
+    final summary = _TrackSummary(mediaItem: mediaItem);
+    final center = Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        _MaterialTransportRow(enabled: loaded),
+        SizedBox(height: 24, child: _SeekRow(mediaItem: mediaItem)),
+      ],
+    );
+    final trailing = _TrailingControls(enabled: loaded, appTheme: appTheme);
+    return PlayerArtworkSurface(
+      surface: colorScheme.surfaceContainer,
+      child: Material(
+        type: MaterialType.transparency,
+        child: SafeArea(
+          top: false,
+          child: SizedBox(
+            height: DesktopPlayerBar.materialHeight,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final sideWidth = math.max(
+                    _sideControlsMinWidth,
+                    (constraints.maxWidth - 32) * 0.3,
+                  );
+                  return Row(
+                    children: [
+                      SizedBox(
+                        width: sideWidth,
+                        child: Align(
+                          alignment: AlignmentDirectional.centerStart,
+                          child: summary,
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          _Transport(enabled: loaded),
-                          SizedBox(
-                            height: 24,
-                            child: _SeekRow(mediaItem: mediaItem),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    SizedBox(
-                      width: sideWidth,
-                      child: _TrailingControls(
-                        enabled: loaded,
-                        appTheme: appTheme,
-                      ),
-                    ),
-                  ],
-                );
-              },
+                      const SizedBox(width: 16),
+                      Expanded(child: center),
+                      const SizedBox(width: 16),
+                      SizedBox(width: sideWidth, child: trailing),
+                    ],
+                  );
+                },
+              ),
             ),
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Shuffle and repeat as M3E toggle buttons around the transport, which
+/// fill and turn square while on. A narrow center keeps the transport alone.
+class _MaterialTransportRow extends StatelessWidget {
+  const _MaterialTransportRow({required this.enabled});
+
+  static const double _transportWidth = 192;
+  static const double _modeSize = 40;
+  static const double _gap = 8;
+
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context) {
+    // Made outside the LayoutBuilder, so a resize frame only lays them out.
+    final transport = _Transport(enabled: enabled);
+    final colorScheme = Theme.of(context).colorScheme;
+    Widget mode(PlayerPlaybackMode mode) => PlayerPlaybackModeButton(
+      key: ValueKey('desktop-player-${mode.name}'),
+      mode: mode,
+      colorScheme: colorScheme,
+      secondary: true,
+      size: _modeSize,
+      iconSize: 20,
+      enabled: enabled,
+    );
+    final shuffle = mode(PlayerPlaybackMode.shuffle);
+    final repeat = mode(PlayerPlaybackMode.repeat);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < _transportWidth + 2 * (_modeSize + _gap)) {
+          return transport;
+        }
+        return Directionality(
+          textDirection: TextDirection.ltr,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              shuffle,
+              const SizedBox(width: _gap),
+              transport,
+              const SizedBox(width: _gap),
+              repeat,
+            ],
+          ),
+        );
+      },
     );
   }
 }
@@ -557,9 +613,11 @@ class _SeekRow extends ConsumerWidget {
 
   // Time runs left to right in right-to-left layouts too.
   @override
-  Widget build(BuildContext context, WidgetRef ref) => Directionality(
-    textDirection: TextDirection.ltr,
-    child: _buildRow(context, ref),
+  Widget build(BuildContext context, WidgetRef ref) => RepaintBoundary(
+    child: Directionality(
+      textDirection: TextDirection.ltr,
+      child: _buildRow(context, ref),
+    ),
   );
 
   Widget _buildRow(BuildContext context, WidgetRef ref) {
@@ -567,12 +625,19 @@ class _SeekRow extends ConsumerWidget {
     final colorScheme = Theme.of(context).colorScheme;
     final mornye = context.isMornye;
     final duration = item?.duration ?? Duration.zero;
+    final visible = TickerMode.valuesOf(context).enabled;
     final position = item == null
         ? Duration.zero
-        : ref.watch(playbackPositionProvider);
+        : (visible
+              ? ref.watch(playbackPositionProvider)
+              : ref.read(playbackPositionProvider));
     final playing =
-        ref.watch(playbackPlayingProvider) &&
-        !ref.watch(playbackLoadingProvider);
+        (visible
+            ? ref.watch(playbackPlayingProvider)
+            : ref.read(playbackPlayingProvider)) &&
+        !(visible
+            ? ref.watch(playbackLoadingProvider)
+            : ref.read(playbackLoadingProvider));
     final timeStyle = Theme.of(context).textTheme.labelSmall?.copyWith(
       color: colorScheme.onSurfaceVariant,
       fontFeatures: const [FontFeature.tabularFigures()],
@@ -646,6 +711,8 @@ class _MornyeLcd extends StatelessWidget {
         ),
       );
     }
+    // Made outside the LayoutBuilder, so a resize frame only lays them out.
+    final lines = _MornyeLcdLines(mediaItem: item);
     // Artwork and left-aligned lines, with a hairline progress
     // track along the bottom from the artwork's edge.
     return Column(
@@ -675,7 +742,7 @@ class _MornyeLcd extends StatelessWidget {
                         alignment: AlignmentDirectional.centerStart,
                         child: SizedBox(
                           width: constraints.maxWidth,
-                          child: _MornyeLcdLines(mediaItem: item),
+                          child: lines,
                         ),
                       ),
                     ),
@@ -774,6 +841,7 @@ class _MornyeLcdLines extends ConsumerWidget {
       mediaItem.artist,
       mediaItem.album,
     ].where((part) => part != null && part.trim().isNotEmpty).join(' · ');
+    final playing = ref.watch(playbackPlayingProvider);
     final style = textTheme.bodyMedium?.copyWith(fontSize: 13, height: 1.25);
     return PlayerTrackCrossfade(
       trackKey: mediaItem.id,
@@ -783,6 +851,7 @@ class _MornyeLcdLines extends ConsumerWidget {
         children: [
           OverflowMarquee(
             resetKey: (mediaItem.id, mediaItem.title),
+            playing: playing,
             maxCycles: 2,
             child: ExplicitTrackTitle(
               title: mediaItem.title,
@@ -809,6 +878,7 @@ class _MornyeLcdLines extends ConsumerWidget {
           else if (subtitle.isNotEmpty)
             OverflowMarquee(
               resetKey: (mediaItem.id, subtitle),
+              playing: playing,
               maxCycles: 2,
               child: Text(
                 subtitle,
@@ -839,8 +909,8 @@ class _TrailingControls extends ConsumerWidget {
   /// Narrowest room in which the Material bar keeps its volume slider.
   static const double _materialVolumeMinWidth = 140;
 
-  /// The Material bar's Cast button, a standard 48 dp icon button.
-  static const double _castWidth = 48;
+  /// Space between the Material bar's button groups.
+  static const double _groupGap = 8;
 
   final bool enabled;
 
@@ -850,129 +920,160 @@ class _TrailingControls extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final mornye = context.isMornye;
-    final colorScheme = Theme.of(context).colorScheme;
-    final l10n = context.l10n;
     final canDismiss =
         enabled &&
         !ref.watch(playbackPlayingProvider) &&
         !ref.watch(playbackLoadingProvider) &&
         ref.watch(activeRemotePlaybackProvider) == null;
+    if (!mornye) return _buildMaterial(context, ref, canDismiss);
     return Row(
-      mainAxisAlignment: MainAxisAlignment.end,
-      mainAxisSize: mornye ? MainAxisSize.min : MainAxisSize.max,
+      mainAxisSize: MainAxisSize.min,
       children: [
-        if (mornye) ...[
-          const DesktopLinkDevicesButton(),
-          const DesktopDownloadsButton(),
-        ],
+        const DesktopLinkDevicesButton(),
+        const DesktopDownloadsButton(),
         ValueListenableBuilder<DesktopInspectorPanel?>(
           valueListenable: desktopInspectorPanel,
           builder: (context, panel, _) => Row(
             mainAxisSize: MainAxisSize.min,
-            children: [
-              _InspectorToggle(
-                key: const ValueKey('desktop-player-lyrics'),
-                panel: DesktopInspectorPanel.lyrics,
-                selected: panel == DesktopInspectorPanel.lyrics,
-                enabled: enabled,
-                tooltip: desktopTooltip(
-                  context,
-                  l10n.nowPlayingTabLyrics,
-                  DesktopCommand.lyrics,
-                ),
-                icon: mornye
-                    ? CupertinoIcons.quote_bubble
-                    : Icons.lyrics_outlined,
-              ),
-              _InspectorToggle(
-                key: const ValueKey('desktop-player-up-next'),
-                panel: DesktopInspectorPanel.upNext,
-                selected: panel == DesktopInspectorPanel.upNext,
-                enabled: enabled,
-                tooltip: desktopTooltip(
-                  context,
-                  l10n.nowPlayingUpNext,
-                  DesktopCommand.upNext,
-                ),
-                icon: mornye ? CupertinoIcons.list_bullet : Icons.queue_music,
-              ),
-            ],
+            children: _inspectorToggles(context, panel),
           ),
         ),
-        if (desktopMiniPlayerSupported)
-          AppIconButton(
-            key: const ValueKey('desktop-player-mini'),
-            tooltip: desktopTooltip(
-              context,
-              l10n.desktopMenuMiniPlayer,
-              DesktopCommand.miniPlayer,
-            ),
-            color: mornye ? colorScheme.onSurface : null,
-            icon: AppIcon(
-              mornye
-                  ? CupertinoIcons.rectangle_on_rectangle
-                  : Icons.picture_in_picture_alt_outlined,
-            ),
-            onPressed: toggleDesktopMiniPlayer,
-          ),
-        if (mornye)
-          const _MornyeVolumeButton()
-        else ...[
-          Theme(
-            data: appTheme ?? Theme.of(context),
-            child: const Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [DesktopLinkDevicesButton(), DesktopDownloadsButton()],
-            ),
-          ),
-          // A narrow window leaves too little room for a usable slider, then
-          // for Cast; the volume shortcuts still work there.
-          Flexible(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final cast = constraints.maxWidth >= _castWidth;
-                final slider =
-                    constraints.maxWidth - (cast ? _castWidth : 0) >=
-                    _materialVolumeMinWidth;
-                return Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (cast)
-                      Theme(
-                        data: appTheme ?? Theme.of(context),
-                        child: const DesktopCastButton(),
-                      ),
-                    if (slider)
-                      Flexible(
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 220),
-                          child: PlayerVolumeControl(
-                            foreground: colorScheme.onSurface,
-                          ),
-                        ),
-                      ),
-                  ],
-                );
-              },
-            ),
-          ),
-        ],
-        if (canDismiss)
-          AppIconButton(
-            key: const ValueKey('desktop-player-dismiss'),
-            tooltip: l10n.actionDismiss,
-            color: mornye ? colorScheme.onSurface : null,
-            icon: const AppIcon.adaptive(Icons.close),
-            onPressed: () async {
-              await ref.read(musicPlayerControllerProvider).dismiss();
-              desktopPlayerDismissed.value = true;
-              desktopInspectorPanel.value = null;
-              closeDesktopNowPlaying();
-            },
-          ),
+        if (desktopMiniPlayerSupported) _miniPlayerButton(context),
+        const _MornyeVolumeButton(),
+        if (canDismiss) _dismissButton(context, ref),
       ],
     );
   }
+
+  /// Material joins the controls into one connected M3E button group, then
+  /// the volume slider and dismiss on its own. A narrow window drops the
+  /// slider first, then Cast; the volume shortcuts still work.
+  Widget _buildMaterial(BuildContext context, WidgetRef ref, bool canDismiss) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final appTheme = this.appTheme ?? Theme.of(context);
+    final link = ref.watch(linkDevicesAvailableProvider);
+    final buttons = 3 + (desktopMiniPlayerSupported ? 1 : 0) + (link ? 1 : 0);
+    Widget group(bool cast) => ValueListenableBuilder<DesktopInspectorPanel?>(
+      valueListenable: desktopInspectorPanel,
+      builder: (context, panel, _) => ConnectedIconButtons(
+        colorScheme: colorScheme,
+        children: [
+          ..._inspectorToggles(context, panel),
+          if (desktopMiniPlayerSupported) _miniPlayerButton(context),
+          // The menus and sheets these open keep the app scheme.
+          if (link)
+            Theme(data: appTheme, child: const DesktopLinkDevicesButton()),
+          Theme(data: appTheme, child: const DesktopDownloadsButton()),
+          if (cast) Theme(data: appTheme, child: const DesktopCastButton()),
+        ],
+      ),
+    );
+    // Kept across resize frames, which only build the row around them again.
+    Widget? withCast;
+    Widget? withoutCast;
+    Widget? volume;
+    final dismiss = canDismiss
+        ? ConnectedIconButtons(
+            colorScheme: colorScheme,
+            children: [_dismissButton(context, ref)],
+          )
+        : null;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        double width(int count) => ConnectedIconButtons.widthOf(context, count);
+        final fixed = width(buttons) + (canDismiss ? _groupGap + width(1) : 0);
+        final castCost = width(buttons + 1) - width(buttons);
+        final cast = constraints.maxWidth - fixed >= castCost;
+        final slider =
+            constraints.maxWidth - fixed - (cast ? castCost : 0) >=
+            _groupGap + _materialVolumeMinWidth;
+        return Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            cast ? withCast ??= group(true) : withoutCast ??= group(false),
+            if (slider) ...[
+              const SizedBox(width: _groupGap),
+              Flexible(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 220),
+                  child: volume ??= PlayerVolumeControl(
+                    foreground: colorScheme.onSurface,
+                  ),
+                ),
+              ),
+            ],
+            if (dismiss != null) ...[const SizedBox(width: _groupGap), dismiss],
+          ],
+        );
+      },
+    );
+  }
+
+  List<Widget> _inspectorToggles(
+    BuildContext context,
+    DesktopInspectorPanel? panel,
+  ) {
+    final mornye = context.isMornye;
+    final l10n = context.l10n;
+    return [
+      _InspectorToggle(
+        key: const ValueKey('desktop-player-lyrics'),
+        panel: DesktopInspectorPanel.lyrics,
+        selected: panel == DesktopInspectorPanel.lyrics,
+        enabled: enabled,
+        tooltip: desktopTooltip(
+          context,
+          l10n.nowPlayingTabLyrics,
+          DesktopCommand.lyrics,
+        ),
+        icon: mornye ? CupertinoIcons.quote_bubble : Icons.lyrics_outlined,
+      ),
+      _InspectorToggle(
+        key: const ValueKey('desktop-player-up-next'),
+        panel: DesktopInspectorPanel.upNext,
+        selected: panel == DesktopInspectorPanel.upNext,
+        enabled: enabled,
+        tooltip: desktopTooltip(
+          context,
+          l10n.nowPlayingUpNext,
+          DesktopCommand.upNext,
+        ),
+        icon: mornye ? CupertinoIcons.list_bullet : Icons.queue_music,
+      ),
+    ];
+  }
+
+  Widget _miniPlayerButton(BuildContext context) {
+    final mornye = context.isMornye;
+    return AppIconButton(
+      key: const ValueKey('desktop-player-mini'),
+      tooltip: desktopTooltip(
+        context,
+        context.l10n.desktopMenuMiniPlayer,
+        DesktopCommand.miniPlayer,
+      ),
+      color: mornye ? Theme.of(context).colorScheme.onSurface : null,
+      icon: AppIcon(
+        mornye
+            ? CupertinoIcons.rectangle_on_rectangle
+            : Icons.picture_in_picture_alt_outlined,
+      ),
+      onPressed: toggleDesktopMiniPlayer,
+    );
+  }
+
+  Widget _dismissButton(BuildContext context, WidgetRef ref) => AppIconButton(
+    key: const ValueKey('desktop-player-dismiss'),
+    tooltip: context.l10n.actionDismiss,
+    color: context.isMornye ? Theme.of(context).colorScheme.onSurface : null,
+    icon: const AppIcon.adaptive(Icons.close),
+    onPressed: () async {
+      await ref.read(musicPlayerControllerProvider).dismiss();
+      desktopPlayerDismissed.value = true;
+      desktopInspectorPanel.value = null;
+      closeDesktopNowPlaying();
+    },
+  );
 }
 
 /// The Mornye capsule's volume button. Its glyph follows the level, and a
@@ -1008,18 +1109,22 @@ class _MornyeVolumeButtonState extends ConsumerState<_MornyeVolumeButton> {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final volume = ref.watch(systemVolumeProvider).value;
+    final icon = ref.watch(
+      systemVolumeProvider.select(
+        (state) => switch (state.value) {
+          null => CupertinoIcons.speaker_2_fill,
+          <= 0 => CupertinoIcons.speaker_slash_fill,
+          < 0.34 => CupertinoIcons.speaker_1_fill,
+          < 0.67 => CupertinoIcons.speaker_2_fill,
+          _ => CupertinoIcons.speaker_3_fill,
+        },
+      ),
+    );
     final cast = _cast;
-    final icon = switch (volume) {
-      null => CupertinoIcons.speaker_2_fill,
-      <= 0 => CupertinoIcons.speaker_slash_fill,
-      < 0.34 => CupertinoIcons.speaker_1_fill,
-      < 0.67 => CupertinoIcons.speaker_2_fill,
-      _ => CupertinoIcons.speaker_3_fill,
-    };
     return MenuAnchor(
       controller: _menu,
       consumeOutsideTap: true,
+      // The directional default alignment already mirrors dx in RTL.
       alignmentOffset: const Offset(-96, 8),
       style: const MenuStyle(
         padding: WidgetStatePropertyAll(EdgeInsets.zero),
@@ -1048,7 +1153,7 @@ class _MornyeVolumeButtonState extends ConsumerState<_MornyeVolumeButton> {
                   width: 240,
                   child: MenuItemButton(
                     key: const ValueKey('desktop-player-cast'),
-                    leadingIcon: AppIcon(
+                    leadingIcon: AppIcon.adaptive(
                       cast.connected ? Icons.cast_connected : Icons.cast,
                       size: 18,
                     ),
@@ -1074,7 +1179,7 @@ class _MornyeVolumeButtonState extends ConsumerState<_MornyeVolumeButton> {
           key: const ValueKey('desktop-player-volume'),
           tooltip: context.l10n.nowPlayingVolume,
           color: cast.connected ? colorScheme.primary : colorScheme.onSurface,
-          icon: AppIcon(cast.connected ? Icons.cast_connected : icon),
+          icon: AppIcon.adaptive(cast.connected ? Icons.cast_connected : icon),
           onPressed: () => _menu.isOpen ? _menu.close() : _menu.open(),
         ),
       ),
@@ -1082,8 +1187,8 @@ class _MornyeVolumeButtonState extends ConsumerState<_MornyeVolumeButton> {
   }
 }
 
-/// The popover entrance: a fade with a short rise on the effects spring,
-/// which never overshoots, so the rise lands without a bounce.
+/// The popover entrance: a subtle scale and rise on the effects spring without
+/// an opacity layer that would isolate the glass backdrop during entrance.
 class _MornyePopoverEntrance extends StatelessWidget {
   const _MornyePopoverEntrance({required this.child});
 
@@ -1096,10 +1201,11 @@ class _MornyePopoverEntrance extends StatelessWidget {
       tween: Tween(begin: 0, end: 1),
       duration: reduceMotion ? Duration.zero : MornyeMotion.effects.duration,
       curve: MornyeMotion.effects.curve,
-      builder: (context, progress, child) => Opacity(
-        opacity: progress,
-        child: Transform.translate(
-          offset: Offset(0, 6 * (1 - progress)),
+      builder: (context, progress, child) => Transform.translate(
+        offset: Offset(0, 6 * (1 - progress)),
+        child: Transform.scale(
+          scale: 0.96 + 0.04 * progress,
+          alignment: Alignment.bottomCenter,
           child: child,
         ),
       ),
@@ -1131,6 +1237,12 @@ class _InspectorToggle extends StatelessWidget {
   Widget build(BuildContext context) {
     final mornye = context.isMornye;
     final colorScheme = Theme.of(context).colorScheme;
+    // An open panel can always close, even after playback stops.
+    final onPressed = enabled || selected
+        ? () => toggleDesktopInspector(panel)
+        : null;
+    // In Material the button is a group segment that fills and rounds
+    // fully while its panel is open.
     return AppIconButton(
       tooltip: tooltip,
       isSelected: selected,
@@ -1143,10 +1255,7 @@ class _InspectorToggle extends StatelessWidget {
             )
           : null,
       icon: AppIcon(icon),
-      // An open panel can always close, even after playback stops.
-      onPressed: enabled || selected
-          ? () => toggleDesktopInspector(panel)
-          : null,
+      onPressed: onPressed,
     );
   }
 }

@@ -145,7 +145,7 @@ class _WordHighlightedLyricLineState
     super.didChangeDependencies();
     _tickerEnabled = TickerMode.valuesOf(context).enabled;
     _displayLead = lyricsDisplayLead(
-      View.maybeOf(context)?.display.refreshRate,
+      displayOf(View.maybeOf(context))?.refreshRate,
     );
     _updateVisualEnd();
     _syncSubscriptions();
@@ -655,26 +655,28 @@ class _SweepingTimedLyricTextState extends State<_SweepingTimedLyricText> {
           maxWidth,
         );
 
-        return Semantics(
-          label: widget.semanticsLabel,
-          child: CustomPaint(
-            size: Size(width, height),
-            painter: _TimedLyricSweepPainter(
-              segmentBoxes: segmentBoxes,
-              segmentDirections: segmentDirections,
-              starts: widget.starts,
-              ends: widget.ends,
-              currentPosition: widget.currentPosition,
-              repaint: widget.repaint,
-              pendingPainter: pendingPainter,
-              highlightedPainter: highlightedPainter,
-              highlightLift: widget.liftEnabled
-                  ? (textScaler.scale(widget.style.fontSize ?? 24) * 0.05)
-                        .clamp(0.0, 2.0)
-                  : 0,
-              glowSigma: widget.liftEnabled && widget.glowEnabled
-                  ? textScaler.scale(widget.style.fontSize ?? 24) * 0.2
-                  : 0,
+        return RepaintBoundary(
+          child: Semantics(
+            label: widget.semanticsLabel,
+            child: CustomPaint(
+              size: Size(width, height),
+              painter: _TimedLyricSweepPainter(
+                segmentBoxes: segmentBoxes,
+                segmentDirections: segmentDirections,
+                starts: widget.starts,
+                ends: widget.ends,
+                currentPosition: widget.currentPosition,
+                repaint: widget.repaint,
+                pendingPainter: pendingPainter,
+                highlightedPainter: highlightedPainter,
+                highlightLift: widget.liftEnabled
+                    ? (textScaler.scale(widget.style.fontSize ?? 24) * 0.05)
+                          .clamp(0.0, 2.0)
+                    : 0,
+                glowSigma: widget.liftEnabled && widget.glowEnabled
+                    ? textScaler.scale(widget.style.fontSize ?? 24) * 0.2
+                    : 0,
+              ),
             ),
           ),
         );
@@ -695,6 +697,9 @@ class _TimedLyricSweepPainter extends CustomPainter {
 
   /// Blur radius of the glow behind held words; 0 disables it.
   final double glowSigma;
+  late final ImageFilter? _glowFilter = glowSigma > 0
+      ? ImageFilter.blur(sigmaX: glowSigma, sigmaY: glowSigma)
+      : null;
 
   _TimedLyricSweepPainter({
     required this.segmentBoxes,
@@ -709,6 +714,8 @@ class _TimedLyricSweepPainter extends CustomPainter {
     required this.glowSigma,
   }) : super(repaint: repaint);
 
+  static final Paint _layerPaint = Paint();
+
   @override
   void paint(Canvas canvas, Size size) {
     final pendingPaths = <double, Path>{};
@@ -716,6 +723,7 @@ class _TimedLyricSweepPainter extends CustomPainter {
     final partialBoxes = <(Rect, double, double, double, bool)>[];
     final glows = <(Path, double, double)>[];
     final position = currentPosition();
+    var hasLift = false;
     for (var index = 0; index < segmentBoxes.length; index++) {
       final timed = index < starts.length && index < ends.length;
       final value = timed
@@ -730,7 +738,7 @@ class _TimedLyricSweepPainter extends CustomPainter {
           ? segmentDirections[index]
           : const <TextDirection>[];
       final width = boxes.fold<double>(0, (sum, box) => sum + box.width);
-      final lift = highlightLift > 0 && timed
+      final rawLift = highlightLift > 0 && timed
           ? highlightLift *
                 syncedLyricSegmentLift(
                   position: position,
@@ -738,6 +746,10 @@ class _TimedLyricSweepPainter extends CustomPainter {
                   end: ends[index],
                 )
           : 0.0;
+      // Quantize lift to quarter-pixel buckets so words at matching heights
+      // coalesce into a single TextPainter draw pass.
+      final lift = rawLift == 0 ? 0.0 : (rawLift * 4).round() * 0.25;
+      if (lift != 0) hasLift = true;
       final glow = glowSigma > 0 && timed && value > 0
           ? syncedLyricSegmentGlow(
               position: position,
@@ -795,7 +807,7 @@ class _TimedLyricSweepPainter extends CustomPainter {
 
     // Move both colors together, so a raised highlight never leaves a dim
     // duplicate behind. Most words share the resting or completed position.
-    if (highlightLift > 0) {
+    if (highlightLift > 0 && hasLift) {
       for (final entry in pendingPaths.entries) {
         _paintLiftedText(canvas, pendingPainter, entry.value, entry.key);
       }
@@ -805,37 +817,35 @@ class _TimedLyricSweepPainter extends CustomPainter {
 
     // A blurred copy of the sung letters behind them. Usually at most one
     // held word glows, so the extra layer stays cheap.
-    for (final (clip, lift, glow) in glows) {
-      final bounds = clip.getBounds().inflate(glowSigma * 3);
-      canvas.save();
-      canvas.translate(0, -lift);
-      canvas.saveLayer(
-        bounds,
-        Paint()
-          ..color = Color.fromRGBO(0, 0, 0, 0.55 * glow)
-          ..imageFilter = ImageFilter.blur(
-            sigmaX: glowSigma,
-            sigmaY: glowSigma,
-          ),
-      );
-      canvas.clipPath(clip, doAntiAlias: false);
-      highlightedPainter.paint(canvas, Offset.zero);
-      canvas.restore();
-      canvas.restore();
-    }
-    for (final entry in completedPaths.entries) {
-      _paintLiftedText(canvas, highlightedPainter, entry.value, entry.key);
+    final glowFilter = _glowFilter;
+    if (glowFilter != null) {
+      for (final (clip, lift, glow) in glows) {
+        final bounds = clip.getBounds().inflate(glowSigma * 3);
+        canvas.save();
+        canvas.translate(0, -lift);
+        canvas.saveLayer(
+          bounds,
+          Paint()
+            ..color = Color.fromRGBO(0, 0, 0, 0.55 * glow)
+            ..imageFilter = glowFilter,
+        );
+        canvas.clipPath(clip, doAntiAlias: false);
+        highlightedPainter.paint(canvas, Offset.zero);
+        canvas.restore();
+        canvas.restore();
+      }
     }
 
+    // Add each partial box's solid prefix into completedPaths so saveLayer
+    // only allocates an offscreen buffer for the narrow feather strip.
+    final featherStrips = <(Rect, Rect, double, bool)>[];
     for (final (box, value, lift, feather, rtl) in partialBoxes) {
-      // Feather the leading edge so the highlight flows through each letter
-      // while the word rises as a single unit.
       final boundary = rtl
           ? box.right - box.width * value
           : box.left + box.width * value;
-      final revealRect = rtl
+      final solidRect = rtl
           ? Rect.fromLTRB(
-              (boundary - feather).clamp(box.left, box.right),
+              boundary.clamp(box.left, box.right),
               box.top,
               box.right,
               box.bottom,
@@ -843,16 +853,45 @@ class _TimedLyricSweepPainter extends CustomPainter {
           : Rect.fromLTRB(
               box.left,
               box.top,
-              (boundary + feather).clamp(box.left, box.right),
+              boundary.clamp(box.left, box.right),
               box.bottom,
             );
+      if (solidRect.width > 0) {
+        completedPaths.putIfAbsent(lift, Path.new).addRect(solidRect);
+      }
       final shaderRect = rtl
           ? Rect.fromLTRB(boundary - feather, box.top, boundary, box.bottom)
           : Rect.fromLTRB(boundary, box.top, boundary + feather, box.bottom);
+      // Half a pixel over the solid prefix, so no column falls between them.
+      final featherRect =
+          (rtl
+                  ? Rect.fromLTRB(
+                      shaderRect.left,
+                      box.top,
+                      boundary + 0.5,
+                      box.bottom,
+                    )
+                  : Rect.fromLTRB(
+                      boundary - 0.5,
+                      box.top,
+                      shaderRect.right,
+                      box.bottom,
+                    ))
+              .intersect(box);
+      if (featherRect.width > 0 && featherRect.height > 0) {
+        featherStrips.add((featherRect, shaderRect, lift, rtl));
+      }
+    }
+
+    for (final entry in completedPaths.entries) {
+      _paintLiftedText(canvas, highlightedPainter, entry.value, entry.key);
+    }
+
+    for (final (featherRect, shaderRect, lift, rtl) in featherStrips) {
       canvas.save();
       canvas.translate(0, -lift);
-      canvas.clipRect(revealRect);
-      canvas.saveLayer(revealRect, Paint());
+      canvas.clipRect(featherRect);
+      canvas.saveLayer(featherRect, _layerPaint);
       highlightedPainter.paint(canvas, Offset.zero);
       final mask = Paint()
         ..blendMode = BlendMode.dstIn
@@ -861,7 +900,7 @@ class _TimedLyricSweepPainter extends CustomPainter {
               ? const [Colors.transparent, Colors.white]
               : const [Colors.white, Colors.transparent],
         ).createShader(shaderRect);
-      canvas.drawRect(revealRect, mask);
+      canvas.drawRect(featherRect, mask);
       canvas.restore();
       canvas.restore();
     }

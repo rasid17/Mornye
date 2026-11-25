@@ -6,6 +6,7 @@ import 'package:mornye/controllers/clickable_metadata.dart';
 import 'package:mornye/controllers/local_track_batch_actions.dart';
 import 'package:mornye/controllers/selection_mode_mixin.dart';
 import 'package:mornye/l10n/l10n.dart';
+import 'package:mornye/models/home_pin.dart';
 import 'package:mornye/models/library_database_models.dart';
 import 'package:mornye/models/unified_library_item.dart';
 import 'package:mornye/providers/library_directory_provider.dart';
@@ -41,6 +42,7 @@ import 'package:mornye/widgets/desktop/library_track_menu.dart';
 import 'package:mornye/widgets/desktop/track_table.dart';
 import 'package:mornye/widgets/error_card.dart';
 import 'package:mornye/widgets/expressive_button.dart';
+import 'package:mornye/widgets/home_pin_action.dart';
 import 'package:mornye/widgets/library_selection_playback_actions.dart';
 import 'package:mornye/widgets/network_offline_actions.dart';
 import 'package:mornye/widgets/library_track_selection_bar.dart';
@@ -365,6 +367,17 @@ class _LibraryDirectoryViewState extends ConsumerState<LibraryDirectoryView>
             label: l10n.desktopMenuOpen,
             onSelected: () => _openFolder(folder),
           ),
+          homePinMenuAction(
+            context,
+            ref,
+            HomePin.folder(
+              key: folder.key,
+              name: folder.name,
+              path: folder.path,
+              cover: folder.cover,
+              coverFile: folder.coverFile,
+            ),
+          ),
         ],
         ...groups,
       ],
@@ -403,6 +416,7 @@ class _LibraryDirectoryViewState extends ConsumerState<LibraryDirectoryView>
 
   @override
   Widget build(BuildContext context) {
+    _showShuffle = ref.watch(playerUiEnabledProvider);
     final indexValue = ref.watch(libraryDirectoryIndexProvider);
     final index = indexValue.value;
     final key = widget.folderKey;
@@ -519,6 +533,9 @@ class _LibraryDirectoryViewState extends ConsumerState<LibraryDirectoryView>
     );
   }
 
+  /// Read in build: the header builds its actions in a layout callback.
+  bool _showShuffle = true;
+
   /// Play, Shuffle and, on desktop, Add to Playlist over every song under
   /// [folder].
   Widget _playActions(LibraryDirectory folder) => AlbumPlayActions(
@@ -526,6 +543,7 @@ class _LibraryDirectoryViewState extends ConsumerState<LibraryDirectoryView>
     shuffleTooltip: context.l10n.actionShuffle,
     onPlay: () => _playFolder(folder),
     onShuffle: () => _playFolder(folder, shuffle: true),
+    showShuffle: _showShuffle,
     onAddToPlaylist: () => _addFolderToPlaylist(folder),
     onDownload: !folder.key.startsWith('network://')
         ? null
@@ -591,6 +609,7 @@ class _LibraryDirectoryViewState extends ConsumerState<LibraryDirectoryView>
     final items = songsValue?.value ?? const <UnifiedLibraryItem>[];
     if (songsValue == null || songsValue.hasValue) {
       _items = items;
+      slideSelectIds = [for (final item in items) item.id];
       pruneSelection(_idsOf(items));
     }
     final details = Column(
@@ -701,7 +720,10 @@ class _LibraryDirectoryViewState extends ConsumerState<LibraryDirectoryView>
         )
       else if (!songsValue.hasValue)
         SliverToBoxAdapter(
-          child: TrackListSkeleton(itemCount: min(folder.tracks.length, 8)),
+          child: TrackListSkeleton(
+            itemCount: min(folder.tracks.length, 8),
+            underHeader: false,
+          ),
         )
       else if (isDesktopPlatform)
         _songTable(context, items)
@@ -714,7 +736,10 @@ class _LibraryDirectoryViewState extends ConsumerState<LibraryDirectoryView>
               key: ValueKey(items[index].id),
               index: index,
               count: items.length,
-              child: _songRow(context, items, items[index]),
+              child: slideSelectRow(
+                items[index].id,
+                _songRow(context, items, items[index]),
+              ),
             ),
           ),
         ),
@@ -760,6 +785,7 @@ class _LibraryDirectoryViewState extends ConsumerState<LibraryDirectoryView>
     return Semantics(
       button: true,
       child: DesktopContextMenuRegion(
+        touch: true,
         onContextMenu: (position) => _showFolderMenu(folder, position),
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
@@ -817,7 +843,7 @@ class _LibraryDirectoryViewState extends ConsumerState<LibraryDirectoryView>
 
   Widget _folderRow(LibraryDirectory parent, LibraryDirectory folder) {
     return TrackCard(
-      style: context.isMornye ? TrackCardStyle.flat : TrackCardStyle.filled,
+      style: collectionTrackCardStyle(context),
       leading: _FolderArtwork(folder: folder),
       leadingArtwork: folder.cover != null,
       // Top-level entries of several volumes read as their paths.
@@ -838,12 +864,12 @@ class _LibraryDirectoryViewState extends ConsumerState<LibraryDirectoryView>
     List<UnifiedLibraryItem> items,
     UnifiedLibraryItem item,
   ) {
-    final qualityMode = ref.watch(
-      settingsProvider.select((s) => s.libraryQualityLabelMode),
-    );
-    final quality = item.qualityForMode(qualityMode);
     return Consumer(
       builder: (context, ref, _) {
+        final qualityMode = ref.watch(
+          settingsProvider.select((s) => s.libraryQualityLabelMode),
+        );
+        final quality = item.qualityForMode(qualityMode);
         final playback = ref.watch(
           mediaItemPlaybackUiProvider(_playbackKey(item)),
         );
@@ -854,7 +880,7 @@ class _LibraryDirectoryViewState extends ConsumerState<LibraryDirectoryView>
             : () => _play(items, start: item);
         void openDetails() => _openDetails(item);
         return TrackCard(
-          style: context.isMornye ? TrackCardStyle.flat : TrackCardStyle.filled,
+          style: collectionTrackCardStyle(context),
           leading: _SongArtwork(item: item, size: context.tokens.coverList),
           leadingArtwork: true,
           title: item.trackName,
@@ -890,9 +916,7 @@ class _LibraryDirectoryViewState extends ConsumerState<LibraryDirectoryView>
                   openDetails: openDetails,
                   play: play,
                 ),
-          onLongPress: isSelectionMode
-              ? () => toggleSelection(item.id)
-              : () => enterSelectionMode(item.id),
+          onLongPress: () => holdToSelect(item.id),
           onContextMenu: (position) =>
               showSelectionMenu(item.id, () => _showSongMenu(item, position)),
           queueSwipe: libraryItemQueueSwipe(ref, item),
@@ -1011,14 +1035,15 @@ class _FolderArtwork extends StatelessWidget {
                 localCacheWidth: (size * MediaQuery.devicePixelRatioOf(context))
                     .round(),
                 placeholder: glyph,
+                songFile: folder.coverFile,
               ),
       ),
     );
   }
 }
 
-/// A song's artwork: the download's cover, or the scanned file's thumbnail
-/// with its embedded artwork recovered when the thumbnail is gone.
+/// A song's artwork: the download's cover, or the scanned file's thumbnail,
+/// with its embedded artwork recovered when either cannot load.
 class _SongArtwork extends StatelessWidget {
   const _SongArtwork({required this.item, required this.size});
 
@@ -1038,13 +1063,15 @@ class _SongArtwork extends StatelessWidget {
         ),
       ),
     );
-    Widget image(String? cover) => cover == null || cover.isEmpty
+    Widget image(String? cover, {String? songFile}) =>
+        cover == null || cover.isEmpty
         ? placeholder(context)
         : LocalOrNetworkCoverImage(
             url: cover,
             localCacheWidth: (size * MediaQuery.devicePixelRatioOf(context))
                 .round(),
             placeholder: placeholder,
+            songFile: songFile,
           );
     final local = item.localItem;
     return ClipRRect(
@@ -1052,7 +1079,7 @@ class _SongArtwork extends StatelessWidget {
       child: SizedBox.square(
         dimension: size,
         child: local == null
-            ? image(item.coverUrl)
+            ? image(item.coverUrl, songFile: item.filePath)
             : LocalLibraryArtworkBuilder(
                 coverPath: local.coverPath,
                 filePath: local.filePath,

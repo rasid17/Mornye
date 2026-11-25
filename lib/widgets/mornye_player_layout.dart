@@ -104,8 +104,6 @@ class MornyePlayerLayout extends ConsumerWidget {
     // Opening a panel moves the cover and the panels as content, in step
     // with the background behind them.
     final motion = mornyePlayerPanelMotion(context);
-    final queue = ref.watch(playQueueProvider).value ?? const <MediaItem>[];
-    final currentIndex = ref.watch(currentQueueIndexProvider);
     final showVolume = ref.watch(
       settingsProvider.select((s) => s.playerShowVolume),
     );
@@ -128,10 +126,48 @@ class MornyePlayerLayout extends ConsumerWidget {
           compactCoverSize,
           double.infinity,
         );
-        // Made once per layout, so the panel switch moves the same panels on
-        // every frame instead of rebuilding their rows.
+        // Made once per layout, so the panel switch moves the same panels and
+        // artwork subtrees on every frame instead of rebuilding them.
         late final queuePanel = MornyePlayerQueue(colorScheme: colorScheme);
         late final lyricsPanel = lyricsBuilder(false);
+        late final expandedArtworkChild = DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x40000000),
+                blurRadius: 28,
+                offset: Offset(0, 16),
+              ),
+            ],
+          ),
+          child: PlayerTransitionArtwork(
+            artworkKey: artworkKeys.expanded,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: motionArtwork,
+            ),
+          ),
+        );
+        late final compactArtworkChild = Semantics(
+          button: true,
+          label: context.l10n.nowPlayingTabPlayer,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => onPageChanged(0),
+            child: PlayerTransitionArtwork(
+              artworkKey: artworkKeys.compact,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: PlayerArtwork(
+                  artUri: mediaItem.artUri?.toString(),
+                  colorScheme: colorScheme,
+                  cacheWidth: PlayerArtwork.transitionCacheWidth(context),
+                ),
+              ),
+            ),
+          ),
+        );
         Widget stage({
           bool artworkOnly = false,
           double progress = 0,
@@ -253,8 +289,12 @@ class MornyePlayerLayout extends ConsumerWidget {
                               fullBleed ? stage.maxWidth : artWidth * scale,
                               fullBleed ? motionHeight : artHeight * scale,
                             ),
-                            const Rect.fromLTWH(
-                              _mornyeContentInset,
+                            Rect.fromLTWH(
+                              Directionality.of(context) == TextDirection.rtl
+                                  ? stage.maxWidth -
+                                        _mornyeContentInset -
+                                        compactCoverSize
+                                  : _mornyeContentInset,
                               8,
                               compactCoverSize,
                               compactCoverSize,
@@ -294,58 +334,8 @@ class MornyePlayerLayout extends ConsumerWidget {
                                     child: Hero(
                                       tag: kNowPlayingArtworkHeroTag,
                                       child: expanded
-                                          ? DecoratedBox(
-                                              decoration: BoxDecoration(
-                                                borderRadius:
-                                                    BorderRadius.circular(12),
-                                                boxShadow: const [
-                                                  BoxShadow(
-                                                    color: Color(0x40000000),
-                                                    blurRadius: 28,
-                                                    offset: Offset(0, 16),
-                                                  ),
-                                                ],
-                                              ),
-                                              child: PlayerTransitionArtwork(
-                                                artworkKey:
-                                                    artworkKeys.expanded,
-                                                child: ClipRRect(
-                                                  borderRadius:
-                                                      BorderRadius.circular(12),
-                                                  child: motionArtwork,
-                                                ),
-                                              ),
-                                            )
-                                          : Semantics(
-                                              button: true,
-                                              label: context
-                                                  .l10n
-                                                  .nowPlayingTabPlayer,
-                                              child: GestureDetector(
-                                                behavior:
-                                                    HitTestBehavior.opaque,
-                                                onTap: () => onPageChanged(0),
-                                                child: PlayerTransitionArtwork(
-                                                  artworkKey:
-                                                      artworkKeys.compact,
-                                                  child: ClipRRect(
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                          12,
-                                                        ),
-                                                    child: PlayerArtwork(
-                                                      artUri: mediaItem.artUri
-                                                          ?.toString(),
-                                                      colorScheme: colorScheme,
-                                                      cacheWidth:
-                                                          PlayerArtwork.transitionCacheWidth(
-                                                            context,
-                                                          ),
-                                                    ),
-                                                  ),
-                                                ),
-                                              ),
-                                            ),
+                                          ? expandedArtworkChild
+                                          : compactArtworkChild,
                                     ),
                                   ),
                                 ),
@@ -387,30 +377,45 @@ class MornyePlayerLayout extends ConsumerWidget {
         );
 
         if (landscape) {
+          final landscapeArtwork = stage(artworkOnly: true);
+          final landscapeHeader = _trackHeader(
+            context,
+            colorScheme,
+            compact: true,
+          );
+          final landscapeLyrics = lyricsBuilder(true);
+          final landscapeLyricsOptions = showLyrics ? lyricsOptions : null;
+          final landscapeQueue = MornyePlayerQueue(colorScheme: colorScheme);
+          final landscapeControls = controls();
+          final landscapeVolume = showVolume
+              ? const PlayerVolumeControl()
+              : null;
           return RepaintBoundary(
-            child: MornyeLandscapePlayer(
-              page: page,
-              isPlaying: ref.watch(playbackPlayingProvider),
-              autoHideLyricsControls: ref.watch(
-                settingsProvider.select(
-                  (settings) => settings.autoHideLyricsControls,
+            child: Consumer(
+              builder: (context, ref, _) => MornyeLandscapePlayer(
+                page: page,
+                isPlaying: ref.watch(playbackPlayingProvider),
+                autoHideLyricsControls: ref.watch(
+                  settingsProvider.select(
+                    (settings) => settings.autoHideLyricsControls,
+                  ),
                 ),
-              ),
-              autoHideLyricsControlsWithAccessibility: ref.watch(
-                settingsProvider.select(
-                  (settings) =>
-                      settings.autoHideLyricsControlsWithAccessibility,
+                autoHideLyricsControlsWithAccessibility: ref.watch(
+                  settingsProvider.select(
+                    (settings) =>
+                        settings.autoHideLyricsControlsWithAccessibility,
+                  ),
                 ),
+                controlsHeldOpen: lyricsOptionsOpen,
+                onPageChanged: onPageChanged,
+                artwork: landscapeArtwork,
+                header: landscapeHeader,
+                lyrics: landscapeLyrics,
+                lyricsOptions: landscapeLyricsOptions,
+                queue: landscapeQueue,
+                controls: landscapeControls,
+                volume: landscapeVolume,
               ),
-              controlsHeldOpen: lyricsOptionsOpen,
-              onPageChanged: onPageChanged,
-              artwork: stage(artworkOnly: true),
-              header: _trackHeader(context, colorScheme, compact: true),
-              lyrics: lyricsBuilder(true),
-              lyricsOptions: showLyrics ? lyricsOptions : null,
-              queue: MornyePlayerQueue(colorScheme: colorScheme),
-              controls: controls(),
-              volume: showVolume ? const PlayerVolumeControl() : null,
             ),
           );
         }
@@ -424,8 +429,9 @@ class MornyePlayerLayout extends ConsumerWidget {
             delegate: _PlayerHeaderLayout(
               progress: progress,
               compactHeight: compactHeaderHeight,
-              compactLeft: _mornyeContentInset + compactCoverSize + 12,
+              compactStart: _mornyeContentInset + compactCoverSize + 12,
               expandLyrics: showLyrics,
+              textDirection: Directionality.of(context),
             ),
             children: [
               LayoutId(
@@ -480,15 +486,21 @@ class MornyePlayerLayout extends ConsumerWidget {
         return RepaintBoundary(child: content());
       },
     );
-    return PlayerTrackSwipe(
-      queue: queue,
-      currentIndex: currentIndex,
-      onSelected: (item) async {
-        final latest = ref.read(playQueueProvider).value ?? const <MediaItem>[];
-        final index = latest.indexWhere((entry) => identical(entry, item));
-        if (index >= 0) await controller.jumpTo(index);
-      },
+    // Isolate playQueueProvider and currentQueueIndexProvider here so queue
+    // mutations do not rebuild the entire player layout tree.
+    return Consumer(
       child: body,
+      builder: (context, ref, child) => PlayerTrackSwipe(
+        queue: ref.watch(playQueueProvider).value ?? const <MediaItem>[],
+        currentIndex: ref.watch(currentQueueIndexProvider),
+        onSelected: (item) async {
+          final latest =
+              ref.read(playQueueProvider).value ?? const <MediaItem>[];
+          final index = latest.indexWhere((entry) => identical(entry, item));
+          if (index >= 0) await controller.jumpTo(index);
+        },
+        child: child!,
+      ),
     );
   }
 
@@ -504,6 +516,8 @@ class MornyePlayerLayout extends ConsumerWidget {
         : 24 + (_mornyeCompactIconSize - 24) * progress;
     return Builder(
       builder: (context) => Column(
+        // Centred on the compact cover, which is taller than the titles.
+        mainAxisAlignment: MainAxisAlignment.center,
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -624,6 +638,8 @@ class MornyePlayerLayout extends ConsumerWidget {
     curve: PlayerLyricsControlsVisibility.motion(context).curve,
     builder: (context, reveal, child) => MornyeLyricsFadeMask(
       opaque: reveal == 1,
+      maskKey: (visibleHeight, reveal),
+      clipBottom: reveal == 0 ? visibleHeight : null,
       shaderCallback: (bounds) {
         final height = bounds.height.clamp(1.0, double.infinity);
         final end = visibleHeight.clamp(0.0, height);
@@ -683,14 +699,16 @@ class _PlayerHeaderLayout extends MultiChildLayoutDelegate {
   _PlayerHeaderLayout({
     required this.progress,
     required this.compactHeight,
-    required this.compactLeft,
+    required this.compactStart,
     required this.expandLyrics,
+    required this.textDirection,
   });
 
   final double progress;
   final double compactHeight;
-  final double compactLeft;
+  final double compactStart;
   final bool expandLyrics;
+  final TextDirection textDirection;
 
   @override
   void performLayout(Size size) {
@@ -703,18 +721,20 @@ class _PlayerHeaderLayout extends MultiChildLayoutDelegate {
       size.height,
     );
     positionChild(_PlayerHeaderSlot.controls, Offset(0, contentHeight));
-    final left = 28 + (compactLeft - 28) * progress;
+    final rtl = textDirection == TextDirection.rtl;
+    final start = 28 + (compactStart - 28) * progress;
     // Align the visible ellipsis with the timeline while leaving its touch
     // target wider than the glyph and interpolating the same live header.
-    const compactRight =
+    const compactEnd =
         _mornyeContentInset -
         (_mornyeHeaderButtonSize - _mornyeCompactIconSize) / 2;
-    final right = 28 + (compactRight - 28) * progress;
+    final end = 28 + (compactEnd - 28) * progress;
+    final left = rtl ? end : start;
     final header = layoutChild(
       _PlayerHeaderSlot.header,
       BoxConstraints(
-        minWidth: size.width - left - right,
-        maxWidth: size.width - left - right,
+        minWidth: size.width - start - end,
+        maxWidth: size.width - start - end,
         minHeight: compactHeight * progress,
       ),
     );
@@ -749,7 +769,9 @@ class _PlayerHeaderLayout extends MultiChildLayoutDelegate {
       positionChild(
         _PlayerHeaderSlot.lyricsOptions,
         Offset(
-          size.width - options.width - _mornyeContentInset,
+          rtl
+              ? _mornyeContentInset
+              : size.width - options.width - _mornyeContentInset,
           contentHeight - options.height - 8,
         ),
       );
@@ -760,6 +782,7 @@ class _PlayerHeaderLayout extends MultiChildLayoutDelegate {
   bool shouldRelayout(_PlayerHeaderLayout oldDelegate) =>
       progress != oldDelegate.progress ||
       compactHeight != oldDelegate.compactHeight ||
-      compactLeft != oldDelegate.compactLeft ||
-      expandLyrics != oldDelegate.expandLyrics;
+      compactStart != oldDelegate.compactStart ||
+      expandLyrics != oldDelegate.expandLyrics ||
+      textDirection != oldDelegate.textDirection;
 }

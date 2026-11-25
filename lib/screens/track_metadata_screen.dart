@@ -1,14 +1,13 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:material_ui/material_ui.dart';
 import 'package:mornye/theme/app_tokens.dart';
 import 'package:mornye/widgets/app_alert_dialog.dart';
-import 'package:cupertino_ui/cupertino_ui.dart'
-    show CupertinoButton, CupertinoIcons;
+import 'package:cupertino_ui/cupertino_ui.dart' show CupertinoIcons;
 import 'package:mornye/widgets/app_bottom_sheet.dart';
+import 'package:mornye/widgets/app_content_card.dart';
 import 'package:mornye/theme/app_motion.dart';
 import 'package:mornye/widgets/app_icon.dart';
 import 'package:mornye/widgets/app_icon_button.dart';
@@ -66,6 +65,7 @@ import 'package:mornye/utils/audio_conversion_utils.dart';
 import 'package:mornye/utils/audio_format_utils.dart';
 import 'package:mornye/utils/artist_utils.dart';
 import 'package:mornye/utils/cover_art_utils.dart';
+import 'package:mornye/utils/desktop_folders.dart';
 import 'package:mornye/utils/desktop_platform.dart';
 import 'package:mornye/utils/logger.dart';
 import 'package:mornye/utils/lyrics_metadata_helper.dart';
@@ -81,6 +81,7 @@ import 'package:mornye/utils/re_enrich_release_policy.dart';
 import 'package:mornye/utils/saf_display_path.dart';
 import 'package:mornye/theme/cover_palette.dart' show HeaderPalette;
 import 'package:mornye/theme/mornye_theme.dart';
+import 'package:mornye/theme/page_transitions.dart';
 import 'package:mornye/theme/mornye_icons.dart';
 import 'package:mornye/widgets/album_detail_header.dart'
     show
@@ -110,12 +111,15 @@ import 'package:mornye/widgets/open_on_platform_sheet.dart';
 import 'package:mornye/widgets/metadata_barcode.dart';
 import 'package:mornye/widgets/scroll_edge_fade.dart';
 import 'package:mornye/widgets/settings_group.dart';
+import 'package:mornye/widgets/track_card.dart' show connectedRunTitleInset;
 import 'package:mornye/constants/music_services.dart';
 import 'package:mornye/controllers/batch_track_actions.dart'
     show convertLibraryTrack;
 import 'package:mornye/controllers/clickable_metadata.dart';
 import 'package:mornye/controllers/local_track_batch_actions.dart'
     show BatchReEnrichRunner;
+import 'package:mornye/controllers/track_redownload.dart';
+import 'package:mornye/services/local_track_redownload_service.dart';
 import 'package:mornye/services/re_enrich_undo.dart'
     show ReEnrichUndo, ReEnrichUndoOutcome;
 import 'package:mornye/controllers/collapsing_header_scroll_mixin.dart';
@@ -267,8 +271,25 @@ class _TrackMetadataScreenState extends ConsumerState<TrackMetadataScreen>
   static final RegExp _leadingOrTrailingDots = RegExp(r'^\.+|\.+$');
   String get _coverCacheKey => _itemId;
 
+  /// The picture of the list row the cover flew in from, and its song.
+  Widget? _flownCover;
+  String? _flownCoverItem;
+
+  /// What the header's cover shows until its own picture is decoded.
+  Widget? get _landedCover => _flownCoverItem == _itemId ? _flownCover : null;
+
+  /// The header's backdrop, kept while its picture stays the same: a new
+  /// widget would make the header blur it again, mid-flight on opening.
+  Widget? _backdrop;
+  Object? _backdropKey;
+
   /// Shared by the lyrics box and its scrollbar.
   final _lyricsScrollController = ScrollController();
+
+  /// The page's way in. What the file check finds waits for it to end: it
+  /// rebuilds the whole page, frames the flying cover would miss.
+  Animation<double>? _entrance;
+  final _entered = Completer<void>();
 
   @override
   void initState() {
@@ -304,11 +325,35 @@ class _TrackMetadataScreenState extends ConsumerState<TrackMetadataScreen>
         _fileAccess = const FileAccessMissing();
       });
     });
+    // Read after the first frame: Hero lays the page out offstage in it,
+    // where the route reports its entrance as already done.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _watchEntrance());
     unawaited(_checkFile());
+  }
+
+  void _watchEntrance() {
+    if (!mounted) return;
+    final entrance = ModalRoute.of(context)?.animation;
+    if (entrance == null || !entrance.isAnimating) {
+      _endEntrance();
+      return;
+    }
+    _entrance = entrance..addStatusListener(_entranceChanged);
+  }
+
+  void _entranceChanged(AnimationStatus status) {
+    if (!status.isAnimating) _endEntrance();
+  }
+
+  void _endEntrance() {
+    _entrance?.removeStatusListener(_entranceChanged);
+    _entrance = null;
+    if (!_entered.isCompleted) _entered.complete();
   }
 
   @override
   void dispose() {
+    _endEntrance();
     _unsubscribeMetadata();
     _unsubscribeDeletion();
     unawaited(_cleanupTempFileAndParentIfNotCached(_embeddedCoverPreviewPath));
@@ -336,6 +381,7 @@ class _TrackMetadataScreenState extends ConsumerState<TrackMetadataScreen>
     final networkFileDeletable =
         filePath.startsWith('network://') &&
         await NetworkStorageService.instance.canDeleteFile(filePath);
+    if (!_entered.isCompleted) await _entered.future;
     if (!mounted ||
         generation != _metadataLoadGeneration ||
         filePath != cleanFilePath) {
@@ -722,7 +768,7 @@ class _TrackMetadataScreenState extends ConsumerState<TrackMetadataScreen>
             );
           });
         }
-        await ref.read(localLibraryProvider.notifier).reloadFromStorage();
+        ref.read(localLibraryProvider.notifier).notifyTrackMetadataChanged();
       }
     } catch (e) {
       _log.w('Failed to resolve audio metadata from file: $e');
@@ -878,68 +924,4 @@ class _MetadataOption {
     this.destructive = false,
     this.dividerAbove = false,
   });
-}
-
-class _MetadataOptionTile extends StatelessWidget {
-  final _MetadataOption option;
-  final ColorScheme colorScheme;
-  final VoidCallback onTap;
-
-  const _MetadataOptionTile({
-    required this.option,
-    required this.colorScheme,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final iconColor = option.destructive
-        ? colorScheme.error
-        : colorScheme.onSurfaceVariant;
-    final titleColor = option.destructive ? colorScheme.error : null;
-
-    if (context.isMornye) {
-      return CupertinoButton(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-        onPressed: onTap,
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                option.label,
-                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                  color: titleColor ?? colorScheme.onSurface,
-                ),
-              ),
-            ),
-            const SizedBox(width: 16),
-            Icon(mornyeIconFor(option.icon), color: iconColor, size: 22),
-          ],
-        ),
-      );
-    }
-
-    return InkWell(
-      onTap: onTap,
-      splashColor: colorScheme.primary.withValues(alpha: 0.12),
-      highlightColor: Colors.transparent,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-        child: Row(
-          children: [
-            Icon(option.icon, color: iconColor, size: 24),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Text(
-                option.label,
-                style: Theme.of(
-                  context,
-                ).textTheme.bodyLarge?.copyWith(color: titleColor),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 }

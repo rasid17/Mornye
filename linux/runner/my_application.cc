@@ -89,6 +89,9 @@ static void notify_window_mode(MyApplication* self) {
 
 static gboolean window_state_cb(GtkWidget* widget, GdkEventWindowState* event,
                                 gpointer user_data) {
+  if ((event->changed_mask & GDK_WINDOW_STATE_FULLSCREEN) == 0) {
+    return FALSE;
+  }
   MyApplication* self = MY_APPLICATION(user_data);
   notify_window_mode(self);
   return FALSE;
@@ -108,6 +111,18 @@ static gboolean set_window_mode(MyApplication* self, const gchar* mode) {
   }
   notify_window_mode(self);
   return TRUE;
+}
+
+// Whether to render with Impeller. Flutter 3.50 draws Impeller frames into a
+// multisample buffer that has no texture, and composites drivers it does not
+// trust to blit (NVIDIA among them) from that missing texture: the window
+// stays blank. Without Impeller the frame has a texture. MORNYE_IMPELLER=1
+// or =0 overrides the choice.
+static gboolean use_impeller() {
+  const gchar* forced = g_getenv("MORNYE_IMPELLER");
+  if (g_strcmp0(forced, "1") == 0) return TRUE;
+  if (g_strcmp0(forced, "0") == 0) return FALSE;
+  return !g_file_test("/proc/driver/nvidia/version", G_FILE_TEST_EXISTS);
 }
 
 static void set_minimum_size(GtkWindow* window, gint width, gint height) {
@@ -382,6 +397,11 @@ static void register_url_scheme() {
   }
 }
 
+static gboolean register_url_scheme_idle_cb(gpointer /*user_data*/) {
+  register_url_scheme();
+  return G_SOURCE_REMOVE;
+}
+
 static void first_frame_cb(MyApplication* self, FlView* view) {
   gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
 }
@@ -396,7 +416,7 @@ static void my_application_activate(GApplication* application) {
     return;
   }
 
-  register_url_scheme();
+  g_idle_add(register_url_scheme_idle_cb, nullptr);
 
   GtkWindow* window =
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
@@ -458,6 +478,7 @@ static void my_application_activate(GApplication* application) {
   g_autoptr(FlDartProject) project = fl_dart_project_new();
   fl_dart_project_set_dart_entrypoint_arguments(
       project, self->dart_entrypoint_arguments);
+  fl_dart_project_set_enable_impeller(project, use_impeller());
 
   FlView* view = fl_view_new(project);
   GdkRGBA background_color;

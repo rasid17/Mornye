@@ -342,6 +342,14 @@
   "extensionAccountRequiredValue": "Enter a value.",
   "extensionAccountInvalidNumber": "Enter a valid number.",
   "settingsPlaybackSubtitle": "Player, volume, AutoMix, and audio output",
+  "settingsPlaybackExternalSubtitle": "Songs open in another music app",
+  "@settingsPlaybackExternalSubtitle": {
+    "description": "Subtitle of the Playback settings entry while the External player option is chosen"
+  },
+  "playbackExternalHidden": "Songs open in another music app, so the player and its settings are hidden across the app. Choose Built-in player to bring them back.",
+  "@playbackExternalHidden": {
+    "description": "Note under the player choice in Playback settings while External player is chosen. Built-in player is the name of the other option"
+  },
   "sectionPlayer": "Player",
   "sectionVolumeAndTransitions": "Volume and transitions",
   "sectionAudioOutput": "Audio output",
@@ -477,6 +485,10 @@
   "@queueLock": {
     "description": "Playback setting and queue header toggle tooltip that stops reordering and swiping songs out of the play queue"
   },
+  "queueSaveAsPlaylist": "Save queue as playlist",
+  "@queueSaveAsPlaylist": {
+    "description": "Tooltip of the queue header button that adds every song in the play queue, in order, to a new or existing playlist"
+  },
   "queueUnlock": "Unlock queue",
   "@queueUnlock": {
     "description": "Tooltip of the queue header toggle while the queue is locked"
@@ -513,7 +525,16 @@
   "usbDirectDescription": "Use exclusive USB audio with Android USB permission. FLAC, WAV, ALAC, DSF/DFF and WavPack DSD stay bit-perfect; AAC, MP3, Opus and Vorbis are decoded by the phone and sent directly. Native DSD requires a recognized compatible DAC. Applies from the next track.",
   "usbDsdOverPcm": "DSD over PCM (DoP)",
   "usbDsdOverPcmDescription": "Enable only if your DAC explicitly supports DoP. Sends DSF/DFF and WavPack DSD inside a PCM carrier when native DSD is unavailable. An incompatible device may play noise; leave off for ordinary USB headsets.",
-  "usbDsdUnsupported": "This DSD format or connected DAC is not supported. Playback stopped.",
+  "usbMaxSampleRate": "Highest sample rate",
+  "usbMaxSampleRateDescription": "Songs above this rate are converted down to it. Set it when a DAC stays silent on high-resolution songs. Applies from the next track.",
+  "usbMaxSampleRateAuto": "Automatic",
+  "usbDitherType": "Dither type",
+  "@usbDitherType": {
+    "description": "Label of the choice between plain TPDF and high-pass TPDF for songs the Direct USB driver converts for a 16-bit output"
+  },
+  "usbDitherPlainDescription": "Used when a song's sample rate is converted for a 16-bit output. Plain TPDF spreads the added noise evenly across all frequencies. Applies from the next track.",
+  "usbDitherHighPassDescription": "Used when a song's sample rate is converted for a 16-bit output. High-pass TPDF moves the added noise to high frequencies where it is harder to hear. Applies from the next track.",
+  "usbDsdUnsupported":"This DSD format or connected DAC is not supported. Playback stopped.",
   "usbPermissionDenied": "USB permission was not granted. Using normal playback.",
   "usbPermissionDeclined": "USB access was declined. Turn the Direct USB driver off and on, or plug the DAC in again, to be asked again. Using normal playback.",
   "usbBitPerfectPending": "Waiting for the next track and a compatible USB output.",
@@ -548,6 +569,11 @@
   "usbAndroidVersion": "Bit-perfect USB output needs Android 14 or later. Try the direct USB driver. Using normal playback.",
   "usbOutputLossySource": "{codec}, lossy source",
   "@usbOutputLossySource": {"placeholders": {"codec": {"type": "String"}}},
+  "usbOutputResampled": "{rate}, resampled to {output}",
+  "@usbOutputResampled": {
+    "description": "USB output status: the DAC refused the song's sample rate, so the song is converted. Both values are rates such as 96.0 kHz",
+    "placeholders": {"rate": {"type": "String"}, "output": {"type": "String"}}
+  },
   "upgradeIntroContinue": "Continue",
   "cacheMotionArtwork": "Offline motion covers",
   "cacheMotionArtworkDesc": "Album videos saved with downloads. Removing them keeps your music files and static covers.",
@@ -629,11 +655,15 @@
   },
   "homeNothingYetTitle": "Nothing here yet",
   "@homeNothingYetTitle": {
-    "description": "Title on the Mornye Home when the Library is empty and nothing was played"
+    "description": "Title on Home when the Library is empty and nothing was played"
   },
   "homeNothingYetMessage": "Songs you add to your Library or play show up here.",
   "@homeNothingYetMessage": {
     "description": "Message under homeNothingYetTitle"
+  },
+  "homeFindMusic": "Find music",
+  "@homeFindMusic": {
+    "description": "Button under homeNothingYetMessage that opens the Search page"
   },
   "homeRecent": "Recent",
   "@homeRecent": {
@@ -1137,9 +1167,9 @@
   "@aboutMobileDeveloper": {
     "description": "Role description for mobile dev"
   },
-  "aboutLogoArtist": "The talented artist who created our beautiful app logo!",
-  "@aboutLogoArtist": {
-    "description": "Role description for logo artist"
+  "aboutAppManager": "App manager and moderator",
+  "@aboutAppManager": {
+    "description": "Role description for the contributor who manages the app's community and moderates it"
   },
   "aboutTranslators": "Translators",
   "@aboutTranslators": {
@@ -2262,6 +2292,14 @@
   "@lyricsLockScreenSubtitleIos": {
     "description": "Subtitle of the Lyrics on lock screen switch on iOS, where it also shows in Control Center. Keep 'Mornye' as is: it is the app name"
   },
+  "lyricsLockScreenKeepTitle": "Keep the song title",
+  "@lyricsLockScreenKeepTitle": {
+    "description": "Switch under Lyrics on lock screen: the line being sung replaces the artist's name instead of the song title"
+  },
+  "lyricsLockScreenKeepTitleSubtitle": "The line takes the artist's place instead",
+  "@lyricsLockScreenKeepTitleSubtitle": {
+    "description": "Subtitle of the Keep the song title switch"
+  },
   "lyricsPlayerPreview": "Lyric line in player",
   "@lyricsPlayerPreview": {
     "description": "Lyrics setting that shows the synced line being sung under the song title on the Now Playing screen"
@@ -2269,6 +2307,14 @@
   "lyricsPlayerPreviewSubtitle": "Show the line being sung under the song title. Tap it to open the full lyrics.",
   "@lyricsPlayerPreviewSubtitle": {
     "description": "Subtitle of the Lyric line in player switch"
+  },
+  "lyricsPlayerPreviewTranslation": "Translation in lyric line",
+  "@lyricsPlayerPreviewTranslation": {
+    "description": "Lyrics setting that makes the lyric line in the player show the translation instead of the sung line"
+  },
+  "lyricsPlayerPreviewTranslationSubtitle": "Show the translation instead of the original line when the song has one.",
+  "@lyricsPlayerPreviewTranslationSubtitle": {
+    "description": "Subtitle of the Translation in lyric line switch"
   },
   "lyricsRomanize": "Romanize lyrics",
   "@lyricsRomanize": {
@@ -2479,6 +2525,14 @@
   "libraryQualityLabelFileFormat": "File format",
   "@libraryQualityLabelFileFormat": {
     "description": "Library audio quality label mode that shows the detected file format"
+  },
+  "libraryQualityLabelSimple": "Simple",
+  "@libraryQualityLabelSimple": {
+    "description": "Library audio quality label mode that shows one short word instead of the technical figures"
+  },
+  "libraryQualityLabelSimpleSubtitle": "Lossless, Hi-Res or the format's name, in the player too",
+  "@libraryQualityLabelSimpleSubtitle": {
+    "description": "Explains the Simple audio quality label mode. Lossless and Hi-Res are the labels shown and stay in English."
   },
   "trackReleaseDate": "Release date",
   "@trackReleaseDate": {
@@ -3061,6 +3115,10 @@
   "@appearanceContinueListeningSubtitle": {
     "description": "Subtitle of the switch that shows or hides Home's Continue listening card"
   },
+  "appearanceRecommendationsSubtitle": "Show songs like the ones you play and download on Home",
+  "@appearanceRecommendationsSubtitle": {
+    "description": "Subtitle of the switch that shows or hides Home's Recommended for you shelf"
+  },
   "appearanceInterfaceSize": "Interface size",
   "@appearanceInterfaceSize": {
     "description": "Title of the slider that scales the whole app"
@@ -3076,6 +3134,22 @@
   "appearanceInterfaceSizeLarger": "Larger",
   "@appearanceInterfaceSizeLarger": {
     "description": "Label at the large end of the Interface size slider"
+  },
+  "appearanceAnimationSpeed": "Animation speed",
+  "@appearanceAnimationSpeed": {
+    "description": "Title of the slider that makes the app's animations play slower or faster"
+  },
+  "appearanceAnimationSpeedDescription": "How fast pages, sheets and controls move. Lyrics keep time with the song.",
+  "@appearanceAnimationSpeedDescription": {
+    "description": "Explanation under the Animation speed slider"
+  },
+  "appearanceAnimationSpeedSlower": "Slower",
+  "@appearanceAnimationSpeedSlower": {
+    "description": "Label at the slow end of the Animation speed slider"
+  },
+  "appearanceAnimationSpeedFaster": "Faster",
+  "@appearanceAnimationSpeedFaster": {
+    "description": "Label at the fast end of the Animation speed slider"
   },
   "queueClearAll": "Clear All",
   "@queueClearAll": {
@@ -4170,6 +4244,18 @@
   "@playbackNormalizationPreampHint": {
     "description": "Hint under the normalization pre-amp slider"
   },
+  "playbackNormalizationPreampHintBoost": "Lower values play quieter.",
+  "@playbackNormalizationPreampHintBoost": {
+    "description": "Hint under the normalization pre-amp slider while quiet songs are also turned up"
+  },
+  "playbackNormalizationBoost": "Turn quiet songs up",
+  "@playbackNormalizationBoost": {
+    "description": "Switch title: volume normalization also raises songs that are quieter than the target, instead of only lowering loud ones"
+  },
+  "playbackNormalizationBoostSubtitle": "Songs mastered quieter than the target are raised too. Their loudest moments may sound squeezed or clip.",
+  "@playbackNormalizationBoostSubtitle": {
+    "description": "Subtitle of the switch that lets volume normalization raise quiet songs, warning about clipping"
+  },
   "confirmLoudVolume": "Confirm loud volume",
   "@confirmLoudVolume": {
     "description": "Switch title: the app's volume bar asks before going above a chosen level"
@@ -4335,6 +4421,22 @@
   "trackReEnrich": "Re-enrich",
   "@trackReEnrich": {
     "description": "Menu action - re-embed metadata into audio file"
+  },
+  "trackRedownload": "Re-download",
+  "@trackRedownload": {
+    "description": "Track details menu action and dialog title: find the song online again from its metadata and queue a new download"
+  },
+  "trackRedownloadConfirmMessage": "Finds this song online and downloads it again with your download settings.\n\nThe current file is kept. The new one is saved in your download folder.\n\nOnly a confident match is queued.",
+  "@trackRedownloadConfirmMessage": {
+    "description": "Confirmation dialog body before re-downloading one song from track details"
+  },
+  "trackRedownloadNoMatch": "No reliable online match found for this song",
+  "@trackRedownloadNoMatch": {
+    "description": "Snackbar when re-download found no high-confidence online match"
+  },
+  "trackRedownloadAlreadyQueued": "This song is already in the download queue",
+  "@trackRedownloadAlreadyQueued": {
+    "description": "Snackbar when re-download finds the song already waiting in the download queue"
   },
   "trackReEnrichBatchSubtitle": "Choose an online or manual update, then review every change before writing",
   "@trackReEnrichBatchSubtitle": {
@@ -6531,25 +6633,34 @@
       }
     }
   },
+  "hiResBatchSpectrumSemantics": "Average spectrum of {count} songs, one line for each",
+  "@hiResBatchSpectrumSemantics": {
+    "description": "Screen reader description of the chart that draws the spectra of several checked songs together",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "audioAnalysisRescanning": "Re-analyzing audio...",
   "@audioAnalysisRescanning": {
     "description": "Loading text while audio is being re-analyzed after an explicit refresh"
   },
-  "extensionsHomeFeedProvider": "Home Feed Provider",
+  "extensionsHomeFeedProvider": "Search Feed Provider",
   "@extensionsHomeFeedProvider": {
-    "description": "Extensions page - label for home feed provider selector"
+    "description": "Extensions page - label for the selector of the extension whose feed fills the Search page"
   },
-  "extensionsHomeFeedCountry": "Home feed country",
+  "extensionsHomeFeedCountry": "Search feed country",
   "@extensionsHomeFeedCountry": {
-    "description": "Country picker for the active Home feed extension"
+    "description": "Country picker for the active Search feed extension"
   },
-  "extensionsHomeFeedCountryDescription": "Choose a country's Home recommendations without a VPN.",
+  "extensionsHomeFeedCountryDescription": "Choose a country's recommendations without a VPN.",
   "@extensionsHomeFeedCountryDescription": {
-    "description": "Help for choosing regional Home recommendations"
+    "description": "Help for choosing regional recommendations in the Search feed"
   },
-  "extensionsHomeFeedDescription": "Choose which extension provides the home feed on the main screen",
+  "extensionsHomeFeedDescription": "Choose which extension fills the Search page before you type",
   "@extensionsHomeFeedDescription": {
-    "description": "Extensions page - description for home feed provider picker"
+    "description": "Extensions page - description for the Search feed provider picker"
   },
   "extensionsHomeFeedAuto": "Auto",
   "@extensionsHomeFeedAuto": {
@@ -6563,11 +6674,11 @@
   "@extensionsHomeFeedOff": {
     "description": "Extensions page - home feed provider option: off"
   },
-  "extensionsHomeFeedOffSubtitle": "Do not show the home feed on the main screen",
+  "extensionsHomeFeedOffSubtitle": "Do not show a feed on the Search page",
   "@extensionsHomeFeedOffSubtitle": {
     "description": "Extensions page - subtitle for off home feed option"
   },
-  "extensionsHomeFeedUse": "Use {extensionName} home feed",
+  "extensionsHomeFeedUse": "Use the {extensionName} feed",
   "@extensionsHomeFeedUse": {
     "description": "Extensions page - subtitle for a specific extension home feed option",
     "placeholders": {
@@ -6695,6 +6806,15 @@
   "notifVerificationRequiredBody": "Open the app to complete verification and resume downloads",
   "@notifVerificationRequiredBody": {
     "description": "Notification body prompting the user to return to the app to solve a verification challenge"
+  },
+  "notifVerificationRequiredBodyNamed": "Open the app to complete the {extension} verification and resume downloads",
+  "@notifVerificationRequiredBodyNamed": {
+    "description": "Notification body prompting the user to return to the app to solve a verification challenge, naming the extension that asked for it",
+    "placeholders": {
+      "extension": {
+        "type": "String"
+      }
+    }
   },
   "notifAllDownloadsComplete": "All Downloads Complete",
   "@notifAllDownloadsComplete": {
@@ -7484,6 +7604,15 @@
   "queueResolvingDownloadMetadata": "Resolving track metadata...",
   "queueResolvingDownloadStream": "Preparing audio stream...",
   "queueWaitingForVerification": "Waiting for verification...",
+  "queueWaitingForVerificationNamed": "Waiting for {extension} verification...",
+  "@queueWaitingForVerificationNamed": {
+    "description": "Queue status while a download waits for the user to complete a verification challenge, naming the extension that asked for it",
+    "placeholders": {
+      "extension": {
+        "type": "String"
+      }
+    }
+  },
   "queueResumingAfterVerification": "Resuming after verification...",
   "@queueDownloadStarting": {
     "description": "Queue status before download progress is available"
@@ -7793,6 +7922,22 @@
   "@openInOtherServices": {
     "description": "Title and tooltip for finding the current collection in other services"
   },
+  "shareSongName": "Share name",
+  "@shareSongName": {
+    "description": "Share sheet option that shares a song's title and artist as text"
+  },
+  "shareSongLink": "Share link",
+  "@shareSongLink": {
+    "description": "Share sheet option, and the title of the list it opens, for sharing a song's link on a music service"
+  },
+  "shareSongLinkSubtitle": "Find this song on your services",
+  "@shareSongLinkSubtitle": {
+    "description": "Subtitle of the Share link option: the song is searched for on the installed services"
+  },
+  "shareSongLinkNoServices": "No installed extension can look up song links",
+  "@shareSongLinkNoServices": {
+    "description": "Empty state of the Share link list when no metadata extension is installed"
+  },
   "shareSheetNoExtensions": "No other compatible services",
   "@shareSheetNoExtensions": {
     "description": "Empty state when no extensions can be searched for cross-service links"
@@ -8000,6 +8145,31 @@
   "nowPlayingTranslationSavedMlrc": "Translation saved to a .mlrc file",
   "@nowPlayingTranslationSavedMlrc": {
     "description": "Snackbar after the shown lyrics translation was written into a .mlrc lyrics file next to the song. Keep '.mlrc' as is: it is a file extension"
+  },
+  "lyricsTranslationEditTitle": "Edit translation",
+  "@lyricsTranslationEditTitle": {
+    "description": "Player lyrics menu action and title of the translation editor, which edits the translation of each lyric line by hand"
+  },
+  "lyricsTranslationAddTitle": "Add translation",
+  "@lyricsTranslationAddTitle": {
+    "description": "Player lyrics menu action and title of the translation editor when the song has no translation yet, so the user writes one by hand"
+  },
+  "lyricsTranslationEditSubtitle": "Translation into {language}",
+  "@lyricsTranslationEditSubtitle": {
+    "description": "Caption under the lines of the translation editor naming the language the translation is written in; language is that language's own name",
+    "placeholders": {
+      "language": {
+        "type": "String"
+      }
+    }
+  },
+  "lyricsTranslationEditWordTimingNote": "Editing a line removes its word-by-word timing for that line. An empty field clears that line's translation.",
+  "@lyricsTranslationEditWordTimingNote": {
+    "description": "Note under the lines of the translation editor, shown once the song has a translation, explaining that editing a translated line drops its word timing and clearing a field removes that line's translation"
+  },
+  "lyricsTranslationEditSaved": "Translation saved",
+  "@lyricsTranslationEditSaved": {
+    "description": "Snackbar after a hand-edited lyrics translation was saved with the song"
   },
   "lyricsAiSectionFiles": "Files",
   "@lyricsAiSectionFiles": {
@@ -9166,6 +9336,15 @@
       }
     }
   },
+  "extensionVerificationRequestedBy": "Requested by {extension}",
+  "@extensionVerificationRequestedBy": {
+    "description": "Line in the verification help dialog naming the extension that asked for verification",
+    "placeholders": {
+      "extension": {
+        "type": "String"
+      }
+    }
+  },
   "extensionVerificationHelpTitleManual": "Open verification manually",
   "@extensionVerificationHelpTitleManual": {
     "description": "Dialog title when automatic browser launch for verification fails"
@@ -9281,6 +9460,10 @@
     "description": "Metadata menu action that copies the selected key and value"
   },
   "mornyeSearch": "Search",
+  "searchMovedHint": "Search is here now",
+  "@searchMovedHint": {
+    "description": "Hint above the Search tab, shown once after an update to people who had the search field on Home"
+  },
   "mornyeContinuePlaying": "Continue Playing",
   "metadataCopyAll": "Copy all metadata",
   "@metadataCopyAll": {
@@ -9365,6 +9548,34 @@
   "@playerCoverStyleFullScreenDescription": {
     "description": "Subtitle of the full screen cover art style"
   },
+  "playerCoverFade": "Cover fade",
+  "@playerCoverFade": {
+    "description": "Setting for how far up a full screen cover its fade into the blur reaches"
+  },
+  "playerCoverFadeDescription": "How far up the full screen cover the blur reaches",
+  "@playerCoverFadeDescription": {
+    "description": "Subtitle of the Cover fade setting"
+  },
+  "playerCoverFadeShort": "Short",
+  "@playerCoverFadeShort": {
+    "description": "Cover fade choice: the blur covers little of the cover"
+  },
+  "playerCoverFadeMedium": "Medium",
+  "@playerCoverFadeMedium": {
+    "description": "Cover fade choice: the usual extent of the blur"
+  },
+  "playerCoverFadeLong": "Long",
+  "@playerCoverFadeLong": {
+    "description": "Cover fade choice: the blur reaches far up the cover"
+  },
+  "playerCoverWhole": "Whole cover",
+  "@playerCoverWhole": {
+    "description": "Setting that shows a full screen cover without cropping its sides"
+  },
+  "playerCoverWholeDescription": "Keep the sides of a full screen cover. It then ends above the title",
+  "@playerCoverWholeDescription": {
+    "description": "Subtitle of the Whole cover setting"
+  },
   "musicHaptics": "Music haptics",
   "@musicHaptics": {
     "description": "Setting that vibrates the phone along with the music"
@@ -9441,6 +9652,28 @@
       }
     }
   },
+  "suggestionOutcomesTitle": "Mixes and recommendations",
+  "@suggestionOutcomesTitle": {
+    "description": "Settings row under Reset recommendation learning that shows how Home's mixes and Recommended for you songs are received"
+  },
+  "suggestionOutcomesMixes": "Mixes: {percent}% of songs played rather than skipped",
+  "@suggestionOutcomesMixes": {
+    "description": "Share of songs from Home's mixes that the listener played on instead of skipping",
+    "placeholders": {
+      "percent": {
+        "type": "int"
+      }
+    }
+  },
+  "suggestionOutcomesRecommendations": "Recommended for you: {percent}% of songs previewed, opened or saved",
+  "@suggestionOutcomesRecommendations": {
+    "description": "Share of songs shown in Home's Recommended for you that the listener previewed, opened the album of, downloaded or saved within a week",
+    "placeholders": {
+      "percent": {
+        "type": "int"
+      }
+    }
+  },
   "songAnalysis": "Song analysis",
   "@songAnalysis": {
     "description": "Switch that analyzes how each Library song sounds, on the device, for Autoplay"
@@ -9494,6 +9727,395 @@
   "profileRemovePhoto": "Remove photo",
   "profilePhotoError": "Choose a valid image smaller than 20 MB.",
   "profileSaveError": "Could not save your profile. Please try again.",
+  "profileEditAction": "Edit profile",
+  "profileNowPlaying": "Now playing",
+  "profileListeningSince": "Listening since {date}",
+  "@profileListeningSince": {
+    "description": "Line under the profile name; date is the month and year of the first recorded listening, such as November 2026",
+    "placeholders": {
+      "date": {
+        "type": "String"
+      }
+    }
+  },
+  "profileHours": "{hours} h",
+  "@profileHours": {
+    "description": "A listening time in hours; hours is an already formatted number such as 12.5 or 240",
+    "placeholders": {
+      "hours": {
+        "type": "String"
+      }
+    }
+  },
+  "profileAllTime": "All time",
+  "profileStatListening": "Listening time",
+  "profileStatSongs": "Songs played",
+  "profileStatArtists": "Artists played",
+  "profileStatActiveDays": "Listening days",
+  "profileStatStreak": "Current streak",
+  "profileDays": "{count, plural, =1{1 day} other{{count} days}}",
+  "@profileDays": {
+    "description": "A number of days, as the value of a streak or of the days with listening",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "profileLast30Days": "Last 30 days",
+  "profileTaste": "Music taste",
+  "profileTasteNote": "Share of your listening time, for songs whose genre your Library knows.",
+  "profileTasteEmpty": "The songs you played have no genre in your Library yet.",
+  "profileTasteMostly": "Mostly {genre}",
+  "@profileTasteMostly": {
+    "description": "Line under the profile name when one genre takes at least half of the listening time",
+    "placeholders": {
+      "genre": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTasteMostlyWith": "Mostly {genre}, with {others}",
+  "@profileTasteMostlyWith": {
+    "description": "Line under the profile name when one genre takes at least half of the listening time; others is one or two more genres, such as Rock, Jazz",
+    "placeholders": {
+      "genre": {
+        "type": "String"
+      },
+      "others": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTasteMix": "A mix of {genres}",
+  "@profileTasteMix": {
+    "description": "Line under the profile name when no genre takes half of the listening time; genres is two or three genres, such as Pop, Rock, Jazz",
+    "placeholders": {
+      "genres": {
+        "type": "String"
+      }
+    }
+  },
+  "profileHabits": "Listening habits",
+  "profileAverageDay": "On a listening day",
+  "profileTopAlbums": "Top albums",
+  "profileCollection": "Your collection",
+  "profileListeningOff": "Record listening is off, so your listening is not shown here.",
+  "profileWeekdayChart": "Listening time by day of the week, most on {day}",
+  "@profileWeekdayChart": {
+    "description": "Screen reader description of the chart of listening time per weekday; day is a weekday name such as Saturday",
+    "placeholders": {
+      "day": {
+        "type": "String"
+      }
+    }
+  },
+  "profileRecentChart": "Listening time on each of the last 30 days",
+  "profileNowPlayingProgress": "{position} of {duration}",
+  "@profileNowPlayingProgress": {
+    "description": "Screen reader description of the profile's Now playing progress; position and duration are clock times such as 1:23 and 3:45",
+    "placeholders": {
+      "position": {
+        "type": "String"
+      },
+      "duration": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTasteOther": "Other",
+  "profileTasteChart": "Share of listening time by genre",
+  "profileLast12Months": "Last 12 months",
+  "profileBestMonth": "Best month",
+  "profileMonthChart": "Listening time in each of the last 12 months",
+  "profileTraits": "Listener type",
+  "profileTraitStreak": "On a streak",
+  "profileTraitStreakBody": "{count, plural, =1{1 day in a row with music} other{{count} days in a row with music}}",
+  "@profileTraitStreakBody": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "profileTraitAudiophile": "Audiophile",
+  "profileTraitAudiophileBody": "{percent} of your listening is Hi-Res",
+  "@profileTraitAudiophileBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitNightOwl": "Night owl",
+  "profileTraitNightOwlBody": "{percent} of your songs play late at night",
+  "@profileTraitNightOwlBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitEarlyBird": "Early bird",
+  "profileTraitEarlyBirdBody": "{percent} of your songs play in the morning",
+  "@profileTraitEarlyBirdBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitWeekender": "Weekend listener",
+  "profileTraitWeekenderBody": "{percent} of your listening falls on Saturday and Sunday",
+  "@profileTraitWeekenderBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitLoyal": "Loyal fan",
+  "profileTraitLoyalBody": "{artist} takes {percent} of your listening",
+  "@profileTraitLoyalBody": {
+    "placeholders": {
+      "artist": {
+        "type": "String"
+      },
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitExplorer": "Explorer",
+  "profileTraitExplorerBody": "{count, plural, =1{1 new artist in the last 30 days} other{{count} new artists in the last 30 days}}",
+  "@profileTraitExplorerBody": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "profileTraitEclectic": "Eclectic",
+  "profileTraitEclecticBody": "{count} genres, the biggest at {percent}",
+  "@profileTraitEclecticBody": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      },
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitOnRepeat": "On repeat",
+  "profileTraitOnRepeatBody": "{title}, {count} times in one day",
+  "@profileTraitOnRepeatBody": {
+    "placeholders": {
+      "title": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "profileTraitDailyRitual": "Daily ritual",
+  "profileTraitDailyRitualBody": "Music on {percent} of days since you started",
+  "@profileTraitDailyRitualBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitMarathon": "Marathon listener",
+  "profileTraitMarathonBody": "{duration} of music in a single day",
+  "@profileTraitMarathonBody": {
+    "description": "duration is a listening time such as 6.5 h",
+    "placeholders": {
+      "duration": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitOnTheRise": "On the rise",
+  "profileTraitOnTheRiseBody": "{percent} more listening than the 30 days before",
+  "@profileTraitOnTheRiseBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitLosslessPurist": "Lossless purist",
+  "profileTraitLosslessPuristBody": "{percent} of your listening is lossless",
+  "@profileTraitLosslessPuristBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitDaytime": "Daytime listener",
+  "profileTraitDaytimeBody": "{percent} of your songs play in the afternoon",
+  "@profileTraitDaytimeBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitSunset": "Sunset listener",
+  "profileTraitSunsetBody": "{percent} of your songs play in the evening",
+  "@profileTraitSunsetBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitWorkday": "Workday soundtrack",
+  "profileTraitWorkdayBody": "{percent} of your listening falls on weekdays",
+  "@profileTraitWorkdayBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitDevotee": "{genre} at heart",
+  "@profileTraitDevotee": {
+    "description": "A listener type for someone whose listening is mostly one genre, such as Jazz at heart",
+    "placeholders": {
+      "genre": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitDevoteeBody": "{percent} of your listening is {genre}",
+  "@profileTraitDevoteeBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      },
+      "genre": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitSongHunter": "Song hunter",
+  "profileTraitSongHunterBody": "{count, plural, =1{1 different song in the last 30 days} other{{count} different songs in the last 30 days}}",
+  "@profileTraitSongHunterBody": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "profileTraitThrowback": "Throwback lover",
+  "profileTraitThrowbackBody": "{percent} of your listening came out before 2000",
+  "@profileTraitThrowbackBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitFreshEars": "Fresh ears",
+  "profileTraitFreshEarsBody": "{percent} of your listening came out in the last two years",
+  "@profileTraitFreshEarsBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitPatient": "Lets it play",
+  "profileTraitPatientBody": "{percent} of your songs play without a skip",
+  "@profileTraitPatientBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileTraitQuickSkipper": "Quick skipper",
+  "profileTraitQuickSkipperBody": "You skip {percent} of your songs",
+  "@profileTraitQuickSkipperBody": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "profileDecades": "Decades",
+  "profileDecade": "{decade}s",
+  "@profileDecade": {
+    "description": "A decade from its first year or its last two digits, such as 1990s or 90s",
+    "placeholders": {
+      "decade": {
+        "type": "String"
+      }
+    }
+  },
+  "profileEra": "Most played decade",
+  "profileDecadeChart": "Listening time by release decade, most in the {decade}",
+  "@profileDecadeChart": {
+    "description": "Screen reader description of the decades chart; decade is a decade such as 1990s",
+    "placeholders": {
+      "decade": {
+        "type": "String"
+      }
+    }
+  },
+  "profileDecadesNote": "For songs whose release year your Library knows.",
+  "profileSound": "Sound quality",
+  "profileQualityHiRes": "Hi-Res",
+  "profileQualityLossless": "Lossless",
+  "profileQualityLossy": "Lossy",
+  "profileTopFormat": "Most played format",
+  "profileSoundNote": "Share of your listening time, for songs whose file your Library knows.",
+  "profileSoundChart": "Share of listening time by sound quality",
+  "profileTimeOfDay": "Time of day",
+  "profilePeakHour": "Busiest hour",
+  "profileMostActive": "Most active",
+  "profileDaypartMorning": "Morning",
+  "profileDaypartAfternoon": "Afternoon",
+  "profileDaypartEvening": "Evening",
+  "profileDaypartNight": "Night",
+  "profileNotSkipped": "Songs not skipped",
+  "profileHourChart": "Songs played at each hour of the day, most at {hour}",
+  "@profileHourChart": {
+    "placeholders": {
+      "hour": {
+        "type": "String"
+      }
+    }
+  },
+  "profileRhythmNote": "{count, plural, =1{From your last song.} other{From your last {count} songs.}}",
+  "@profileRhythmNote": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "profileArtistsHalf": "{count, plural, =1{Half of your listening goes to 1 artist.} other{Half of your listening goes to {count} artists.}}",
+  "@profileArtistsHalf": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "profileShare": "Share profile",
+  "profileShareShow": "Show",
+  "profileShareIdentity": "Name and photo",
+  "profileShareHighlights": "Highlights",
+  "profileShareHeadline": "My listening",
+  "profileShareText": "My listening profile",
+  "profileShareSaved": "Profile card saved",
+  "profileShareError": "Couldn't create the profile image",
   "homeGreetingMorning1": "Good morning",
   "homeGreetingMorning2": "Rise and shine",
   "homeGreetingMorning3": "Fresh start",
@@ -9518,21 +10140,97 @@
       }
     }
   },
-  "homeTaglineListening": "What are we listening to?",
-  "@homeTaglineListening": {
-    "description": "Rotating Home prompt under the greeting"
+  "homeStatusAddedSinceYesterday": "{count, plural, =1{1 song added since yesterday} other{{count} songs added since yesterday}}",
+  "@homeStatusAddedSinceYesterday": {
+    "description": "Home status line under the greeting: songs that finished downloading since the previous visit, which was yesterday",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
-  "homeTaglineLink": "Got a link? Drop it in the search",
-  "@homeTaglineLink": {
-    "description": "Rotating Home prompt explaining that links can be pasted into search"
+  "homeStatusAddedSinceLastVisit": "{count, plural, =1{1 song added since your last visit} other{{count} songs added since your last visit}}",
+  "@homeStatusAddedSinceLastVisit": {
+    "description": "Home status line under the greeting: songs that finished downloading since the previous visit to Home",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
-  "homeTaglineDiscover": "Find your next favorite album",
-  "@homeTaglineDiscover": {
-    "description": "Rotating Home prompt under the greeting"
+  "homeStatusDownloading": "{count, plural, other{{count} downloading}}",
+  "@homeStatusDownloading": {
+    "description": "Home status line under the greeting: songs waiting or downloading in the download queue",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "homeDownloadsNothing": "Nothing downloading",
+  "@homeDownloadsNothing": {
+    "description": "Home downloads section while the download queue is empty"
+  },
+  "homeDownloadsPaused": "Downloads paused",
+  "@homeDownloadsPaused": {
+    "description": "Home downloads section while the download queue is paused"
+  },
+  "homeDownloadsWaiting": "{count, plural, other{{count} waiting}}",
+  "@homeDownloadsWaiting": {
+    "description": "Home downloads section: songs in the queue that have not started",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "homeDownloadsFinishedToday": "{count, plural, other{{count} finished today}}",
+  "@homeDownloadsFinishedToday": {
+    "description": "Home downloads section: songs that finished downloading today",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "homeDownloadsFailed": "{count, plural, other{{count} failed}}",
+  "@homeDownloadsFailed": {
+    "description": "Home downloads section: songs in the queue whose download failed",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "homeContinueListening": "Continue listening",
   "@homeContinueListening": {
     "description": "Home section header for the track currently loaded in the player"
+  },
+  "homeRecommendedForYou": "Recommended for you",
+  "@homeRecommendedForYou": {
+    "description": "Home section header for songs outside the Library that resemble the ones the user plays and downloads"
+  },
+  "homeHiResInYourLibrary": "Hi-Res in your Library",
+  "@homeHiResInYourLibrary": {
+    "description": "Home section header, shown while a DAC or an exclusive hi-res output plays, for the user's own albums above CD quality"
+  },
+  "homeLinkConnectedTo": "Connected to {name}",
+  "@homeLinkConnectedTo": {
+    "description": "Home row shown while a Mornye Link device is attached; opens the Devices sheet",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "homeLinkConnectedDevices": "{count, plural, =1{Connected to 1 device} other{Connected to {count} devices}}",
+  "@homeLinkConnectedDevices": {
+    "description": "Home row shown while several phones are connected to this Mornye Link host",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
   "homeRecentlyPlayed": "Recently Played",
   "@homeRecentlyPlayed": {
@@ -9545,6 +10243,84 @@
   "homeOnRepeat": "On repeat",
   "@homeOnRepeat": {
     "description": "Home section header for the most played tracks of the last four weeks"
+  },
+  "homeFromYourLibrary": "From your Library",
+  "@homeFromYourLibrary": {
+    "description": "Home section header for the day's albums from the Library, shown in On repeat's place while listening is not recorded"
+  },
+  "homeFromSource": "From {source}",
+  "@homeFromSource": {
+    "description": "Top Picks page: header of the shelf of playlists and albums from the Home feed extension, named by its display name",
+    "placeholders": {"source": {"type": "String"}}
+  },
+  "homeRecommendedFromLibrary": "Based on your Library",
+  "@homeRecommendedFromLibrary": {
+    "description": "Recommended page: header of the day's recommended songs, which start from songs the user plays, adds and loves; genre shelves follow"
+  },
+  "homeUnfinishedTitle": "Finish your collection",
+  "@homeUnfinishedTitle": {
+    "description": "Home section header for loose ends of the collection: Wishlist, incomplete albums, recognized songs and failed downloads"
+  },
+  "homeUnfinishedWishlist": "{count, plural, =1{1 song on your wishlist} other{{count} songs on your wishlist}}",
+  "@homeUnfinishedWishlist": {
+    "description": "Home row that opens the Wishlist, with the number of songs on it",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "homeUnfinishedAlbums": "{count, plural, =1{1 album is missing songs} other{{count} albums are missing songs}}",
+  "@homeUnfinishedAlbums": {
+    "description": "Home row that lists the Library albums the Incomplete albums filter finds",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "homeUnfinishedRecognized": "{count, plural, =1{1 recognized song is not in your Library} other{{count} recognized songs are not in your Library}}",
+  "@homeUnfinishedRecognized": {
+    "description": "Home row that opens the music recognition history, with the number of recognized songs that have no file in the Library",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "homeUnfinishedFailed": "{count, plural, =1{1 download failed} other{{count} downloads failed}}",
+  "@homeUnfinishedFailed": {
+    "description": "Home row that opens the downloads queue, with the number of failed downloads",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "homeUnfinishedAlbumProgress": "{present} of {expected} {expected, plural, =1{song} other{songs}}",
+  "@homeUnfinishedAlbumProgress": {
+    "description": "Subtitle of an incomplete album: how many of its songs are in the Library",
+    "placeholders": {
+      "present": {
+        "type": "int"
+      },
+      "expected": {
+        "type": "int"
+      }
+    }
+  },
+  "homeUnfinishedAlbumSomeMissing": "{count, plural, =1{1 song, more missing} other{{count} songs, more missing}}",
+  "@homeUnfinishedAlbumSomeMissing": {
+    "description": "Subtitle of an incomplete album whose full song count is not known, such as one missing a disc",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "homeQuickPlay": "Quick play",
+  "@homeQuickPlay": {
+    "description": "Home section header above a grid of nine Library songs; a tap on one plays it"
   },
   "homeShortcuts": "Shortcuts",
   "@homeShortcuts": {
@@ -9562,6 +10338,51 @@
   "@homeShortcutsReset": {
     "description": "Menu item that restores the default Home shortcuts"
   },
+  "homeShortcutRemove": "Remove shortcut",
+  "@homeShortcutRemove": {
+    "description": "Menu item that takes one shortcut off Home"
+  },
+  "homeShortcutAdd": "Add shortcut",
+  "@homeShortcutAdd": {
+    "description": "Menu item and sheet title for adding a shortcut to Home after one was removed"
+  },
+  "homePinAdd": "Pin to Home",
+  "@homePinAdd": {
+    "description": "Menu item that adds a Library album, playlist, artist, genre or folder to Home"
+  },
+  "homePinRemove": "Unpin from Home",
+  "@homePinRemove": {
+    "description": "Menu item that takes a pinned Library album, playlist, artist, genre or folder off Home"
+  },
+  "homePinUnpin": "Unpin",
+  "@homePinUnpin": {
+    "description": "Menu item of a pin on Home, and the snackbar action for a pin whose target is gone, that takes the pin off Home"
+  },
+  "homePinMoveToFront": "Move to front",
+  "@homePinMoveToFront": {
+    "description": "Menu item of a pin on Home that makes it the first pin"
+  },
+  "homePinned": "Pinned",
+  "@homePinned": {
+    "description": "Home section header for the albums, playlists, artists, genres and folders the person pinned"
+  },
+  "homePinLimit": "Home holds up to {count} pins. Unpin one first.",
+  "@homePinLimit": {
+    "description": "Snackbar when pinning to Home while Home already holds the most pins it can",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "homePinMissing": "This is no longer in your Library",
+  "@homePinMissing": {
+    "description": "Snackbar when a pin on Home is tapped but its album, playlist, artist, genre or folder is gone"
+  },
+  "homePinFolder": "Folder",
+  "@homePinFolder": {
+    "description": "Subtitle of a pinned Library folder on Home"
+  },
   "searchResults": "Search Results",
   "@searchResults": {
     "description": "Heading of a mixed preview of search result types, without implying a relevance ranking"
@@ -9573,6 +10394,10 @@
   "homeMadeForYou": "Made for You",
   "@homeMadeForYou": {
     "description": "Mornye Home: small label on a mix banner"
+  },
+  "homeNewRelease": "New release",
+  "@homeNewRelease": {
+    "description": "Mornye Home: small label on a Top Picks album card, for a new album by a favorite artist"
   },
   "homeMixesForYou": "Mixes for you",
   "@homeMixesForYou": {
@@ -9620,6 +10445,20 @@
   "homeMixDiscoverTitle": "Discover Mix",
   "@homeMixDiscoverTitle": {
     "description": "Title of the daily mix of Library songs the user has never played, from their favorite genres"
+  },
+  "homeMixYearTitle": "{year} Mix",
+  "@homeMixYearTitle": {
+    "description": "Title of a daily mix of songs released in one year, e.g. '2026 Mix'",
+    "placeholders": {
+      "year": {
+        "type": "String",
+        "example": "2026"
+      }
+    }
+  },
+  "homeMixDeepCutsTitle": "Deep Cuts Mix",
+  "@homeMixDeepCutsTitle": {
+    "description": "Title of the daily mix of songs the user has not played lately, by the artists they play most"
   },
   "homeMixArtistsOne": "{first}",
   "@homeMixArtistsOne": {
@@ -9749,6 +10588,82 @@
   "homeMixSaveAsPlaylist": "Save as playlist",
   "@homeMixSaveAsPlaylist": {
     "description": "Action that saves a daily mix's songs into one of the user's playlists"
+  },
+  "homeEdit": "Edit Home",
+  "@homeEdit": {
+    "description": "Button at the end of Home and settings row that open the page where Home's sections are reordered and hidden"
+  },
+  "homeEditSubtitle": "Which sections show, and in what order",
+  "@homeEditSubtitle": {
+    "description": "Subtitle of the Edit Home settings row"
+  },
+  "homeEditHint": "Drag to reorder. A section with nothing to show stays off Home.",
+  "@homeEditHint": {
+    "description": "Hint above the list of Home sections on the Edit Home page"
+  },
+  "homeSectionAboutDownloads": "What is downloading, waiting and finished today",
+  "@homeSectionAboutDownloads": {
+    "description": "Edit Home: what the Downloads section shows"
+  },
+  "homeSectionAboutTopPicks": "Today's mixes and playlists as banners",
+  "@homeSectionAboutTopPicks": {
+    "description": "Edit Home: what the Top Picks section shows"
+  },
+  "homeSectionAboutRecentlyPlayed": "Albums you played lately",
+  "@homeSectionAboutRecentlyPlayed": {
+    "description": "Edit Home: what the Recently Played section shows"
+  },
+  "homeSectionAboutQuickPlay": "Songs you play most and the day's picks from your Library, one tap from playing",
+  "@homeSectionAboutQuickPlay": {
+    "description": "Edit Home: what the Quick play section shows"
+  },
+  "homeSectionAboutShortcuts": "Quick ways into tools and collections, and what you pinned",
+  "@homeSectionAboutShortcuts": {
+    "description": "Edit Home: what the Shortcuts section shows; on phones the pinned items sit among them"
+  },
+  "homeSectionAboutPins": "Albums, playlists, artists, genres and folders you pinned",
+  "@homeSectionAboutPins": {
+    "description": "Edit Home: what the Pinned section shows"
+  },
+  "homeSectionLink": "Connected device",
+  "@homeSectionLink": {
+    "description": "Edit Home: name of the row that shows while a Mornye Link device is connected"
+  },
+  "homeSectionAboutLink": "Shows while another device is connected to this one",
+  "@homeSectionAboutLink": {
+    "description": "Edit Home: what the Connected device section shows"
+  },
+  "homeSectionAboutHiRes": "Your Hi-Res albums, while a DAC or exclusive output plays",
+  "@homeSectionAboutHiRes": {
+    "description": "Edit Home: what the Hi-Res in your Library section shows"
+  },
+  "homeSectionAboutMixes": "Daily mixes of your own songs",
+  "@homeSectionAboutMixes": {
+    "description": "Edit Home: what the Mixes for you section shows"
+  },
+  "homeSectionAboutRecentlyAdded": "The newest songs in your Library",
+  "@homeSectionAboutRecentlyAdded": {
+    "description": "Edit Home: what the Recently added section shows"
+  },
+  "homeSectionAboutUnfinished": "Wishlist songs, albums missing songs and failed downloads",
+  "@homeSectionAboutUnfinished": {
+    "description": "Edit Home: what the Finish your collection section shows"
+  },
+  "homeSectionAboutNewReleases": "New music from your favorite artists",
+  "@homeSectionAboutNewReleases": {
+    "description": "Edit Home: what the new releases section shows"
+  },
+  "homeSectionAboutOnRepeat": "Your most played songs, or Library albums while listening is not recorded",
+  "@homeSectionAboutOnRepeat": {
+    "description": "Edit Home: what the On repeat section shows"
+  },
+  "homeReset": "Reset Home",
+  "@homeReset": {
+    "description": "Action on the Edit Home page and title of its confirmation"
+  },
+  "homeResetMessage": "Home's sections go back to the order they came in and to showing or hiding as they did at first, and the original shortcuts return. What you pinned stays.",
+  "@homeResetMessage": {
+    "description": "Confirmation message before Home's sections are reset"
   },
   "artistUpcomingConcerts": "Upcoming Concerts",
   "artistAllUpcomingConcerts": "All Upcoming Concerts",
@@ -9891,6 +10806,16 @@
   "autoMixPitch": "Pitch (semitones)",
   "autoMixEcho": "Echo",
   "autoMixLowPass": "Muffled filter",
+  "autoMixMatching": "Beat matching",
+  "@autoMixMatching": {
+    "description": "AutoMix setting: how readily two songs are mixed on their beats instead of crossfaded"
+  },
+  "autoMixMatchingStandard": "Standard",
+  "autoMixMatchingStandardHint": "Only songs with a clear beat",
+  "autoMixMatchingMore": "More often",
+  "autoMixMatchingMoreHint": "Also songs with a less clear beat",
+  "autoMixMatchingMost": "Most often",
+  "autoMixMatchingMostHint": "As many songs as possible. A mix can sometimes sound off.",
   "autoMixMixing": "Mixing",
   "autoMixCrossfading": "Crossfade",
   "playbackAutomation": "Automatic playback",
@@ -9945,7 +10870,7 @@
   "appearanceCustomFontInvalid": "Could not load this font. Choose a valid TTF or OTF file up to 10 MB.",
   "appearanceCustomFontReset": "Use theme font",
   "equalizerTitle": "Equalizer",
-  "equalizerDescription": "5–31 bands, tone controls, preamp and dynamics",
+  "equalizerDescription": "5–31 bands or parametric filters, preamp and dynamics",
   "equalizerEnable": "Enable equalizer",
   "equalizerBands": "Bands",
   "equalizerTone": "Tone & stereo",
@@ -9969,7 +10894,7 @@
   "equalizerPresetName": "Preset name",
   "equalizerImport": "Import preset",
   "equalizerExport": "Share preset",
-  "equalizerImportInvalid": "Choose a valid Mornye equalizer preset (JSON, up to 64 KB).",
+  "equalizerImportInvalid": "Choose a Mornye equalizer preset (JSON) or a filter list (text), up to 64 KB.",
   "equalizerSaved": "Preset saved",
   "equalizerResetTitle": "Reset equalizer?",
   "equalizerResetDescription": "Restore a flat curve, default tone and dynamics settings. Saved presets are kept.",
@@ -9980,6 +10905,49 @@
   "equalizerDeletePreset": "Delete preset",
   "equalizerCustom": "Custom",
   "equalizerManagePresets": "Manage presets",
+  "equalizerModeGraphic": "Graphic",
+  "equalizerModeParametric": "Parametric",
+  "equalizerFilters": "Filters",
+  "equalizerFilterCount": "{count, plural, =1{1 filter} other{{count} filters}}",
+  "@equalizerFilterCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "equalizerFilterNumber": "Filter {number}",
+  "@equalizerFilterNumber": {
+    "placeholders": {
+      "number": {
+        "type": "int"
+      }
+    }
+  },
+  "equalizerAddFilter": "Add filter",
+  "equalizerRemoveFilter": "Remove filter",
+  "equalizerFiltersEmpty": "No filters yet. Add one, or import a filter list.",
+  "equalizerFilterPeak": "Peak",
+  "equalizerFilterLowShelf": "Low shelf",
+  "equalizerFilterHighShelf": "High shelf",
+  "equalizerFilterFrequency": "Frequency",
+  "equalizerFilterGain": "Gain",
+  "equalizerFilterQ": "Q",
+  "@equalizerFilterQ": {
+    "description": "The quality factor (width) of a parametric equalizer filter; keep the letter Q"
+  },
+  "equalizerFilterTypeValue": "Type the value",
+  "equalizerNeedsEngine": "Parametric filters play through the new playback engine. Turn it on to hear them. Applies from the next song.",
+  "equalizerNeedsEngineAction": "Turn on",
+  "equalizerExportFilters": "Share filter list",
+  "equalizerImportSkipped": "{count, plural, =1{Imported. 1 filter of an unsupported kind was left out.} other{Imported. {count} filters of an unsupported kind were left out.}}",
+  "@equalizerImportSkipped": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
   "lyricsShareTitle": "Share lyrics",
   "@lyricsShareTitle": {
     "description": "Screen that turns selected lyric lines into an image for stories"
@@ -10006,6 +10974,43 @@
   "lyricsShareBackgroundColor": "Cover color",
   "lyricsShareBackgroundDark": "Dark",
   "lyricsShareBackgroundLight": "Light",
+  "lyricsSharePaneLines": "Lyrics",
+  "@lyricsSharePaneLines": {
+    "description": "Share lyrics screen: shows the lines to pick for the card"
+  },
+  "lyricsSharePaneStyle": "Style",
+  "@lyricsSharePaneStyle": {
+    "description": "Share lyrics screen: shows the choices for how the card looks"
+  },
+  "lyricsShareBackground": "Background",
+  "lyricsShareShape": "Shape",
+  "@lyricsShareShape": {
+    "description": "Share lyrics screen: the proportions of the card"
+  },
+  "lyricsShareShapeStory": "Story",
+  "@lyricsShareShapeStory": {
+    "description": "Lyrics card shape: tall, for a story"
+  },
+  "lyricsShareShapeSquare": "Square",
+  "lyricsShareShapeWide": "Wide",
+  "lyricsShareTextSize": "Text size",
+  "lyricsShareTextSmall": "Small",
+  "lyricsShareTextAuto": "Auto",
+  "@lyricsShareTextAuto": {
+    "description": "Lyrics card text size: chosen from the length of the quote"
+  },
+  "lyricsShareTextLarge": "Large",
+  "lyricsShareAlign": "Alignment",
+  "lyricsShareAlignSide": "Side",
+  "@lyricsShareAlignSide": {
+    "description": "Lyrics card alignment: lines start at the side they read from (left for left-to-right text)"
+  },
+  "lyricsShareAlignCenter": "Center",
+  "lyricsShareSave": "Save",
+  "@lyricsShareSave": {
+    "description": "Button that saves the lyrics card as an image file"
+  },
+  "lyricsShareSaved": "Lyrics card saved",
   "audioInfoTitle": "Audio info",
   "@audioInfoTitle": {
     "description": "Sheet with technical details of the playing track, opened from the quality badge"
@@ -10115,6 +11120,10 @@
   "audioInfoBitPerfectUnverified": "Not verified",
   "audioInfoBitPerfectProcessed": "No, audio processing is active",
   "audioInfoBitPerfectLossy": "No, decoded from a lossy source",
+  "audioInfoBitPerfectResampled": "No, resampled to a rate the DAC accepts",
+  "@audioInfoBitPerfectResampled": {
+    "description": "Audio info sheet, Bit-perfect row: the USB DAC refused the song's sample rate, so the app converts the song to another rate"
+  },
   "audioInfoDevice": "Device",
   "audioInfoDeviceType": "{type, select, speaker{Phone speaker} earpiece{Earpiece} wired_headphones{Wired headphones} wired_headset{Wired headset} line{Line out} bluetooth{Bluetooth} bluetooth_le{Bluetooth LE Audio} usb{USB audio} usb_headset{USB headset} hdmi{HDMI} dock{Dock} cast{Cast} hearing_aid{Hearing aid} airplay{AirPlay} car{Car audio} other{Other}}",
   "@audioInfoDeviceType": {
@@ -11782,16 +12791,49 @@
   "listenBrainzReauthenticate": "Your ListenBrainz token no longer works. Connect again with a new token to resume scrobbling.",
   "audioOutputSystem": "This device and Bluetooth",
   "audioOutputCast": "Cast to TV",
-  "audioOutputCastDescription": "Google Cast devices on the same Wi-Fi network",
+  "audioOutputCastDescription": "{kinds} devices on the same Wi-Fi network",
+  "@audioOutputCastDescription": {
+    "description": "Under a Cast row and on the receiver sheet; kinds lists protocol names such as 'Google Cast, DLNA and FCast'",
+    "placeholders": {
+      "kinds": {
+        "type": "String"
+      }
+    }
+  },
+  "audioOutputCastOther": "Other TVs and speakers",
+  "@audioOutputCastOther": {
+    "description": "Android Audio output row, and the title of its sheet, for receivers that are not Google Cast"
+  },
+  "audioOutputCastKindList": "{first} and {last}",
+  "@audioOutputCastKindList": {
+    "description": "Joins the last protocol name to the others in a list such as 'Google Cast, DLNA and FCast'",
+    "placeholders": {
+      "first": {
+        "type": "String"
+      },
+      "last": {
+        "type": "String"
+      }
+    }
+  },
   "audioOutputStopCasting": "Stop casting",
   "audioOutputCastUnavailable": "Unable to open Google Cast. Check Google Play services and local network access.",
+  "audioOutputCastNetworkUnavailable": "Unable to reach cast devices. Check local network access.",
+  "@audioOutputCastNetworkUnavailable": {
+    "description": "Snackbar when the app's own receiver list or Stop casting fails"
+  },
   "audioOutputAirPlay": "AirPlay and Bluetooth",
   "@audioOutputAirPlay": {
     "description": "iOS Audio output sheet row that opens the system picker for AirPlay, Bluetooth and this iPhone"
   },
-  "audioOutputCastSearching": "Looking for Google Cast devices…",
+  "audioOutputCastSearching": "Looking for {kinds} devices…",
   "@audioOutputCastSearching": {
-    "description": "Shown in the Cast device picker on iOS and desktop while no receiver has been found on the network yet"
+    "description": "Shown on the receiver sheet while no receiver has been found on the network yet; kinds lists protocol names",
+    "placeholders": {
+      "kinds": {
+        "type": "String"
+      }
+    }
   },
   "audioOutputCastConnectFailed": "Could not connect to {device}",
   "@audioOutputCastConnectFailed": {
@@ -12025,5 +13067,43 @@
   "lyricsEditLineActions": "Line actions",
   "lyricsEditSaved": "Lyrics saved",
   "lyricsEditSaveFailed": "Couldn't save the lyrics to this file",
-  "lyricsEditReadOnly": "Lyrics can't be saved to this song's file"
+  "lyricsEditReadOnly": "Lyrics can't be saved to this song's file",
+  "linkMetadataUpdateTitle": "Update metadata",
+  "@linkMetadataUpdateTitle": {"description": "Mornye Link settings row and page title: brings tag changes made on a connected device to the songs this phone saved from it"},
+  "linkMetadataUpdateSubtitle": "Bring tag changes on {name} to the songs saved from it",
+  "@linkMetadataUpdateSubtitle": {"description": "Subtitle of the Update metadata row on the Mornye Link page; name is the connected device", "placeholders": {"name": {"type": "String"}}},
+  "linkMetadataUpdateDescription": "Songs saved on this phone whose details are different on {name}. Choose what to bring over. Nothing changes until you update.",
+  "@linkMetadataUpdateDescription": {"description": "Text under the title of the Update metadata page", "placeholders": {"name": {"type": "String"}}},
+  "linkMetadataUpdateComparing": "Comparing with {name}…",
+  "@linkMetadataUpdateComparing": {"description": "Shown while the phone reads the connected device's songs to compare them with the saved copies", "placeholders": {"name": {"type": "String"}}},
+  "linkMetadataUpdateFailedTitle": "Couldn't compare with {name}",
+  "@linkMetadataUpdateFailedTitle": {"placeholders": {"name": {"type": "String"}}},
+  "linkMetadataUpdateFailedMessage": "Check that {name} is still connected, then try again.",
+  "@linkMetadataUpdateFailedMessage": {"placeholders": {"name": {"type": "String"}}},
+  "linkMetadataUpdateNoneTitle": "Everything matches",
+  "@linkMetadataUpdateNoneTitle": {"description": "Update metadata page when no saved song differs from the connected device"},
+  "linkMetadataUpdateNoneMessage": "The songs saved from {name} have the same details as on {name}.",
+  "@linkMetadataUpdateNoneMessage": {"placeholders": {"name": {"type": "String"}}},
+  "linkMetadataUpdateDiffers": "{count, plural, =1{1 detail differs} other{{count} details differ}}",
+  "@linkMetadataUpdateDiffers": {"description": "How many tags of a saved song differ from the connected device", "placeholders": {"count": {"type": "int"}}},
+  "linkMetadataUpdateChosen": "{chosen} of {count} chosen",
+  "@linkMetadataUpdateChosen": {"description": "Shown after the difference count when only some of a song's differences will be updated", "placeholders": {"chosen": {"type": "int"}, "count": {"type": "int"}}},
+  "linkMetadataUpdateApply": "{count, plural, =1{Update 1 song} other{Update {count} songs}}",
+  "@linkMetadataUpdateApply": {"description": "Button that writes the chosen tags into the saved songs", "placeholders": {"count": {"type": "int"}}},
+  "linkMetadataUpdateUpdating": "Updating {done} of {total}…",
+  "@linkMetadataUpdateUpdating": {"placeholders": {"done": {"type": "int"}, "total": {"type": "int"}}},
+  "linkMetadataUpdateResult": "{count, plural, =0{No songs were updated} =1{Updated 1 song} other{Updated {count} songs}}",
+  "@linkMetadataUpdateResult": {"description": "Message after updating saved songs", "placeholders": {"count": {"type": "int"}}},
+  "linkMetadataUpdateResultFailed": "{count, plural, =1{1 song couldn't be updated} other{{count} songs couldn't be updated}}",
+  "@linkMetadataUpdateResultFailed": {"description": "Added to the result message when some songs failed", "placeholders": {"count": {"type": "int"}}},
+  "linkMetadataUpdateSelectAll": "Select all",
+  "linkMetadataUpdateSelectNone": "Select none",
+  "linkMetadataUpdateOnPhone": "On this phone: {value}",
+  "@linkMetadataUpdateOnPhone": {"description": "A saved song's current value of one tag", "placeholders": {"value": {"type": "String"}}},
+  "linkMetadataUpdateOnHost": "On {name}: {value}",
+  "@linkMetadataUpdateOnHost": {"description": "The connected device's value of one tag, which updating writes", "placeholders": {"name": {"type": "String"}, "value": {"type": "String"}}},
+  "linkMetadataUpdateEmpty": "Empty",
+  "@linkMetadataUpdateEmpty": {"description": "Shown for a tag the saved song does not have"},
+  "linkMetadataFieldYear": "Year",
+  "@linkMetadataFieldYear": {"description": "Tag name: release year"}
 }

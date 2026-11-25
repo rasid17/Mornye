@@ -96,6 +96,8 @@ class _WholeBoxMask extends StatelessWidget {
             curve: motion.curve,
             child: Hero(
               tag: kNowPlayingArtworkHeroTag,
+              curve: Curves.linear,
+              transitionOnUserGestures: true,
               child: ShaderMask(
                 blendMode: BlendMode.dstIn,
                 shaderCallback: (bounds) => const LinearGradient(
@@ -385,9 +387,16 @@ void main() {
       return pixels.sublist((y * 160 + x) * 4, (y * 160 + x) * 4 + 4);
     }
 
-    await tester.pump(const Duration(milliseconds: 390));
+    // Frames that come on time: one long step would read as a late frame.
+    Future<void> advance(int milliseconds) async {
+      for (var left = milliseconds; left > 0; left -= 16) {
+        await tester.pump(Duration(milliseconds: left < 16 ? left : 16));
+      }
+    }
+
+    await advance(390);
     final flying = await fadePixel();
-    await tester.pump(const Duration(milliseconds: 50));
+    await advance(50);
     final settled = await fadePixel();
     for (var channel = 0; channel < 4; channel++) {
       expect(flying[channel], closeTo(settled[channel], 5));
@@ -582,6 +591,24 @@ void main() {
     expect(
       clip.depthFirstIterateChildren().whereType<PictureLayer>(),
       isNotEmpty,
+    );
+
+    // A longer Cover fade starts the band higher up the cover.
+    final long = (await mask(
+      (item, showArtwork) => MaterialPlayerBackdrop(
+        mediaItem: item,
+        colorScheme: _scheme,
+        showArtwork: showArtwork,
+        fadeStart: 0.608,
+      ),
+    )).maskRect!;
+    expect(long.bottom, box.bottom);
+    expect(
+      long.top * dpr,
+      inInclusiveRange(
+        box.height * 0.608 * dpr - 2,
+        box.height * 0.608 * dpr - 1,
+      ),
     );
   });
 

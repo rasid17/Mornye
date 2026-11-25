@@ -15,15 +15,33 @@ import 'package:mornye/widgets/settings_group.dart';
 
 /// How a [TrackCard] paints its container.
 enum TrackCardStyle {
-  /// Filled card surface. Used where rows are discrete objects the user acts
-  /// on individually: the download queue, history, the local library.
+  /// Filled card surface: the Library, the download queue, history, and in
+  /// Material every song list (see [collectionTrackCardStyle]).
   filled,
 
-  /// Transparent container. Used inside a collection that already has its own
-  /// header and reads as one continuous list: album, playlist and folder track
-  /// lists.
+  /// Transparent container: Mornye song lists, and rows inside a surface
+  /// that is already filled.
   flat,
 }
+
+/// The style of a song row under a collection's header (album, playlist,
+/// mix): filled in Material, where a [TrackCardSegment] joins the rows as in
+/// the Library, and flat in Mornye.
+TrackCardStyle collectionTrackCardStyle(BuildContext context) =>
+    context.isMornye ? TrackCardStyle.flat : TrackCardStyle.filled;
+
+/// Space between a collection header and the Material run of rows under it,
+/// which would otherwise start at the header's edge. Flat rows need none.
+double collectionRunTopGap(BuildContext context) =>
+    context.isMornye ? 0 : context.tokens.gapMd;
+
+/// Start inset of a title set above a Material run of rows: a step inside
+/// the run's edge, where the Library's date and letter headers sit.
+const double connectedRunTitleInset = 20;
+
+/// End inset of a control beside such a title, which puts it in line with
+/// the trailing controls of the rows.
+const double connectedRunTrailingInset = 28;
 
 /// Marks a filled [TrackCard] as one row of a run of cards, so the Material
 /// theme draws the run as an expressive connected list: 2dp apart, large
@@ -214,7 +232,7 @@ class TrackCard extends StatelessWidget {
     // Material selection and the current track use solid roles. A selected
     // current row keeps the selection fill and shows its state through the
     // shape, the glyph and the title weight.
-    final Color? cardColor;
+    final Color cardColor;
     final Color? contentColor;
     if (isSelected) {
       cardColor = material
@@ -238,8 +256,9 @@ class TrackCard extends StatelessWidget {
               .withValues(alpha: 0);
       contentColor = null;
     } else {
-      // The card theme's tone, which the expressive card does not read.
-      cardColor = theme.cardTheme.color;
+      // The fill of every connected list, so a run of rows reads the same
+      // whether it holds songs, folders, artists or settings.
+      cardColor = settingsGroupColor(context);
       contentColor = null;
     }
     // Text without a colour of its own in the leading slot or the subtitle
@@ -249,7 +268,7 @@ class TrackCard extends StatelessWidget {
     );
     // Trailing controls sit directly on the fill: their content roles take
     // its content colour, and a filled control inverts against it.
-    final trailingTheme = contentColor == null || cardColor == null
+    final trailingTheme = contentColor == null
         ? theme
         : theme.copyWith(
             colorScheme: colorScheme.copyWith(
@@ -261,8 +280,8 @@ class TrackCard extends StatelessWidget {
           );
 
     // The current row's shapes morph on the spatial spring; reduced motion
-    // switches them in place. A clip applies only while the row is, or is
-    // leaving, the current track.
+    // switches them in place. Non-current rows allocate no AnimationController
+    // or Ticker while keeping ClipPath in place so ink ripples never remount.
     final shapeMotion = AppMotion.spatial(
       context,
       const AppMotionSpec(Duration.zero, Curves.linear),
@@ -273,22 +292,13 @@ class TrackCard extends StatelessWidget {
       required ShapeBorder from,
       required ShapeBorder to,
       EdgeInsets inset = EdgeInsets.zero,
-    }) => TweenAnimationBuilder<double>(
-      tween: Tween(end: current ? 1 : 0),
-      duration: shapeMotion.duration,
-      curve: shapeMotion.curve,
-      builder: (context, t, child) {
-        final progress = t.clamp(0.0, 1.0);
-        return ClipPath(
-          clipper: _InsetShapeClipper(
-            shape: ShapeBorder.lerp(from, to, progress)!,
-            inset: inset,
-            textDirection: textDirection,
-          ),
-          clipBehavior: progress > 0 ? Clip.antiAlias : Clip.none,
-          child: child,
-        );
-      },
+    }) => _LazyShapeMorph(
+      active: current,
+      motion: shapeMotion,
+      from: from,
+      to: to,
+      inset: inset,
+      textDirection: textDirection,
       child: child,
     );
 
@@ -305,6 +315,7 @@ class TrackCard extends StatelessWidget {
     final card = AppContentCard(
       elevation: 0,
       mornyeSurface: false,
+      expressiveSurface: false,
       margin: cardMargin,
       color: cardColor,
       clipBehavior: Clip.antiAlias,
@@ -494,6 +505,7 @@ class _CurrentTrackArtworkThemeState extends State<_CurrentTrackArtworkTheme> {
   @override
   Widget build(BuildContext context) => PlayerArtworkTheme(
     artUri: widget.current ? _artUri : null,
+    animates: false,
     child: widget.child,
   );
 }
@@ -717,6 +729,114 @@ class TrackCoverPlaceholder extends StatelessWidget {
         color: colorScheme.onSurfaceVariant,
         size: size == null ? null : size! * 0.45,
       ),
+    );
+  }
+}
+
+/// Morphs a row's clip shape between [from] and [to] without creating an
+/// [AnimationController] or [Ticker] for non-current rows, while keeping
+/// [ClipPath] at a stable tree slot so ink ripples never remount.
+class _LazyShapeMorph extends StatefulWidget {
+  const _LazyShapeMorph({
+    required this.active,
+    required this.motion,
+    required this.from,
+    required this.to,
+    required this.inset,
+    required this.textDirection,
+    required this.child,
+  });
+
+  final bool active;
+  final AppMotionSpec motion;
+  final ShapeBorder from;
+  final ShapeBorder to;
+  final EdgeInsets inset;
+  final TextDirection textDirection;
+  final Widget child;
+
+  @override
+  State<_LazyShapeMorph> createState() => _LazyShapeMorphState();
+}
+
+// Each morph makes a new controller, so this provides more than one ticker.
+class _LazyShapeMorphState extends State<_LazyShapeMorph>
+    with TickerProviderStateMixin {
+  AnimationController? _controller;
+  late double _resting = widget.active ? 1.0 : 0.0;
+
+  @override
+  void didUpdateWidget(_LazyShapeMorph oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.active == widget.active) return;
+    final target = widget.active ? 1.0 : 0.0;
+    if (widget.motion.duration == Duration.zero) {
+      _disposeController();
+      _resting = target;
+      return;
+    }
+    final controller = _controller ??= AnimationController(
+      vsync: this,
+      value: _resting,
+    )..addStatusListener(_onStatus);
+    controller.animateTo(
+      target,
+      duration: widget.motion.duration,
+      curve: widget.motion.curve,
+    );
+  }
+
+  void _onStatus(AnimationStatus status) {
+    if (status == AnimationStatus.dismissed && !widget.active) {
+      _resting = 0.0;
+      _disposeController();
+      if (mounted) setState(() {});
+    } else if (status == AnimationStatus.completed && widget.active) {
+      _resting = 1.0;
+      _disposeController();
+      if (mounted) setState(() {});
+    }
+  }
+
+  void _disposeController() {
+    final controller = _controller;
+    if (controller == null) return;
+    _controller = null;
+    controller
+      ..removeStatusListener(_onStatus)
+      ..dispose();
+  }
+
+  @override
+  void dispose() {
+    _disposeController();
+    super.dispose();
+  }
+
+  Widget _clip(double progress) {
+    if (progress <= 0) {
+      return ClipPath(clipBehavior: Clip.none, child: widget.child);
+    }
+    return ClipPath(
+      clipper: _InsetShapeClipper(
+        shape: progress >= 1
+            ? widget.to
+            : ShapeBorder.lerp(widget.from, widget.to, progress)!,
+        inset: widget.inset,
+        textDirection: widget.textDirection,
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: widget.child,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = _controller;
+    if (controller == null) return _clip(_resting);
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) => _clip(controller.value.clamp(0.0, 1.0)),
     );
   }
 }

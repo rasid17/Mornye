@@ -32,12 +32,39 @@ extension _QueueTabFilterWidgets on _QueueTabState {
     );
   }
 
+  DownloadHistoryItem? _lookupCompletionBridgeHistory(
+    DownloadItem item,
+    DownloadHistoryState historyState,
+    List<DownloadHistoryItem> inMemoryHistoryItems,
+  ) {
+    final filePath = item.filePath?.trim();
+    if (filePath != null && filePath.isNotEmpty) {
+      final hit = historyState.getByFilePath(filePath);
+      if (hit != null) return hit;
+    }
+    final byId = historyState.getById(item.id);
+    if (byId != null) return byId;
+    final trackId = item.track.id.trim();
+    if (trackId.isNotEmpty) {
+      final byTrack = historyState.getBySpotifyId(trackId);
+      if (byTrack != null) return byTrack;
+    }
+    final isrc = item.track.isrc?.trim();
+    if (isrc != null && isrc.isNotEmpty) {
+      final byIsrc = historyState.getByIsrc(isrc);
+      if (byIsrc != null) return byIsrc;
+    }
+    return _historyItemForCompletionBridge(item, inMemoryHistoryItems);
+  }
+
   Widget _buildFilterContent({
     required BuildContext context,
     required ColorScheme colorScheme,
     required String filterMode,
     required String historyViewMode,
     required bool hasQueueItems,
+    required List<String> notCompletedItemIds,
+    required bool listeningStatisticsEnabled,
     required _FilterContentData filterData,
     required LibraryCollectionsState collectionState,
     required bool hasMoreLibrary,
@@ -57,27 +84,24 @@ extension _QueueTabFilterWidgets on _QueueTabState {
 
     final activeDownloadIds = !hasQueueItems || filterMode == 'albums'
         ? const <String>[]
-        : ref
-              .watch(
-                downloadQueueLookupProvider.select(
-                  (lookup) => lookup.notCompletedItemIds,
-                ),
-              )
-              .reversed
-              .toList(growable: false);
+        : notCompletedItemIds.reversed.toList(growable: false);
 
-    final bridgeHistoryById = <String, DownloadHistoryItem?>{
-      for (final entry in _completionBridge.entries)
-        entry.key: _historyItemForCompletionBridge(
-          entry.value,
-          inMemoryHistoryItems,
-        ),
-    };
+    Map<String, DownloadHistoryItem?> bridgeHistoryById = const {};
     List<String> bridgeIds = const [];
     if (hasQueueItems &&
         filterMode != 'albums' &&
         _completionBridge.isNotEmpty) {
+      final historyState = ref.read(downloadHistoryProvider);
+      bridgeHistoryById = <String, DownloadHistoryItem?>{
+        for (final entry in _completionBridge.entries)
+          entry.key: _lookupCompletionBridgeHistory(
+            entry.value,
+            historyState,
+            inMemoryHistoryItems,
+          ),
+      };
       final libIdSet = _loadedSongs(filterMode, allFilteredUnifiedItems).ids;
+      final activeDownloadIdSet = activeDownloadIds.toSet();
       final now = DateTime.now();
       final stale = <String>[];
       final pending = <String>[];
@@ -92,7 +116,7 @@ extension _QueueTabFilterWidgets on _QueueTabState {
             addedAt == null || now.difference(addedAt).inSeconds >= 6;
         if (shouldRetainCompletionBridge(
           queueItemExists: queueItems.containsKey(id),
-          isRequeued: activeDownloadIds.contains(id),
+          isRequeued: activeDownloadIdSet.contains(id),
           hasActiveDownloads: hasActiveDownloads,
           libraryRowLanded: landed,
           hasHistoryItem: historyItem != null,
@@ -145,7 +169,6 @@ extension _QueueTabFilterWidgets on _QueueTabState {
                   context,
                   embeddedPath,
                   cacheWidth: targetSize,
-                  cacheHeight: targetSize,
                 );
               }
               if (coverUrl != null && coverUrl.isNotEmpty) {
@@ -153,7 +176,6 @@ extension _QueueTabFilterWidgets on _QueueTabState {
                   ResizeImage(
                     cachedCoverImageProvider(coverUrl),
                     width: targetSize,
-                    height: targetSize,
                   ),
                   context,
                 );
@@ -224,29 +246,43 @@ extension _QueueTabFilterWidgets on _QueueTabState {
 
     // Indexes into collectionState.playlists, name-filtered by the search
     // query, for the 'playlists' view.
-    final playlistIndexes = <int>[];
+    final List<int> playlistIndexes;
     if (filterMode == 'playlists') {
       final query = _searchQuery.trim().toLowerCase();
-      for (var i = 0; i < collectionState.playlists.length; i++) {
-        if (query.isEmpty ||
-            collectionState.playlists[i].name.toLowerCase().contains(query)) {
-          playlistIndexes.add(i);
+      if (identical(_playlistIndexesSource, collectionState.playlists) &&
+          _playlistIndexesQuery == query &&
+          _playlistIndexesSort == _sortMode) {
+        playlistIndexes = _playlistIndexesCache;
+      } else {
+        final built = <int>[];
+        for (var i = 0; i < collectionState.playlists.length; i++) {
+          if (query.isEmpty ||
+              collectionState.playlists[i].name.toLowerCase().contains(query)) {
+            built.add(i);
+          }
         }
+        built.sort((a, b) {
+          final first = collectionState.playlists[a];
+          final second = collectionState.playlists[b];
+          return switch (_sortMode) {
+            'a-z' => first.name.toLowerCase().compareTo(
+              second.name.toLowerCase(),
+            ),
+            'z-a' => second.name.toLowerCase().compareTo(
+              first.name.toLowerCase(),
+            ),
+            'oldest' => first.createdAt.compareTo(second.createdAt),
+            _ => second.updatedAt.compareTo(first.updatedAt),
+          };
+        });
+        _playlistIndexesSource = collectionState.playlists;
+        _playlistIndexesQuery = query;
+        _playlistIndexesSort = _sortMode;
+        _playlistIndexesCache = built;
+        playlistIndexes = built;
       }
-      playlistIndexes.sort((a, b) {
-        final first = collectionState.playlists[a];
-        final second = collectionState.playlists[b];
-        return switch (_sortMode) {
-          'a-z' => first.name.toLowerCase().compareTo(
-            second.name.toLowerCase(),
-          ),
-          'z-a' => second.name.toLowerCase().compareTo(
-            first.name.toLowerCase(),
-          ),
-          'oldest' => first.createdAt.compareTo(second.createdAt),
-          _ => second.updatedAt.compareTo(first.updatedAt),
-        };
-      });
+    } else {
+      playlistIndexes = const <int>[];
     }
 
     Widget leadGridCell(int index) {
@@ -314,7 +350,21 @@ extension _QueueTabFilterWidgets on _QueueTabState {
 
     // Songs drag onto playlists; singles do not.
     final playlistDrag = filterMode == 'all';
+    // A slide keeps up with songs that load while it scrolls.
+    if (_slideSelect.isActive &&
+        _slideSelectFilter == filterMode &&
+        !identical(_slideSelectItems, filteredUnifiedItems)) {
+      _slideSelectItems = filteredUnifiedItems;
+      _slideSelectItemIds = [for (final item in filteredUnifiedItems) item.id];
+    }
     Widget trackTile(UnifiedLibraryItem item, {required bool grid}) {
+      // The first hold, and a hold on a selected song, drags to a playlist;
+      // any other hold selects and follows the finger over more songs.
+      final dragsToPlaylist =
+          playlistDrag &&
+          (isDesktopPlatform ||
+              !_isSelectionMode ||
+              _selectedIds.contains(item.id));
       final tile = (grid ? _buildUnifiedGridItem : _buildUnifiedLibraryItem)(
         context,
         item,
@@ -325,22 +375,34 @@ extension _QueueTabFilterWidgets on _QueueTabState {
         localNavigationItems: localNavigationItems,
         localNavigationIndex: localNavigationIndexByUnifiedId[item.id],
         libraryItems: filteredUnifiedItems,
-        playlistDragEnabled: playlistDrag,
+        onLongPress: dragsToPlaylist
+            ? null
+            : () => _holdToSelect(filterMode, item, filteredUnifiedItems),
       );
-      if (!playlistDrag) return tile;
-      return LibraryPlaylistDragSource<UnifiedLibraryItem>(
-        data: item,
-        onSelect: () => _selectDraggedTrack(item, filteredUnifiedItems),
-        onDragStarted: _startLibraryTrackDrag,
-        onDragEnd: _endLibraryTrackDrag,
-        feedbackBuilder: (context) =>
-            _buildDragFeedback(context, item, colorScheme),
-        child: tile,
+      return DragSelectItem(
+        controller: _slideSelect,
+        id: item.id,
+        child: !playlistDrag
+            ? tile
+            : LibraryPlaylistDragSource<UnifiedLibraryItem>(
+                data: item,
+                enabled: dragsToPlaylist,
+                onSelect: () => _selectDraggedTrack(item, filteredUnifiedItems),
+                onDragStarted: _startLibraryTrackDrag,
+                onDragEnd: _endLibraryTrackDrag,
+                feedbackBuilder: (context) =>
+                    _buildDragFeedback(context, item, colorScheme),
+                child: tile,
+              ),
       );
     }
 
-    // Songs, not Singles, offer Shuffle while the tools show.
-    final showShuffle = filterMode == 'all' && !_isSelectionMode;
+    // Songs, not Singles, offer Shuffle while the tools show. Another app
+    // takes one song at a time, so there is nothing to shuffle there.
+    final showShuffle =
+        filterMode == 'all' &&
+        !_isSelectionMode &&
+        ref.watch(playerUiEnabledProvider);
     void shuffleSongs() => _shuffleLibrarySongs(
       allFilteredUnifiedItems,
       complete: allFilteredUnifiedItems.length >= totalTrackCount,
@@ -390,9 +452,7 @@ extension _QueueTabFilterWidgets on _QueueTabState {
             _searchQuery.isEmpty &&
             !context.isMornye &&
             !_isSelectionMode &&
-            ref.watch(
-              settingsProvider.select((s) => s.listeningStatisticsEnabled),
-            ))
+            listeningStatisticsEnabled)
           SliverToBoxAdapter(
             child: ListeningRewindBanner(
               margin: EdgeInsets.fromLTRB(edge, 8, edge, 4),
@@ -871,9 +931,9 @@ extension _QueueTabFilterWidgets on _QueueTabState {
         // Every empty branch here means "you have not downloaded anything of
         // this kind yet", so the way forward is always search.
         action: ExpressiveButton(
-          onPressed: () => ShellNavigationService.requestTab(ShellTab.home),
+          onPressed: () => ShellNavigationService.requestTab(ShellTab.search),
           icon: const Icon(Icons.search),
-          child: Text(context.l10n.navHome),
+          child: Text(context.l10n.mornyeSearch),
         ),
       );
     }
@@ -901,7 +961,7 @@ extension _QueueTabFilterWidgets on _QueueTabState {
     ColorScheme colorScheme,
   ) {
     return ValueListenableBuilder<int>(
-      valueListenable: _embeddedCoverVersion,
+      valueListenable: _embeddedCoverListenable(album.sampleFilePath),
       builder: (context, _, child) {
         final embeddedCoverPath = _resolveDownloadedEmbeddedCoverPath(
           album.sampleFilePath,
@@ -936,6 +996,14 @@ extension _QueueTabFilterWidgets on _QueueTabState {
               : null,
           badgeIcon: Icons.music_note,
           coverUrl: album.coverUrl,
+          pin: HomePin.album(
+            source: 'downloaded',
+            albumKey: album.key,
+            name: album.albumName,
+            artist: album.artistName,
+            cover: album.coverUrl,
+            coverFile: album.sampleFilePath,
+          ),
           onTap: () => _navigateToDownloadedAlbum(album),
           onPlay: () => _playDownloadedAlbum(album),
         );
@@ -971,6 +1039,16 @@ extension _QueueTabFilterWidgets on _QueueTabState {
               )
             : null,
         badgeIcon: Icons.folder,
+        pin: album.albumKey.isEmpty
+            ? null
+            : HomePin.album(
+                source: 'local',
+                albumKey: album.albumKey,
+                name: album.albumName,
+                artist: album.artistName,
+                cover: album.coverPath,
+                coverFile: album.sampleFilePath,
+              ),
         onTap: () => _navigateToLocalAlbum(album),
         onPlay: () => _playLocalAlbum(album),
       ),
@@ -1002,6 +1080,7 @@ extension _QueueTabFilterWidgets on _QueueTabState {
     VoidCallback? onPlay,
     String? coverUrl,
     AlbumCompleteness? completeness,
+    HomePin? pin,
   }) {
     final completenessLabel = completeness == null
         ? null
@@ -1025,6 +1104,7 @@ extension _QueueTabFilterWidgets on _QueueTabState {
         ?completenessLabel,
       ].join('. '),
       child: DesktopContextMenuRegion(
+        touch: true,
         onContextMenu: (position) => showContextMenu(
           context,
           position: position,
@@ -1041,6 +1121,7 @@ extension _QueueTabFilterWidgets on _QueueTabState {
                   label: context.l10n.tooltipPlay,
                   onSelected: onPlay,
                 ),
+              if (pin != null) homePinMenuAction(context, ref, pin),
             ],
           ],
         ),
@@ -1173,17 +1254,18 @@ extension _QueueTabFilterWidgets on _QueueTabState {
   List<UnifiedLibraryItem> _selectedItemsFromAll(
     List<UnifiedLibraryItem> allItems,
   ) {
-    final itemsById = {for (final item in allItems) item.id: item};
+    Map<String, UnifiedLibraryItem>? itemsById;
+    for (final loaded in _loadedSongsByMode.values) {
+      if (identical(loaded.items, allItems)) {
+        itemsById = loaded.byId;
+        break;
+      }
+    }
+    itemsById ??= {for (final item in allItems) item.id: item};
     return _selectedIds
-        .map((id) => itemsById[id])
+        .map((id) => itemsById![id])
         .whereType<UnifiedLibraryItem>()
         .toList(growable: false);
-  }
-
-  bool _isLocalOnlySelection(List<UnifiedLibraryItem> allItems) {
-    final selectedItems = _selectedItemsFromAll(allItems);
-    return selectedItems.isNotEmpty &&
-        selectedItems.every((item) => item.localItem != null);
   }
 }
 
@@ -1192,7 +1274,10 @@ class _LoadedSongs {
   _LoadedSongs(this.items);
 
   final List<UnifiedLibraryItem> items;
-  late final Set<String> ids = {for (final item in items) item.id};
+  late final Map<String, UnifiedLibraryItem> byId = {
+    for (final item in items) item.id: item,
+  };
+  late final Set<String> ids = byId.keys.toSet();
 
   /// The songs without the pinned download rows, by the pinned row ids.
   (Set<String>, List<UnifiedLibraryItem>)? unpinned;

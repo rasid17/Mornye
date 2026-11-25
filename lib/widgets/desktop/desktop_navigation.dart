@@ -251,11 +251,17 @@ class DesktopShellLayout extends ConsumerWidget {
           shell: shell!,
           nowPlaying: nowPlaying,
         ),
-        child: Builder(builder: (context) => _shell(context, showPlayer)),
+        child: _WindowBreakpoints(
+          builder: (context, breakpoints) =>
+              _shell(context, showPlayer, breakpoints),
+        ),
       );
 
-  Widget _shell(BuildContext context, bool showPlayer) {
-    final width = MediaQuery.sizeOf(context).width;
+  Widget _shell(
+    BuildContext context,
+    bool showPlayer,
+    _ShellBreakpoints breakpoints,
+  ) {
     if (context.isMornye) {
       // The sidebar always shows, full height against the window's edges.
       return ColoredBox(
@@ -274,7 +280,7 @@ class DesktopShellLayout extends ConsumerWidget {
             Expanded(
               key: const ValueKey('desktop-content'),
               child: _DesktopContentArea(
-                windowWidth: width,
+                inspectorFitsBeside: breakpoints.besideFits,
                 body: body,
                 floatingPlayer: showPlayer ? playerBar : null,
                 showPlayer: showPlayer,
@@ -313,7 +319,7 @@ class DesktopShellLayout extends ConsumerWidget {
                       child: ValueListenableBuilder<bool>(
                         valueListenable: desktopSidebarCollapsed,
                         builder: (context, collapsed, _) {
-                          final wide = width >= desktopExpandedRailBreakpoint;
+                          final wide = breakpoints.wide;
                           return DesktopNavigationRail(
                             destinations: destinations,
                             selected: selected,
@@ -332,7 +338,7 @@ class DesktopShellLayout extends ConsumerWidget {
               ),
               Expanded(
                 child: _DesktopContentArea(
-                  windowWidth: width,
+                  inspectorFitsBeside: breakpoints.besideFits,
                   body: body,
                   showPlayer: showPlayer,
                   titleBarDrag: true,
@@ -396,6 +402,7 @@ class _NowPlayingTransitionState extends State<_NowPlayingTransition>
   double _exitFrom = 1;
   double _exitOpacity = 1;
   double _exitOffset = 0;
+  Curve _exitCurve = Easing.standardAccelerate;
 
   @override
   void didUpdateWidget(_NowPlayingTransition oldWidget) {
@@ -420,9 +427,14 @@ class _NowPlayingTransitionState extends State<_NowPlayingTransition>
       _exitFrom = _controller.value;
       _exitOpacity = _entranceOpacity(_exitFrom);
       _exitOffset = _entranceOffset(_exitFrom);
-      _controller.reverseDuration = context.isMornye
-          ? const Duration(milliseconds: 160)
-          : const Duration(milliseconds: 200);
+      _exitCurve = context.isMornye
+          ? MornyeMotion.effectsFast.curve
+          : Easing.standardAccelerate;
+      _controller.reverseDuration = MotionPace.duration(
+        context.isMornye
+            ? const Duration(milliseconds: 160)
+            : const Duration(milliseconds: 200),
+      );
       _controller.reverse();
     }
   }
@@ -448,8 +460,7 @@ class _NowPlayingTransitionState extends State<_NowPlayingTransition>
       final opacity = exiting
           ? _exitFrom <= 0
                 ? 0.0
-                : _exitOpacity *
-                      (1 - Curves.easeInCubic.transform(1 - t / _exitFrom))
+                : _exitOpacity * (1 - _exitCurve.transform(1 - t / _exitFrom))
           : _entranceOpacity(t);
       final offset = exiting ? _exitOffset : _entranceOffset(t);
       final covered = widget.open && _controller.isCompleted;
@@ -491,6 +502,48 @@ class _NowPlayingTransitionState extends State<_NowPlayingTransition>
   );
 }
 
+typedef _ShellBreakpoints = ({bool wide, bool besideFits});
+
+/// Builds the shell again only when the window crosses a breakpoint, so a
+/// resize frame does not build the sidebar, rail and inspectors again.
+class _WindowBreakpoints extends StatefulWidget {
+  const _WindowBreakpoints({required this.builder});
+
+  final Widget Function(BuildContext context, _ShellBreakpoints breakpoints)
+  builder;
+
+  @override
+  State<_WindowBreakpoints> createState() => _WindowBreakpointsState();
+}
+
+class _WindowBreakpointsState extends State<_WindowBreakpoints> {
+  _ShellBreakpoints? _breakpoints;
+  Widget? _shell;
+
+  @override
+  void didUpdateWidget(_WindowBreakpoints oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _shell = null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final width = MediaQuery.sizeOf(context).width;
+    final breakpoints = (
+      wide: width >= desktopExpandedRailBreakpoint,
+      besideFits: width >= desktopInspectorBesideBreakpoint,
+    );
+    if (breakpoints != _breakpoints) {
+      _breakpoints = breakpoints;
+      _shell = null;
+    }
+    // A Builder of its own, so the shell's other dependencies rebuild it.
+    return _shell ??= Builder(
+      builder: (context) => widget.builder(context, breakpoints),
+    );
+  }
+}
+
 /// Gives [child] the size of the space it lays out in, so width-based layout
 /// (centered columns, grids) measures the pane rather than the whole window.
 /// [bottomInset] becomes the bottom padding, which pages add after their
@@ -505,9 +558,14 @@ class _PaneMediaQuery extends StatelessWidget {
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
       final mediaQuery = MediaQuery.of(context);
+      final rtl = Directionality.of(context) == TextDirection.rtl;
       var data = mediaQuery
           .copyWith(size: Size(constraints.maxWidth, constraints.maxHeight))
-          .removePadding(removeLeft: true, removeBottom: true);
+          .removePadding(
+            removeLeft: !rtl,
+            removeRight: rtl,
+            removeBottom: true,
+          );
       if (bottomInset > 0) {
         data = data.copyWith(
           padding: data.padding.copyWith(bottom: bottomInset),
@@ -527,14 +585,15 @@ const double _capsuleBesideInspectorWidth = mornyeGlassInspectorWidth + 520;
 /// no shell search bar above them.
 class _DesktopContentArea extends StatelessWidget {
   const _DesktopContentArea({
-    required this.windowWidth,
+    required this.inspectorFitsBeside,
     required this.body,
     this.floatingPlayer,
     this.showPlayer = true,
     this.titleBarDrag = false,
   });
 
-  final double windowWidth;
+  /// Whether the window is wide enough for the inspector beside the pane.
+  final bool inspectorFitsBeside;
   final Widget body;
 
   /// The Mornye player capsule, floating over the bottom of the pane.
@@ -545,97 +604,103 @@ class _DesktopContentArea extends StatelessWidget {
   /// drag moves the window.
   final bool titleBarDrag;
 
+  static final Listenable _chromeListenable = Listenable.merge([
+    desktopInspectorPanel,
+    desktopWindowFullScreen,
+  ]);
+
   @override
   Widget build(BuildContext context) {
     final player = floatingPlayer;
     final playerInset = player == null ? 0.0 : DesktopPlayerBar.floatingInset;
     final mornye = context.isMornye;
+    final pages = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // A semantics container keeps the tab navigators'
+        // modal barriers from hiding the sidebar.
+        Expanded(
+          key: const ValueKey('desktop-pages'),
+          child: Semantics(
+            container: true,
+            child: _PaneMediaQuery(bottomInset: playerInset, child: body),
+          ),
+        ),
+      ],
+    );
     return ListenableBuilder(
-      listenable: Listenable.merge([
-        desktopInspectorPanel,
-        desktopWindowFullScreen,
-      ]),
+      listenable: _chromeListenable,
       builder: (context, _) {
         final panel = showPlayer ? desktopInspectorPanel.value : null;
-        final overlayInspector = desktopInspectorOverlays(
-          windowWidth,
+        final overlayInspector = desktopInspectorOverlaysWhen(
+          besideFits: inspectorFitsBeside,
           mornye: mornye,
         );
-        final content = LayoutBuilder(
-          builder: (context, pane) {
-            // Mornye's glass runs the window's height and the capsule moves
-            // beside it, while the pane has room for the two.
-            final beside =
-                mornye &&
-                overlayInspector &&
-                pane.maxWidth >= _capsuleBesideInspectorWidth;
-            final motion = desktopInspectorMotion(context);
-            return Stack(
-              fit: StackFit.expand,
-              children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    // A semantics container keeps the tab navigators'
-                    // modal barriers from hiding the sidebar.
-                    Expanded(
-                      key: const ValueKey('desktop-pages'),
-                      child: Semantics(
-                        container: true,
-                        child: _PaneMediaQuery(
-                          bottomInset: playerInset,
-                          child: body,
-                        ),
-                      ),
+        Widget buildContent(bool beside) {
+          final motion = desktopInspectorMotion(context);
+          final stack = Stack(
+            fit: StackFit.expand,
+            children: [
+              pages,
+              if (player != null)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: DesktopPlayerBar.floatingMargin,
+                  child: AnimatedPadding(
+                    duration: MediaQuery.disableAnimationsOf(context)
+                        ? Duration.zero
+                        : motion.duration,
+                    curve: motion.curve,
+                    padding: EdgeInsetsDirectional.only(
+                      end: beside && panel != null
+                          ? mornyeGlassInspectorWidth
+                          : 0,
                     ),
-                  ],
-                ),
-                if (player != null)
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: DesktopPlayerBar.floatingMargin,
-                    child: AnimatedPadding(
-                      duration: MediaQuery.disableAnimationsOf(context)
-                          ? Duration.zero
-                          : motion.duration,
-                      curve: motion.curve,
-                      padding: EdgeInsetsDirectional.only(
-                        end: beside && panel != null
-                            ? mornyeGlassInspectorWidth
-                            : 0,
-                      ),
-                      child: LayoutBuilder(
-                        builder: (context, constraints) => Center(
-                          child: SizedBox(
-                            width: DesktopPlayerBar.floatingWidth(
-                              constraints.maxWidth,
-                            ),
-                            child: player,
+                    child: LayoutBuilder(
+                      builder: (context, constraints) => Center(
+                        child: SizedBox(
+                          width: DesktopPlayerBar.floatingWidth(
+                            constraints.maxWidth,
                           ),
+                          child: player,
                         ),
                       ),
                     ),
                   ),
-                // A narrow window's inspector floats above the player.
-                PositionedDirectional(
-                  top: 0,
-                  bottom: beside ? 0 : playerInset,
-                  end: 0,
-                  width: mornye
-                      ? mornyeGlassInspectorWidth
-                      : desktopInspectorWidth,
-                  child: DesktopInspectorTransition(
-                    key: const ValueKey('desktop-inspector-overlay'),
-                    panel: overlayInspector ? panel : null,
-                    overlay: true,
-                    builder: (context, panel) =>
-                        DesktopInspector(panel: panel, overlay: true),
-                  ),
                 ),
-              ],
-            );
-          },
+              // A narrow window's inspector floats above the player.
+              PositionedDirectional(
+                top: 0,
+                bottom: beside ? 0 : playerInset,
+                end: 0,
+                width: mornye
+                    ? mornyeGlassInspectorWidth
+                    : desktopInspectorWidth,
+                child: DesktopInspectorTransition(
+                  key: const ValueKey('desktop-inspector-overlay'),
+                  panel: overlayInspector ? panel : null,
+                  overlay: true,
+                  builder: (context, panel) =>
+                      DesktopInspector(panel: panel, overlay: true),
+                ),
+              ),
+            ],
+          );
+          return stack;
+        }
+
+        // Mornye's glass runs the window's height and the capsule moves
+        // beside it, while the pane has room for the two.
+        Widget? besideContent;
+        Widget? stackedContent;
+        final content = LayoutBuilder(
+          builder: (context, pane) =>
+              mornye &&
+                  overlayInspector &&
+                  pane.maxWidth >= _capsuleBesideInspectorWidth
+              ? (besideContent ??= buildContent(true))
+              : (stackedContent ??= buildContent(false)),
         );
         // One structure for every state, so opening the inspector never
         // remounts the destinations.
@@ -758,7 +823,11 @@ class DesktopNavigationRail extends StatelessWidget {
                 label: Text('${destination.badgeCount}'),
                 child: AppIcon(destination.icon),
               ),
-              selectedIcon: AppIcon(destination.selectedIcon),
+              selectedIcon: Badge(
+                isLabelVisible: destination.badgeCount > 0,
+                label: Text('${destination.badgeCount}'),
+                child: AppIcon(destination.selectedIcon),
+              ),
               label: Text(destination.label),
             ),
         ],
@@ -778,87 +847,92 @@ class DesktopNavigationRail extends StatelessWidget {
       const AppMotionSpec(Duration.zero, Curves.linear),
     );
     final openLink = onOpenLibraryLink;
-    // One expansion value drives the width, every pill and every label, so
-    // the rail morphs continuously instead of swapping layouts at the end.
-    return TweenAnimationBuilder<double>(
-      tween: Tween(end: extended ? 1 : 0),
-      duration: motion.duration,
-      curve: motion.curve,
-      builder: (context, expansion, _) => ValueListenableBuilder<String?>(
-        valueListenable: desktopSidebarLink,
-        builder: (context, openId, _) {
-          // An open playlist takes the selection from Library, as a link
-          // does in the Mornye sidebar.
-          final linkId = openLink != null && selected == ShellTab.library
-              ? openId
-              : null;
-          Widget item(DesktopDestination destination) => _RailDestination(
-            key: ValueKey('desktop-rail:${destination.tab.name}'),
-            destination: destination,
-            selected: destination.tab == selected && linkId == null,
-            expansion: expansion,
-            onTap: () => _select(destination.tab),
+    // Centered over the collapsed rail, where it stays, in line with the
+    // destination icons. Made once, outside the expansion spring.
+    final menu = onToggleExtended == null
+        ? null
+        : SizedBox(
+            width: desktopCollapsedRailWidth,
+            height: 56,
+            child: Center(child: _menuButton(context)),
           );
-          final gap = lerpDouble(4, desktopRailItemGap, expansion)!;
-          final playlistsShown = (expansion * 2 - 1).clamp(0.0, 1.0);
-          return ColoredBox(
-            color: background,
-            child: SizedBox(
-              // The width stops at its ends while the pills and labels keep
-              // the spring: a rail growing past its width would narrow the
-              // content below its final size and flip its breakpoints twice.
-              width: lerpDouble(
-                desktopCollapsedRailWidth,
-                desktopSidebarWidth,
-                expansion.clamp(0.0, 1.0),
-              ),
-              child: ClipRect(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (onToggleExtended != null)
-                      // Centered over the collapsed rail, where it stays,
-                      // in line with the destination icons.
-                      SizedBox(
-                        width: desktopCollapsedRailWidth,
-                        height: 56,
-                        child: Center(child: _menuButton(context)),
-                      ),
-                    Expanded(
-                      child: SingleChildScrollView(
-                        padding: const EdgeInsets.only(top: 8, bottom: 8),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            for (final (index, destination)
-                                in primary.indexed) ...[
-                              if (index > 0) SizedBox(height: gap),
-                              item(destination),
-                            ],
-                            if (openLink != null && playlistsShown > 0)
-                              Opacity(
-                                opacity: playlistsShown,
-                                child: _RailPlaylists(
-                                  openId: linkId,
-                                  onOpen: openLink,
+    return ValueListenableBuilder<String?>(
+      valueListenable: desktopSidebarLink,
+      builder: (context, openId, _) {
+        // An open playlist takes the selection from Library, as a link
+        // does in the Mornye sidebar.
+        final linkId = openLink != null && selected == ShellTab.library
+            ? openId
+            : null;
+        // One expansion value drives the width, every pill and every label,
+        // so the rail morphs continuously instead of swapping layouts at the
+        // end. The playlist rows are built once here and only fade.
+        return TweenAnimationBuilder<double>(
+          tween: Tween(end: extended ? 1 : 0),
+          duration: motion.duration,
+          curve: motion.curve,
+          child: openLink == null
+              ? null
+              : _RailPlaylists(openId: linkId, onOpen: openLink),
+          builder: (context, expansion, playlists) {
+            Widget item(DesktopDestination destination) => _RailDestination(
+              key: ValueKey('desktop-rail:${destination.tab.name}'),
+              destination: destination,
+              selected: destination.tab == selected && linkId == null,
+              expansion: expansion,
+              onTap: () => _select(destination.tab),
+            );
+            final gap = lerpDouble(4, desktopRailItemGap, expansion)!;
+            final playlistsShown = (expansion * 2 - 1).clamp(0.0, 1.0);
+            return ColoredBox(
+              color: background,
+              child: SizedBox(
+                // The width stops at its ends while the pills and labels keep
+                // the spring: a rail growing past its width would narrow the
+                // content below its final size and flip its breakpoints twice.
+                width: lerpDouble(
+                  desktopCollapsedRailWidth,
+                  desktopSidebarWidth,
+                  expansion.clamp(0.0, 1.0),
+                ),
+                child: ClipRect(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      ?menu,
+                      Expanded(
+                        child: SingleChildScrollView(
+                          padding: const EdgeInsets.only(top: 8, bottom: 8),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              for (final (index, destination)
+                                  in primary.indexed) ...[
+                                if (index > 0) SizedBox(height: gap),
+                                item(destination),
+                              ],
+                              if (playlists != null && playlistsShown > 0)
+                                Opacity(
+                                  opacity: playlistsShown,
+                                  child: playlists,
                                 ),
-                              ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
-                    ),
-                    if (settings != null)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 16),
-                        child: item(settings),
-                      ),
-                  ],
+                      if (settings != null)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 16),
+                          child: item(settings),
+                        ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-          );
-        },
-      ),
+            );
+          },
+        );
+      },
     );
   }
 }
@@ -946,15 +1020,27 @@ class _RailIndicatorState extends State<_RailIndicator>
     with TickerProviderStateMixin {
   // Linear progress; [_growSpec] and [_fadeSpec] shape it when read, so a
   // stopped grow keeps the width it reached.
-  late final _grow = AnimationController(
-    vsync: this,
-    value: widget.selected ? 1 : 0,
-  );
-  late final _fade = AnimationController(
-    vsync: this,
-    value: widget.selected ? 1 : 0,
-  );
-  late final _listenable = Listenable.merge([_grow, _fade]);
+  AnimationController? _grow;
+  AnimationController? _fade;
+  Listenable? _listenable;
+
+  // Made on first use, so rows never selected hold no controllers or tickers.
+  void _ensureControllers({required double initialValue}) {
+    if (_grow != null) return;
+    final grow = AnimationController(vsync: this, value: initialValue);
+    final fade = AnimationController(vsync: this, value: initialValue);
+    _grow = grow;
+    _fade = fade;
+    _listenable = Listenable.merge([grow, fade]);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.selected) {
+      _ensureControllers(initialValue: 1);
+    }
+  }
 
   AppMotionSpec get _growSpec => AppMotion.spatialFast(
     context,
@@ -970,47 +1056,56 @@ class _RailIndicatorState extends State<_RailIndicator>
   void didUpdateWidget(_RailIndicator oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.selected == oldWidget.selected) return;
+    _ensureControllers(initialValue: oldWidget.selected ? 1 : 0);
+    final grow = _grow!;
+    final fadeController = _fade!;
     final fade = _fadeSpec;
-    _fade.duration = fade.duration;
+    fadeController.duration = fade.duration;
     if (widget.selected) {
       // A pill that had faded out grows again from half width; one still
       // fading out grows on from where it is.
-      if (_fade.value == 0) _grow.value = 0;
-      _grow.duration = _growSpec.duration;
-      _grow.forward();
-      _fade.forward();
+      if (fadeController.value == 0) grow.value = 0;
+      grow.duration = _growSpec.duration;
+      grow.forward();
+      fadeController.forward();
     } else {
       // The outgoing pill keeps its width and only fades.
-      _grow.stop();
-      _fade.reverse();
+      grow.stop();
+      fadeController.reverse();
     }
   }
 
   @override
   void dispose() {
-    _grow.dispose();
-    _fade.dispose();
+    _grow?.dispose();
+    _fade?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    // The same structure before the controllers exist, so a first selection
+    // never remounts the row and its focus.
+    final growController = _grow;
+    final fadeController = _fade;
     final color = Theme.of(context).colorScheme.secondaryContainer;
     final grow = _growSpec.curve;
     final fade = _fadeSpec.curve;
     return AnimatedBuilder(
-      animation: _listenable,
+      animation: _listenable ?? kAlwaysDismissedAnimation,
       child: widget.child,
       builder: (context, child) {
-        final fill = fade.transform(_fade.value).clamp(0.0, 1.0);
+        final fill = fadeController == null
+            ? 0.0
+            : fade.transform(fadeController.value).clamp(0.0, 1.0);
         return Stack(
           fit: StackFit.passthrough,
           children: [
-            if (fill > 0)
+            if (fill > 0 && growController != null)
               Positioned.fill(
                 child: Center(
                   child: FractionallySizedBox(
-                    widthFactor: 0.5 + grow.transform(_grow.value) / 2,
+                    widthFactor: 0.5 + grow.transform(growController.value) / 2,
                     child: DecoratedBox(
                       key: const ValueKey('desktop-rail-indicator'),
                       decoration: ShapeDecoration(
@@ -1121,7 +1216,7 @@ class _RailLinkRow extends StatelessWidget {
 /// around a fixed icon while the row narrows with the rail, as the owner
 /// preferred to a morphing pill. Only the row, or the whole 56dp square
 /// while collapsed, takes clicks and hover.
-class _RailDestination extends StatelessWidget {
+class _RailDestination extends StatefulWidget {
   const _RailDestination({
     super.key,
     required this.destination,
@@ -1140,43 +1235,64 @@ class _RailDestination extends StatelessWidget {
   static const double _inset = (desktopCollapsedRailWidth - 56) / 2;
 
   @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final textTheme = theme.textTheme;
-    final t = expansion.clamp(0.0, 1.0);
-    const inset = _RailDestination._inset;
+  State<_RailDestination> createState() => _RailDestinationState();
+}
 
-    final expandedStyle = textTheme.labelLarge!.copyWith(
-      fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-    );
-    // The expanded pill spans the rail like the Playlists rows below, so
-    // every fill and hover lines up at both edges.
-    const expandedPillWidth = desktopSidebarWidth - inset * 2;
+class _RailDestinationState extends State<_RailDestination> {
+  static const double _height = 56;
 
-    const height = 56.0;
-    // Like the Playlists rows, the expanded row narrows with the rail and
-    // fades, and the collapsed indicator fades in where it ends. Neither
-    // changes shape, so no long flat pill or edge crosses the label.
-    final expanded = ((t - 0.4) / 0.6).clamp(0.0, 1.0);
-    final collapsed = ((0.6 - t) / 0.6).clamp(0.0, 1.0);
-    final rowWidth = lerpDouble(56, expandedPillWidth, t)!;
+  /// The layers that do not move with the expansion, made once per
+  /// selection and theme instead of on every frame of the rail's spring.
+  Widget? _icon;
+  final _collapsedLayers = <bool, Widget>{};
+  final _expandedLayers = <bool, Widget>{};
 
-    final foreground = selected
-        ? colorScheme.onSecondaryContainer
-        : colorScheme.onSurfaceVariant;
+  void _onTap() => widget.onTap();
+
+  void _forgetLayers() {
+    _icon = null;
+    _collapsedLayers.clear();
+    _expandedLayers.clear();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _forgetLayers();
+  }
+
+  @override
+  void didUpdateWidget(_RailDestination oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.selected != oldWidget.selected ||
+        widget.destination != oldWidget.destination) {
+      _forgetLayers();
+    }
+  }
+
+  @override
+  void reassemble() {
+    super.reassemble();
+    _forgetLayers();
+  }
+
+  Color _foreground(ColorScheme colorScheme) => widget.selected
+      ? colorScheme.onSecondaryContainer
+      : colorScheme.onSurfaceVariant;
+
+  // A stadium with the selected fill and the hover and press layers of
+  // the Playlists rows.
+  Widget _surface({required bool active, Widget? child}) {
+    final foreground = _foreground(Theme.of(context).colorScheme);
     final press = desktopRowInk(context, content: foreground);
-
-    // A stadium with the selected fill and the hover and press layers of
-    // the Playlists rows.
-    Widget surface({required bool active, Widget? child}) => _RailIndicator(
-      selected: selected,
+    return _RailIndicator(
+      selected: widget.selected,
       child: Material(
         type: MaterialType.transparency,
         shape: const StadiumBorder(),
         clipBehavior: Clip.antiAlias,
         child: InkWell(
-          onTap: active ? onTap : null,
+          onTap: active ? _onTap : null,
           canRequestFocus: active,
           hoverColor: foreground.withValues(alpha: 0.08),
           splashFactory: press.splashFactory,
@@ -1185,15 +1301,97 @@ class _RailDestination extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  // Names the icon while the label is hidden; the whole square around the
+  // indicator takes the click.
+  Widget _collapsedLayer(bool active) => Tooltip(
+    message: widget.destination.label,
+    excludeFromSemantics: true,
+    child: GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: _onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        child: _surface(active: active),
+      ),
+    ),
+  );
+
+  Widget _expandedLayer(bool active) {
+    final theme = Theme.of(context);
+    final style = theme.textTheme.labelLarge!.copyWith(
+      fontWeight: widget.selected ? FontWeight.w700 : FontWeight.w500,
+      color: _foreground(theme.colorScheme),
+    );
+    return _surface(
+      active: active,
+      child: Row(
+        children: [
+          // The icon is drawn once, above both states.
+          const SizedBox(width: 16 + 24 + 8),
+          Expanded(
+            child: Text(
+              widget.destination.label,
+              maxLines: 1,
+              overflow: TextOverflow.clip,
+              softWrap: false,
+              style: style,
+            ),
+          ),
+          const SizedBox(width: 16),
+        ],
+      ),
+    );
+  }
+
+  Widget _iconLayer() {
+    final destination = widget.destination;
+    return PositionedDirectional(
+      start: _RailDestination._inset + 16,
+      top: (_height - 24) / 2,
+      child: IgnorePointer(
+        child: IconTheme.merge(
+          data: IconThemeData(
+            color: _foreground(Theme.of(context).colorScheme),
+            size: 24,
+          ),
+          child: Badge(
+            isLabelVisible: destination.badgeCount > 0,
+            label: Text('${destination.badgeCount}'),
+            child: AppIcon(
+              widget.selected ? destination.selectedIcon : destination.icon,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = widget.expansion.clamp(0.0, 1.0);
+    const inset = _RailDestination._inset;
+    // The expanded pill spans the rail like the Playlists rows below, so
+    // every fill and hover lines up at both edges.
+    const expandedPillWidth = desktopSidebarWidth - inset * 2;
+
+    // Like the Playlists rows, the expanded row narrows with the rail and
+    // fades, and the collapsed indicator fades in where it ends. Neither
+    // changes shape, so no long flat pill or edge crosses the label.
+    final expanded = ((t - 0.4) / 0.6).clamp(0.0, 1.0);
+    final collapsed = ((0.6 - t) / 0.6).clamp(0.0, 1.0);
+    final rowWidth = lerpDouble(56, expandedPillWidth, t)!;
+    final collapsedActive = t < 0.5;
 
     return Semantics(
       container: true,
       button: true,
-      selected: selected,
-      label: destination.label,
-      onTap: onTap,
+      selected: widget.selected,
+      label: widget.destination.label,
+      onTap: widget.onTap,
       child: SizedBox(
-        height: height,
+        height: _height,
         child: Stack(
           clipBehavior: Clip.none,
           children: [
@@ -1202,26 +1400,14 @@ class _RailDestination extends StatelessWidget {
                 start: inset,
                 top: 0,
                 width: 56,
-                height: height,
+                height: _height,
                 child: IgnorePointer(
-                  ignoring: t >= 0.5,
+                  ignoring: !collapsedActive,
                   child: ExcludeSemantics(
-                    // Names the icon while the label is hidden; the whole
-                    // square around the indicator takes the click.
-                    child: Tooltip(
-                      message: destination.label,
-                      excludeFromSemantics: true,
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: onTap,
-                        child: Opacity(
-                          opacity: collapsed,
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                            child: surface(active: t < 0.5),
-                          ),
-                        ),
-                      ),
+                    child: Opacity(
+                      opacity: collapsed,
+                      child: _collapsedLayers[collapsedActive] ??=
+                          _collapsedLayer(collapsedActive),
                     ),
                   ),
                 ),
@@ -1231,53 +1417,19 @@ class _RailDestination extends StatelessWidget {
                 start: inset,
                 top: 0,
                 width: rowWidth,
-                height: height,
+                height: _height,
                 child: IgnorePointer(
-                  ignoring: t < 0.5,
+                  ignoring: collapsedActive,
                   child: ExcludeSemantics(
                     child: Opacity(
                       opacity: expanded,
-                      child: surface(
-                        active: t >= 0.5,
-                        child: Row(
-                          children: [
-                            // The icon is drawn once, above both states.
-                            const SizedBox(width: 16 + 24 + 8),
-                            Expanded(
-                              child: Text(
-                                destination.label,
-                                maxLines: 1,
-                                overflow: TextOverflow.clip,
-                                softWrap: false,
-                                style: expandedStyle.copyWith(
-                                  color: foreground,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 16),
-                          ],
-                        ),
-                      ),
+                      child: _expandedLayers[!collapsedActive] ??=
+                          _expandedLayer(!collapsedActive),
                     ),
                   ),
                 ),
               ),
-            PositionedDirectional(
-              start: inset + 16,
-              top: (height - 24) / 2,
-              child: IgnorePointer(
-                child: IconTheme.merge(
-                  data: IconThemeData(color: foreground, size: 24),
-                  child: Badge(
-                    isLabelVisible: destination.badgeCount > 0,
-                    label: Text('${destination.badgeCount}'),
-                    child: AppIcon(
-                      selected ? destination.selectedIcon : destination.icon,
-                    ),
-                  ),
-                ),
-              ),
-            ),
+            _icon ??= _iconLayer(),
           ],
         ),
       ),
@@ -1568,44 +1720,50 @@ class _SidebarArtwork extends StatelessWidget {
             child: child,
           ),
           child: RepaintBoundary(
-            child: OverflowBox(
-              alignment: AlignmentDirectional.topEnd,
-              minWidth: hero.width,
-              maxWidth: hero.width,
-              minHeight: hero.height,
-              maxHeight: hero.height,
-              child: Stack(
-                key: const ValueKey('desktop-sidebar-backdrop'),
-                fit: StackFit.expand,
-                children: [
-                  Transform.flip(
-                    flipX: true,
-                    child: Image(
-                      image: image,
-                      fit: BoxFit.cover,
-                      alignment: Alignment.topCenter,
-                      filterQuality: FilterQuality.high,
-                      gaplessPlayback: true,
-                      excludeFromSemantics: true,
-                      errorBuilder: (_, _, _) => const SizedBox.shrink(),
-                    ),
-                  ),
-                  // The sidebar glass fades out where the hero ends.
-                  DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        stops: const [0, 0.6, 1],
-                        colors: [
-                          fill.withValues(alpha: 0.42),
-                          fill.withValues(alpha: 0.62),
-                          fill,
-                        ],
+            child: SizedBox(
+              width: DesktopSidebar.width,
+              height: hero.height,
+              child: ClipRect(
+                child: OverflowBox(
+                  alignment: AlignmentDirectional.topEnd,
+                  minWidth: hero.width,
+                  maxWidth: hero.width,
+                  minHeight: hero.height,
+                  maxHeight: hero.height,
+                  child: Stack(
+                    key: const ValueKey('desktop-sidebar-backdrop'),
+                    fit: StackFit.expand,
+                    children: [
+                      Transform.flip(
+                        flipX: true,
+                        child: Image(
+                          image: image,
+                          fit: BoxFit.cover,
+                          alignment: Alignment.topCenter,
+                          filterQuality: FilterQuality.high,
+                          gaplessPlayback: true,
+                          excludeFromSemantics: true,
+                          errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                        ),
                       ),
-                    ),
+                      // The sidebar glass fades out where the hero ends.
+                      DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            stops: const [0, 0.6, 1],
+                            colors: [
+                              fill.withValues(alpha: 0.42),
+                              fill.withValues(alpha: 0.62),
+                              fill,
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
             ),
           ),

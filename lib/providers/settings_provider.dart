@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:mornye/models/settings.dart';
+import 'package:mornye/models/home_layout.dart';
 import 'package:mornye/models/home_shortcut.dart';
 import 'package:mornye/models/metadata_separators.dart';
 import 'package:mornye/models/automix_options.dart';
@@ -24,12 +25,17 @@ import 'package:mornye/utils/logger.dart';
 const _settingsKey = 'app_settings';
 const _settingsCorruptBackupKey = 'app_settings_corrupt_backup';
 const _migrationVersionKey = 'settings_migration_version';
-const _currentMigrationVersion = 15;
+const _currentMigrationVersion = 17;
+
+/// Set while someone who had the search field on Home has not yet seen the
+/// pointer to the Search tab.
+const searchMovedHintOwedKey = 'search_moved_hint_owed';
 
 /// Marked the removed rebrand tour as seen.
 const _retiredUpgradeIntroSeenKey = 'upgrade_intro_mornye_seen';
 const _legacyDefaultLyricsProviders = ['apple_music', 'lrclib'];
 const _spotifyClientSecretKey = 'spotify_client_secret';
+const _retiredSpotifyCleanupDoneKey = 'retired_spotify_secret_cleanup_v1';
 const _retiredBuiltInProviderIds = {'deezer', 'qobuz', 'tidal', 'youtube'};
 final _log = AppLogger('SettingsProvider');
 
@@ -40,24 +46,79 @@ final initialSettingsProvider = Provider<AppSettings>(
   (ref) => const AppSettings(),
 );
 
-/// Set during bootstrap when the saved Android SAF tree no longer has a valid
-/// persisted grant. MainShell consumes this once to block downloads until the
-/// user explicitly repairs or changes the destination.
-final initialSafAccessLostProvider = Provider<bool>((ref) => false);
+/// The startup check of the saved Android SAF tree: true when its grant is
+/// lost, null when it gave no answer. MainShell consumes this once.
+final initialSafValidationProvider = Provider<Future<bool?>?>((ref) => null);
 
 bool hasPersistedAppSettings(SharedPreferences prefs) {
   final rawSettings = prefs.getString(_settingsKey);
   return rawSettings != null && rawSettings.isNotEmpty;
 }
 
+String? _lastBootstrapRawSettings;
+AppSettings? _lastBootstrapSettings;
+
+AppSettings _normalizeLoadedSettings(AppSettings loaded) {
+  final sanitizedDownloadFallbackExtensionIds =
+      SettingsNotifier._sanitizeDownloadFallbackExtensionIds(
+        loaded.downloadFallbackExtensionIds,
+      );
+  final sanitizedDefaultSearchTab = SettingsNotifier._normalizeDefaultSearchTab(
+    loaded.defaultSearchTab,
+  );
+  return loaded.copyWith(
+    useExtensionProviders: true,
+    downloadFallbackExtensionIds: sanitizedDownloadFallbackExtensionIds,
+    clearDownloadFallbackExtensionIds:
+        loaded.downloadFallbackExtensionIds != null &&
+        sanitizedDownloadFallbackExtensionIds == null,
+    defaultSearchTab: sanitizedDefaultSearchTab,
+    defaultLibraryView: SettingsNotifier._normalizeDefaultLibraryView(
+      loaded.defaultLibraryView,
+    ),
+    libraryQualityLabelMode: normalizeLibraryQualityLabelMode(
+      loaded.libraryQualityLabelMode,
+    ),
+    autoConvertFormat: normalizeAutoConvertFormat(loaded.autoConvertFormat),
+    autoConvertBitrate: normalizeAutoConvertBitrate(loaded.autoConvertBitrate),
+    autoConvertMaxBitDepth: normalizeAutoConvertBitDepth(
+      loaded.autoConvertMaxBitDepth,
+    ),
+    autoConvertMaxSampleRate: normalizeAutoConvertSampleRate(
+      loaded.autoConvertMaxSampleRate,
+    ),
+    embeddedCoverMaxDimension:
+        SettingsNotifier._normalizeEmbeddedCoverMaxDimension(
+          loaded.embeddedCoverMaxDimension,
+        ),
+    defaultService: loaded.defaultService,
+    searchProvider: loaded.searchProvider,
+    extensionVerificationBrowserMode:
+        SettingsNotifier._normalizeExtensionVerificationBrowserMode(
+          loaded.extensionVerificationBrowserMode,
+        ),
+  );
+}
+
 AppSettings loadBootstrapSettings(SharedPreferences prefs) {
   final rawSettings = prefs.getString(_settingsKey);
-  if (rawSettings == null || rawSettings.isEmpty) return const AppSettings();
+  if (rawSettings == null || rawSettings.isEmpty) {
+    _lastBootstrapRawSettings = null;
+    _lastBootstrapSettings = null;
+    return const AppSettings();
+  }
   try {
     final decoded = jsonDecode(rawSettings);
     if (decoded is! Map) return const AppSettings();
-    return AppSettings.fromJson(Map<String, dynamic>.from(decoded));
+    final normalized = _normalizeLoadedSettings(
+      AppSettings.fromJson(Map<String, dynamic>.from(decoded)),
+    );
+    _lastBootstrapRawSettings = rawSettings;
+    _lastBootstrapSettings = normalized;
+    return normalized;
   } catch (_) {
+    _lastBootstrapRawSettings = null;
+    _lastBootstrapSettings = null;
     return const AppSettings();
   }
 }
@@ -173,7 +234,16 @@ class SettingsNotifier extends Notifier<AppSettings> {
   Future<void> _loadSettings() async {
     final prefs = await _prefs;
     final rawSettings = prefs.getString(_settingsKey);
-    if (rawSettings != null) {
+    final matchesBootstrap =
+        rawSettings != null &&
+        rawSettings == _lastBootstrapRawSettings &&
+        _lastBootstrapSettings != null &&
+        identical(state, _lastBootstrapSettings);
+    if (matchesBootstrap) {
+      await _runMigrations(prefs);
+      await _normalizeIosDownloadDirectoryIfNeeded();
+      await _normalizeSongLinkRegionIfNeeded();
+    } else if (rawSettings != null) {
       AppSettings? loaded;
       try {
         final decoded = jsonDecode(rawSettings);
@@ -192,48 +262,7 @@ class SettingsNotifier extends Notifier<AppSettings> {
       }
 
       if (loaded != null) {
-        final sanitizedDownloadFallbackExtensionIds =
-            _sanitizeDownloadFallbackExtensionIds(
-              loaded.downloadFallbackExtensionIds,
-            );
-        final sanitizedDefaultSearchTab = _normalizeDefaultSearchTab(
-          loaded.defaultSearchTab,
-        );
-        state = loaded.copyWith(
-          useExtensionProviders: true,
-          downloadFallbackExtensionIds: sanitizedDownloadFallbackExtensionIds,
-          clearDownloadFallbackExtensionIds:
-              loaded.downloadFallbackExtensionIds != null &&
-              sanitizedDownloadFallbackExtensionIds == null,
-          defaultSearchTab: sanitizedDefaultSearchTab,
-          defaultLibraryView: _normalizeDefaultLibraryView(
-            loaded.defaultLibraryView,
-          ),
-          libraryQualityLabelMode: normalizeLibraryQualityLabelMode(
-            loaded.libraryQualityLabelMode,
-          ),
-          autoConvertFormat: normalizeAutoConvertFormat(
-            loaded.autoConvertFormat,
-          ),
-          autoConvertBitrate: normalizeAutoConvertBitrate(
-            loaded.autoConvertBitrate,
-          ),
-          autoConvertMaxBitDepth: normalizeAutoConvertBitDepth(
-            loaded.autoConvertMaxBitDepth,
-          ),
-          autoConvertMaxSampleRate: normalizeAutoConvertSampleRate(
-            loaded.autoConvertMaxSampleRate,
-          ),
-          embeddedCoverMaxDimension: _normalizeEmbeddedCoverMaxDimension(
-            loaded.embeddedCoverMaxDimension,
-          ),
-          defaultService: loaded.defaultService,
-          searchProvider: loaded.searchProvider,
-          extensionVerificationBrowserMode:
-              _normalizeExtensionVerificationBrowserMode(
-                loaded.extensionVerificationBrowserMode,
-              ),
-        );
+        state = _normalizeLoadedSettings(loaded);
 
         await _runMigrations(prefs);
         await _normalizeIosDownloadDirectoryIfNeeded();
@@ -241,13 +270,15 @@ class SettingsNotifier extends Notifier<AppSettings> {
       }
     }
 
-    await _cleanupRetiredSpotifySettings();
+    await _cleanupRetiredSpotifySettings(prefs);
 
     LogBuffer.loggingEnabled = state.enableLogging;
 
-    await syncLyricsSettingsToBackend();
-    await _syncNetworkCompatibilitySettingsToBackend();
-    await _syncExtensionFallbackSettingsToBackend();
+    await Future.wait([
+      syncLyricsSettingsToBackend(),
+      _syncNetworkCompatibilitySettingsToBackend(),
+      _syncExtensionFallbackSettingsToBackend(),
+    ]);
   }
 
   void _syncLyricsSettingsToBackend() {
@@ -258,35 +289,37 @@ class SettingsNotifier extends Notifier<AppSettings> {
     final snapshot = settings ?? state;
     if (!PlatformBridge.supportsCoreBackend) return;
 
-    try {
-      await PlatformBridge.setLyricsProviders(snapshot.lyricsProviders);
-    } catch (e) {
-      _log.w('Failed to sync lyrics providers to backend: $e');
-    }
-
-    try {
-      await PlatformBridge.setLyricsFetchOptions(snapshot.lyricsFetchOptions);
-    } catch (e) {
-      _log.w('Failed to sync lyrics fetch options to backend: $e');
-    }
+    await Future.wait([
+      PlatformBridge.setLyricsProviders(snapshot.lyricsProviders).catchError((
+        Object e,
+      ) {
+        _log.w('Failed to sync lyrics providers to backend: $e');
+      }),
+      PlatformBridge.setLyricsFetchOptions(
+        snapshot.lyricsFetchOptions,
+      ).catchError((Object e) {
+        _log.w('Failed to sync lyrics fetch options to backend: $e');
+      }),
+    ]);
   }
 
   Future<void> _syncNetworkCompatibilitySettingsToBackend() async {
     if (!PlatformBridge.supportsCoreBackend) return;
 
     final compatibilityMode = state.networkCompatibilityMode;
-    await PlatformBridge.setNetworkCompatibilityOptions(
-      allowHttp: compatibilityMode,
-      insecureTls: false,
-    ).catchError((Object e) {
-      _log.w('Failed to sync network compatibility options to backend: $e');
-    });
-
-    await PlatformBridge.setAllowPrivateNetwork(
-      state.allowLocalNetwork,
-    ).catchError((Object e) {
-      _log.w('Failed to sync allow local network option to backend: $e');
-    });
+    await Future.wait([
+      PlatformBridge.setNetworkCompatibilityOptions(
+        allowHttp: compatibilityMode,
+        insecureTls: false,
+      ).catchError((Object e) {
+        _log.w('Failed to sync network compatibility options to backend: $e');
+      }),
+      PlatformBridge.setAllowPrivateNetwork(state.allowLocalNetwork).catchError(
+        (Object e) {
+          _log.w('Failed to sync allow local network option to backend: $e');
+        },
+      ),
+    ]);
   }
 
   Future<void> _syncExtensionFallbackSettingsToBackend() async {
@@ -362,13 +395,25 @@ class SettingsNotifier extends Notifier<AppSettings> {
       if (lastMigration < 15) {
         await prefs.remove(_retiredUpgradeIntroSeenKey);
       }
+      // Migration 16: Search left Home for its own tab. An install that ran
+      // an earlier build is owed one pointer to it; a new install is not.
+      if (lastMigration > 0 && lastMigration < 16 && !state.isFirstLaunch) {
+        await prefs.setBool(searchMovedHintOwedKey, true);
+      }
+      // Migration 17: Off used to mean "show my own Home, not the feed".
+      // Home is always that now, so the old choice no longer empties Search.
+      if (lastMigration > 0 &&
+          lastMigration < 17 &&
+          state.homeFeedProvider == AppSettings.homeFeedProviderOff) {
+        state = state.copyWith(clearHomeFeedProvider: true);
+      }
       await prefs.setInt(_migrationVersionKey, _currentMigrationVersion);
       await _saveSettings();
     }
   }
 
   Future<void> _commit(AppSettings next) {
-    if (state.downloadDirectory.startsWith('/') &&
+    if (isAbsoluteLocalPath(state.downloadDirectory) &&
         state.downloadDirectory != next.downloadDirectory) {
       _previousDownloadDirectories.add(state.downloadDirectory);
     }
@@ -488,19 +533,19 @@ class SettingsNotifier extends Notifier<AppSettings> {
     return 'US';
   }
 
-  String _normalizeDefaultSearchTab(String value) {
+  static String _normalizeDefaultSearchTab(String value) {
     final normalized = value.trim().toLowerCase();
     if (_searchTabValues.contains(normalized)) return normalized;
     return 'all';
   }
 
-  String _normalizeDefaultLibraryView(String value) {
+  static String _normalizeDefaultLibraryView(String value) {
     final normalized = value.trim().toLowerCase();
     if (_libraryViewValues.contains(normalized)) return normalized;
     return 'last';
   }
 
-  String _normalizeExtensionVerificationBrowserMode(String value) {
+  static String _normalizeExtensionVerificationBrowserMode(String value) {
     final normalized = value.trim().toLowerCase();
     if (_extensionVerificationBrowserModeValues.contains(normalized)) {
       return normalized;
@@ -508,7 +553,7 @@ class SettingsNotifier extends Notifier<AppSettings> {
     return 'in_app_first';
   }
 
-  int _normalizeEmbeddedCoverMaxDimension(int value) {
+  static int _normalizeEmbeddedCoverMaxDimension(int value) {
     return _embeddedCoverMaxDimensionValues.contains(value) ? value : 0;
   }
 
@@ -524,7 +569,9 @@ class SettingsNotifier extends Notifier<AppSettings> {
     await _commit(state.copyWith(songLinkRegion: normalized));
   }
 
-  List<String>? _sanitizeDownloadFallbackExtensionIds(List<String>? ids) {
+  static List<String>? _sanitizeDownloadFallbackExtensionIds(
+    List<String>? ids,
+  ) {
     if (ids == null) {
       return null;
     }
@@ -540,7 +587,8 @@ class SettingsNotifier extends Notifier<AppSettings> {
     return result;
   }
 
-  Future<void> _cleanupRetiredSpotifySettings() async {
+  Future<void> _cleanupRetiredSpotifySettings(SharedPreferences prefs) async {
+    if (prefs.getBool(_retiredSpotifyCleanupDoneKey) == true) return;
     try {
       final storedSecret = await _secureStorage.read(
         key: _spotifyClientSecretKey,
@@ -548,6 +596,7 @@ class SettingsNotifier extends Notifier<AppSettings> {
       if (storedSecret != null && storedSecret.isNotEmpty) {
         await _secureStorage.delete(key: _spotifyClientSecretKey);
       }
+      await prefs.setBool(_retiredSpotifyCleanupDoneKey, true);
     } catch (e) {
       // The retired secret is optional; active credentials share this vault.
       _log.w(
@@ -645,6 +694,9 @@ class SettingsNotifier extends Notifier<AppSettings> {
     ),
   );
 
+  void setPlaybackNormalizationBoost(bool enabled) =>
+      _commit(state.copyWith(playbackNormalizationBoost: enabled));
+
   void setConfirmLoudVolume(bool enabled) =>
       _commit(state.copyWith(confirmLoudVolume: enabled));
 
@@ -690,6 +742,9 @@ class SettingsNotifier extends Notifier<AppSettings> {
 
   void setAutoMixLowPass(bool enabled) =>
       _commit(state.copyWith(autoMixLowPass: enabled));
+
+  void setAutoMixMatching(AutoMixMatching matching) =>
+      _commit(state.copyWith(autoMixMatching: matching));
 
   void setPlaybackSpeed(double speed) =>
       _commit(state.copyWith(playbackSpeed: playbackSpeedFromJson(speed)));
@@ -737,6 +792,12 @@ class SettingsNotifier extends Notifier<AppSettings> {
     state.copyWith(playerCoverStyle: playerCoverStyleFromJson(style)),
   );
 
+  void setPlayerCoverFade(String fade) =>
+      _commit(state.copyWith(playerCoverFade: playerCoverFadeFromJson(fade)));
+
+  void setPlayerCoverWhole(bool whole) =>
+      _commit(state.copyWith(playerCoverWhole: whole));
+
   void setLandscapeLyricsArtwork(bool enabled) =>
       _commit(state.copyWith(landscapeLyricsArtwork: enabled));
 
@@ -762,6 +823,12 @@ class SettingsNotifier extends Notifier<AppSettings> {
 
   void setUsbAllowFixedVolume(bool enabled) =>
       _commit(state.copyWith(usbAllowFixedVolume: enabled));
+
+  void setUsbMaxSampleRate(int rate) =>
+      _commit(state.copyWith(usbMaxSampleRate: rate));
+
+  void setUsbDitherHighPass(bool enabled) =>
+      _commit(state.copyWith(usbDitherHighPass: enabled));
 
   void setDapExclusive(bool enabled) => _commit(
     state.copyWith(dapExclusive: enabled, usbDirect: enabled ? false : null),
@@ -825,6 +892,9 @@ class SettingsNotifier extends Notifier<AppSettings> {
 
   void setLockScreenLyrics(bool enabled) =>
       _commit(state.copyWith(lockScreenLyrics: enabled));
+
+  void setLockScreenLyricsKeepTitle(bool keep) =>
+      _commit(state.copyWith(lockScreenLyricsKeepTitle: keep));
 
   void setMotionArtworkEnabled(bool enabled) =>
       _commit(state.copyWith(motionArtworkEnabled: enabled));
@@ -1042,12 +1112,40 @@ class SettingsNotifier extends Notifier<AppSettings> {
   void setSearchViewMode(String mode) =>
       _commit(state.copyWith(searchViewMode: mode));
 
-  void setHomeShortcuts(List<HomeShortcut> shortcuts) => _commit(
-    state.copyWith(homeShortcuts: [for (final s in shortcuts) s.name]),
-  );
+  void setHomeShortcuts(List<HomeShortcut> shortcuts) =>
+      _commit(state.copyWith(homeShortcuts: HomeShortcut.names(shortcuts)));
 
   void setHomeContinueListening(bool enabled) =>
       _commit(state.copyWith(homeContinueListening: enabled));
+
+  void setHomeRecommendations(bool enabled) =>
+      _commit(state.copyWith(homeRecommendations: enabled));
+
+  void setHomeLayout(HomeLayout layout) =>
+      _commit(state.copyWith(homeLayout: layout));
+
+  /// Shows or hides a Home section, through the switch it had before the
+  /// layout when it has one.
+  void setHomeSectionVisible(HomeSection section, bool visible) =>
+      _commit(switch (section) {
+        HomeSection.continueListening => state.copyWith(
+          homeContinueListening: visible,
+        ),
+        HomeSection.recommended => state.copyWith(homeRecommendations: visible),
+        _ => state.copyWith(
+          homeLayout: state.homeLayout.withVisible(section, visible),
+        ),
+      });
+
+  /// Home's sections as they ship: order and what shows.
+  void resetHomeLayout() => _commit(
+    state.copyWith(
+      homeLayout: const HomeLayout(),
+      homeShortcuts: HomeShortcut.names(HomeShortcut.defaults),
+      homeContinueListening: true,
+      homeRecommendations: true,
+    ),
+  );
 
   void setDefaultLibraryView(String view) => _commit(
     state.copyWith(defaultLibraryView: _normalizeDefaultLibraryView(view)),
@@ -1114,6 +1212,9 @@ class SettingsNotifier extends Notifier<AppSettings> {
 
   void setInterfaceScale(double scale) =>
       _commit(state.copyWith(interfaceScale: interfaceScaleFromJson(scale)));
+
+  void setAnimationSpeed(double speed) =>
+      _commit(state.copyWith(animationSpeed: animationSpeedFromJson(speed)));
 
   void setExtensionVerificationBrowserMode(String mode) => _commit(
     state.copyWith(
@@ -1225,6 +1326,9 @@ class SettingsNotifier extends Notifier<AppSettings> {
 
   void setPlayerShowLyricSnippet(bool visible) =>
       _commit(state.copyWith(playerShowLyricSnippet: visible));
+
+  void setPlayerLyricSnippetTranslation(bool visible) =>
+      _commit(state.copyWith(playerLyricSnippetTranslation: visible));
 }
 
 final settingsProvider = NotifierProvider<SettingsNotifier, AppSettings>(

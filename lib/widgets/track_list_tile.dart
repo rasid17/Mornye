@@ -28,10 +28,17 @@ class TrackListTile extends ConsumerWidget {
   final bool isSelectionMode;
   final bool isSelected;
   final VoidCallback? onToggleSelection;
+
+  /// A long press, which selects the row; called in selection mode too.
   final VoidCallback? onEnterSelectionMode;
 
   /// [leading] is cover art. See [TrackCard.leadingArtwork].
   final bool leadingArtwork;
+
+  /// The album or playlist holding [track] at [queueIndex]; a local tap plays
+  /// on through it. See [playLocalIfAvailable].
+  final List<Track>? queue;
+  final int queueIndex;
 
   const TrackListTile({
     super.key,
@@ -46,6 +53,8 @@ class TrackListTile extends ConsumerWidget {
     this.onToggleSelection,
     this.onEnterSelectionMode,
     this.leadingArtwork = false,
+    this.queue,
+    this.queueIndex = 0,
   }) : assert(!isSelectionMode || onToggleSelection != null);
 
   @override
@@ -79,7 +88,7 @@ class TrackListTile extends ConsumerWidget {
         : false;
 
     return TrackCard(
-      style: TrackCardStyle.flat,
+      style: collectionTrackCardStyle(context),
       isSelectionMode: isSelectionMode,
       isSelected: isSelected,
       isCurrent: playback.isCurrent,
@@ -128,15 +137,16 @@ class TrackListTile extends ConsumerWidget {
               isQueued: isQueued,
               isInLocalLibrary: isInLocalLibrary,
             ),
-      onLongPress: isSelectionMode
-          ? null
-          : onEnterSelectionMode ??
-                () => TrackCollectionQuickActions.showTrackOptionsSheet(
+      onLongPress:
+          onEnterSelectionMode ??
+          (isSelectionMode
+              ? null
+              : () => TrackCollectionQuickActions.showTrackOptionsSheet(
                   context,
                   ref,
                   track,
                   hasLocalPlaybackCandidate: isInHistory || isInLocalLibrary,
-                ),
+                )),
     );
   }
 
@@ -154,7 +164,13 @@ class TrackListTile extends ConsumerWidget {
       return;
     }
 
-    final playedLocal = await playLocalIfAvailable(context, ref, track);
+    final playedLocal = await playLocalIfAvailable(
+      context,
+      ref,
+      track,
+      queue: queue,
+      queueIndex: queueIndex,
+    );
     if (playedLocal) {
       return;
     }
@@ -170,6 +186,8 @@ class TrackListTile extends ConsumerWidget {
     Track track, {
     required bool isInHistory,
     required void Function({bool forceQualityPicker}) onDownload,
+    List<Track>? queue,
+    int queueIndex = 0,
   }) async {
     if (ref.read(downloadQueueLookupProvider).byTrackId.containsKey(track.id)) {
       return;
@@ -189,7 +207,15 @@ class TrackListTile extends ConsumerWidget {
       onDownload(forceQualityPicker: true);
       return;
     }
-    if (await playLocalIfAvailable(context, ref, track)) return;
+    if (await playLocalIfAvailable(
+      context,
+      ref,
+      track,
+      queue: queue,
+      queueIndex: queueIndex,
+    )) {
+      return;
+    }
     onDownload();
   }
 }

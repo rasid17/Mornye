@@ -8,6 +8,7 @@ Future<void> resetAutoplayLearning({MusicPlayerRuntime? runtime}) async {
   await target.personalization.reset();
   await target.taste.reset();
   await target.ranker.reset();
+  await target.suggestionOutcomes.reset();
   final handler = target.handler;
   if (handler == null || handler.isDisposed) return;
   handler._configurePersonalization();
@@ -605,6 +606,7 @@ class _MusicAutoplay {
               weights: weights,
               randomSeed: handler._random.nextInt(1 << 31),
               at: DateTime.now(),
+              output: runtime.personalization.output,
               limit: 6 - upcoming.length,
             ),
             debugLabel: 'autoplay-ranking',
@@ -671,6 +673,7 @@ class _AutoplayRanking {
     required this.weights,
     required this.randomSeed,
     required this.at,
+    required this.output,
     required this.limit,
   });
 
@@ -684,6 +687,7 @@ class _AutoplayRanking {
   final Map<String, double> weights;
   final int randomSeed;
   final DateTime at;
+  final AutoplayOutput output;
   final int limit;
 }
 
@@ -708,6 +712,7 @@ List<AutoplayPick> _rankPersonalizedAutoplay(_AutoplayRanking input) {
             _learningTrack(track),
             previous: learningSeed,
             at: input.at,
+            output: input.output,
           ),
     exploration: exploration == null
         ? null

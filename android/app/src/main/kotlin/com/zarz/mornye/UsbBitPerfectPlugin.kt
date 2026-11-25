@@ -1,6 +1,7 @@
 package com.zarz.mornye
 
 import android.content.Context
+import android.hardware.usb.UsbManager
 import android.media.AudioAttributes
 import android.media.AudioDeviceInfo
 import android.media.AudioFormat
@@ -59,7 +60,42 @@ class UsbBitPerfectPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Even
         spatialAudio.setStreamHandler(SpatialAudioEvents(appContext).also { spatialAudioEvents = it })
     }
 
+    /** Whether a USB audio output is attached, by either view Android offers. */
+    private fun usbOutputPresent(): Boolean {
+        val audio = appContext.getSystemService(AudioManager::class.java)
+        if (audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any {
+                it.type == AudioDeviceInfo.TYPE_USB_DEVICE || it.type == AudioDeviceInfo.TYPE_USB_HEADSET
+            }) return true
+        return appContext.getSystemService(UsbManager::class.java).deviceList.values.any { device ->
+            (0 until device.interfaceCount).any {
+                device.getInterface(it).interfaceClass == 1 && device.getInterface(it).interfaceSubclass == 2
+            }
+        }
+    }
+
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
+        if (call.method == "outputPresent") {
+            // AAudio exclusive opens the phone's own output; an unreadable answer counts as present.
+            val phoneOutput = call.argument<Boolean>("direct") != true && call.argument<Boolean>("dapExclusive") == true
+            result.success(phoneOutput || runCatching { usbOutputPresent() }.getOrDefault(true))
+            return
+        }
+        if (call.method == "callActive") {
+            // Ringing, a phone call or a voice/video call in another app.
+            val mode = appContext.getSystemService(AudioManager::class.java).mode
+            result.success(
+                mode == AudioManager.MODE_RINGTONE || mode == AudioManager.MODE_IN_CALL ||
+                    mode == AudioManager.MODE_IN_COMMUNICATION || mode == AudioManager.MODE_CALL_SCREENING,
+            )
+            return
+        }
+        if (call.method == "endSession") {
+            // Only Direct USB changes the DAC's own level.
+            val playback = direct
+            if (playback == null) result.success(null)
+            else playback.command(call) { _, _ -> main.post { result.success(null) } }
+            return
+        }
         if (call.method == "prepare") {
             if (useHiRes) hiRes?.command(MethodCall("stop", null)) { _, _ -> }
             else if (useDirect) direct?.command(MethodCall("stop", null)) { _, _ -> }

@@ -7,9 +7,12 @@ import 'package:mornye/l10n/l10n.dart';
 import 'package:mornye/providers/music_player_provider.dart';
 import 'package:mornye/providers/settings_provider.dart';
 import 'package:mornye/utils/desktop_platform.dart';
+import 'package:mornye/widgets/mornye_squircle_border.dart';
 import 'package:mornye/widgets/player_queue_artwork.dart';
 import 'package:mornye/widgets/player_queue_dismissible.dart';
+import 'package:mornye/widgets/queue_save_playlist.dart';
 import 'package:mornye/widgets/queue_swipe.dart';
+import 'package:mornye/widgets/scaled_drag_proxy.dart';
 
 /// Upcoming tracks share the player's artwork backdrop and transport controls.
 class MornyePlayerQueue extends ConsumerStatefulWidget {
@@ -204,17 +207,6 @@ class _MornyePlayerQueueState extends ConsumerState<MornyePlayerQueue> {
                   Row(
                     children: [
                       modeButton(
-                        icon: CupertinoIcons.arrow_merge,
-                        label: autoMix
-                            ? context.l10n.autoMixOn
-                            : context.l10n.autoMixOff,
-                        selected: autoMix,
-                        onPressed: () => ref
-                            .read(settingsProvider.notifier)
-                            .setAutoMix(!autoMix),
-                      ),
-                      const SizedBox(width: 12),
-                      modeButton(
                         icon: CupertinoIcons.shuffle,
                         label: playback.shuffle
                             ? context.l10n.nowPlayingShuffleOn
@@ -251,6 +243,17 @@ class _MornyePlayerQueueState extends ConsumerState<MornyePlayerQueue> {
                             .read(settingsProvider.notifier)
                             .setAutoplay(!autoplay),
                       ),
+                      const SizedBox(width: 12),
+                      modeButton(
+                        icon: CupertinoIcons.arrow_merge,
+                        label: autoMix
+                            ? context.l10n.autoMixOn
+                            : context.l10n.autoMixOff,
+                        selected: autoMix,
+                        onPressed: () => ref
+                            .read(settingsProvider.notifier)
+                            .setAutoMix(!autoMix),
+                      ),
                     ],
                   ),
                 Padding(
@@ -277,6 +280,21 @@ class _MornyePlayerQueueState extends ConsumerState<MornyePlayerQueue> {
                               ),
                           ],
                         ),
+                      ),
+                      IconButton(
+                        tooltip: context.l10n.queueSaveAsPlaylist,
+                        style: IconButton.styleFrom(
+                          minimumSize: const Size.square(44),
+                          foregroundColor: Colors.white,
+                          disabledForegroundColor: Colors.white38,
+                        ),
+                        icon: const Icon(
+                          CupertinoIcons.text_badge_plus,
+                          size: 20,
+                        ),
+                        onPressed: queue.isEmpty
+                            ? null
+                            : () => saveQueueAsPlaylist(context, ref),
                       ),
                       // A toggle: a fill marks it on, as on the mode buttons.
                       Semantics(
@@ -332,10 +350,13 @@ class _MornyePlayerQueueState extends ConsumerState<MornyePlayerQueue> {
                   controller.moveQueueItem(start + oldIndex, start + newIndex);
                 }
               },
-              proxyDecorator: (child, index, animation) => Material(
-                color: colorScheme.surfaceContainerHigh,
-                borderRadius: BorderRadius.circular(12),
-                child: child,
+              proxyDecorator: (child, index, animation) => ScaledDragProxy(
+                animation: animation,
+                child: Material(
+                  color: colorScheme.surfaceContainerHigh,
+                  borderRadius: BorderRadius.circular(12),
+                  child: child,
+                ),
               ),
               itemBuilder: (context, index) {
                 final item = queue[start + index];
@@ -354,9 +375,12 @@ class _MornyePlayerQueueState extends ConsumerState<MornyePlayerQueue> {
                       : null,
                   child: ListTile(
                     contentPadding: const EdgeInsetsDirectional.only(start: 12),
+                    minTileHeight: 55,
                     minVerticalPadding: 6,
-                    leading: ClipRRect(
-                      borderRadius: BorderRadius.circular(5),
+                    leading: ClipPath(
+                      clipper: const ShapeBorderClipper(
+                        shape: MornyeSquircleBorder(6),
+                      ),
                       child: SizedBox.square(
                         dimension: 40,
                         child: PlayerQueueArtwork(

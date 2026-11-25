@@ -22,12 +22,16 @@ class PreviewButton extends ConsumerWidget {
   /// shows its filled icon button, in every state.
   final bool overArtwork;
 
+  /// Called when a press starts this song's preview, not when it stops it.
+  final VoidCallback? onPreview;
+
   const PreviewButton({
     super.key,
     required this.track,
     this.size = 24,
     this.dense = false,
     this.overArtwork = false,
+    this.onPreview,
   });
 
   BoxConstraints get _constraints => dense
@@ -39,8 +43,16 @@ class PreviewButton extends ConsumerWidget {
       : null;
 
   Future<void> _onPressed(BuildContext context, WidgetRef ref) async {
+    if (!ref.read(previewPlayerProvider).isActiveUrl(track.previewUrl)) {
+      onPreview?.call();
+    }
     try {
-      await ref.read(previewPlayerProvider.notifier).toggle(track.previewUrl);
+      await ref
+          .read(previewPlayerProvider.notifier)
+          .toggle(
+            track.previewUrl,
+            refresh: () => ref.read(previewLinkRefreshProvider)(track),
+          );
     } catch (_) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(
@@ -108,6 +120,13 @@ class PreviewButton extends ConsumerWidget {
         isDesktopPlatform &&
         ref.watch(settingsProvider.select((s) => s.exclusiveOutput));
     if (!track.hasPreview || exclusive) return const SizedBox.shrink();
+    // A link that did not play is not offered a second time.
+    final unavailable = ref.watch(
+      previewUnavailableLinksProvider.select(
+        (links) => links.contains(track.previewUrl?.trim()),
+      ),
+    );
+    if (unavailable) return const SizedBox.shrink();
 
     final status = ref.watch(
       previewPlayerProvider.select(

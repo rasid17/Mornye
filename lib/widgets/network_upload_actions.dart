@@ -10,8 +10,8 @@ import 'package:mornye/providers/settings_provider.dart';
 import 'package:mornye/screens/network_storage_screen.dart';
 import 'package:mornye/services/network_library_upload.dart';
 import 'package:mornye/services/network_storage_service.dart';
-import 'package:mornye/widgets/album_detail_header.dart';
 import 'package:mornye/widgets/app_bottom_sheet.dart';
+import 'package:mornye/widgets/desktop/context_menu.dart';
 import 'package:mornye/widgets/app_icon.dart';
 import 'package:mornye/widgets/app_progress_indicator.dart';
 
@@ -147,21 +147,25 @@ Future<String?> chooseNetworkUploadFolder(
     builder: (sheetContext) => Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (destination != null)
-          AppSheetOption(
-            leading: const AppIcon.adaptive(Icons.download_outlined),
-            title: Text(settings.networkDownloadLabel),
-            subtitle: Text(sheetContext.l10n.networkDownloadDestination),
-            onTap: () => Navigator.pop(sheetContext, destination),
-          ),
-        for (final connection in connections)
-          AppSheetOption(
-            leading: const AppIcon.adaptive(Icons.dns_outlined),
-            title: Text(connection.name),
-            subtitle: Text(sheetContext.l10n.networkUploadChooseFolder),
-            trailing: const AppIcon.adaptive(Icons.chevron_right),
-            onTap: () => Navigator.pop(sheetContext, connection),
-          ),
+        AppSheetOptions(
+          children: [
+            if (destination != null)
+              AppSheetOption(
+                leading: const AppIcon.adaptive(Icons.download_outlined),
+                title: Text(settings.networkDownloadLabel),
+                subtitle: Text(sheetContext.l10n.networkDownloadDestination),
+                onTap: () => Navigator.pop(sheetContext, destination),
+              ),
+            for (final connection in connections)
+              AppSheetOption(
+                leading: const AppIcon.adaptive(Icons.dns_outlined),
+                title: Text(connection.name),
+                subtitle: Text(sheetContext.l10n.networkUploadChooseFolder),
+                trailing: const AppIcon.adaptive(Icons.chevron_right),
+                onTap: () => Navigator.pop(sheetContext, connection),
+              ),
+          ],
+        ),
         const SizedBox(height: 8),
       ],
     ),
@@ -225,20 +229,19 @@ class _UploadProgressState extends ConsumerState<_UploadProgress> {
 }
 
 /// The album header action: uploads the album's songs on this device.
-class NetworkUploadButton extends ConsumerWidget {
-  const NetworkUploadButton({super.key, required this.items});
-  final List<UnifiedLibraryItem> items;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final connections = ref.watch(networkUploadConnectionsProvider).value;
-    if (!networkUploadOffered(connections, items)) {
-      return const SizedBox.shrink();
-    }
-    return HeaderCircleButton(
-      icon: Icons.cloud_upload_outlined,
-      tooltip: context.l10n.networkUpload,
-      onPressed: () => uploadToNetworkStorage(context, ref, items),
-    );
-  }
+/// The header action that uploads [items], or null where
+/// [networkUploadOffered] says no. Call it in a build: it watches the
+/// saved connections.
+ContextMenuAction? networkUploadAction(
+  BuildContext context,
+  WidgetRef ref,
+  List<UnifiedLibraryItem> items,
+) {
+  final connections = ref.watch(networkUploadConnectionsProvider).value;
+  if (!networkUploadOffered(connections, items)) return null;
+  return ContextMenuAction(
+    icon: Icons.cloud_upload_outlined,
+    label: context.l10n.networkUpload,
+    onSelected: () => uploadToNetworkStorage(context, ref, items),
+  );
 }

@@ -5,11 +5,11 @@ import 'package:material_ui/material_ui.dart';
 import 'package:cupertino_ui/cupertino_ui.dart' show CupertinoIcons;
 import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:share_plus/share_plus.dart';
 import 'package:mornye/controllers/clickable_metadata.dart';
 import 'package:mornye/controllers/player_track_navigation.dart';
 import 'package:mornye/controllers/player_metadata_controller.dart';
 import 'package:mornye/l10n/l10n.dart';
+import 'package:mornye/models/settings.dart' show playerCoverFadeStart;
 import 'package:mornye/providers/library_collections_provider.dart';
 import 'package:mornye/providers/lyrics_translation_provider.dart';
 import 'package:mornye/providers/music_player_provider.dart';
@@ -18,6 +18,7 @@ import 'package:mornye/providers/song_lyrics_offset_provider.dart';
 import 'package:mornye/routes/now_playing_route.dart';
 import 'package:mornye/screens/equalizer_screen.dart';
 import 'package:mornye/screens/lyrics_share_screen.dart';
+import 'package:mornye/theme/cover_palette.dart';
 import 'package:mornye/theme/mornye_theme.dart';
 import 'package:mornye/theme/player_artwork_theme.dart';
 import 'package:mornye/utils/file_access.dart';
@@ -25,6 +26,7 @@ import 'package:mornye/utils/logger.dart';
 import 'package:mornye/utils/lyrics_parser.dart';
 import 'package:mornye/utils/playback_seek_preview.dart';
 import 'package:mornye/utils/synced_lyrics_scroll.dart';
+import 'package:mornye/utils/view_display.dart';
 import 'package:mornye/widgets/app_bottom_sheet.dart';
 import 'package:mornye/widgets/app_snack_bar.dart';
 import 'package:mornye/widgets/app_icon.dart';
@@ -54,10 +56,12 @@ import 'package:mornye/widgets/player_lyrics_controls.dart';
 import 'package:mornye/widgets/player_lyrics_section.dart';
 import 'package:mornye/widgets/playlist_picker_sheet.dart';
 import 'package:mornye/widgets/settings_group.dart';
+import 'package:mornye/widgets/song_share_sheet.dart';
 import 'package:mornye/widgets/mornye_player_background.dart';
 import 'package:mornye/widgets/mornye_artwork_contrast.dart';
 import 'package:mornye/widgets/mornye_player_actions_sheet.dart';
 import 'package:mornye/widgets/mornye_context_menu.dart';
+import 'package:mornye/widgets/mornye_cover_glow.dart';
 import 'package:mornye/widgets/mornye_motion_glow.dart';
 import 'package:mornye/widgets/mornye_player_artwork.dart';
 import 'package:mornye/providers/player_motion_artwork_provider.dart';
@@ -147,6 +151,7 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
   ProviderSubscription<bool>? _lyricsPlayingSub;
   ProviderSubscription<(bool, bool)>? _lyricsAutoHideSub;
   ProviderSubscription<bool>? _lyricsLayoutSub;
+  ProviderSubscription<String?>? _nextColoursSub;
   ProviderSubscription<bool>? _lyricLineSub;
 
   /// Whether to read the song file itself, even an SAF document playback
@@ -262,8 +267,15 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
         _scheduleLyricsControlsHide(restart: false);
       },
     );
+    // The next song's colours are ready when it starts, so they move with
+    // its cover instead of rebuilding the player again a moment later.
+    _nextColoursSub = ref.listenManual<String?>(
+      nextQueueArtUriProvider,
+      (_, next) => _warmColours(next),
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      _warmColours(ref.read(nextQueueArtUriProvider));
       unawaited(
         _trackMetadata.load(
           ref.read(currentMediaItemProvider).value,
@@ -287,6 +299,15 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
 
   void _onInspectorChanged() {
     if (mounted) setState(() {});
+  }
+
+  void _warmColours(String? artUri) {
+    if (!mounted || artUri == null) return;
+    if (context.isMornye) {
+      unawaited(CoverPalette.resolveSourceColor(artUri));
+    } else {
+      PlayerArtworkTheme.warm(artUri, Theme.of(context).brightness);
+    }
   }
 
   /// Whether the lyrics (1) or Up Next (2) toggle shows as selected. The
@@ -335,6 +356,7 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
     _lyricsPlayingSub?.close();
     _lyricsAutoHideSub?.close();
     _lyricsLayoutSub?.close();
+    _nextColoursSub?.close();
     _lyricLineSub?.close();
     _lyricsTranslation.cancel(owner: this);
     _trackMetadata.dispose();
@@ -360,10 +382,22 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
         (s) => s.playerCoverStyleFor(mornye: mornye) == 'fullscreen',
       ),
     );
+    final coverFade = ref.watch(
+      settingsProvider.select((s) => s.playerCoverFade),
+    );
+    final wholeCover = ref.watch(
+      settingsProvider.select((s) => s.playerCoverWhole),
+    );
     return LyricsScreenAwake(
       visible: _currentPage == 1 && mediaItem != null,
       child: mornye
-          ? _buildPlayer(context, mediaItem, fullScreenCover: fullScreenCover)
+          ? _buildPlayer(
+              context,
+              mediaItem,
+              fullScreenCover: fullScreenCover,
+              coverFade: coverFade,
+              wholeCover: wholeCover,
+            )
           // Material takes the track's artwork scheme. The providers it needs
           // are read above, so the scoped builder reads none. A skip moves
           // only the page background, so the whole player is not rebuilt
@@ -376,6 +410,8 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                   context,
                   mediaItem,
                   fullScreenCover: fullScreenCover,
+                  coverFade: coverFade,
+                  wholeCover: wholeCover,
                 ),
               ),
             ),
@@ -386,6 +422,8 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
     BuildContext context,
     MediaItem? mediaItem, {
     required bool fullScreenCover,
+    required String coverFade,
+    required bool wholeCover,
   }) {
     final mornye = context.isMornye;
     final colorScheme = mornye
@@ -414,30 +452,17 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
     final materialFullScreen =
         materialBackdrop &&
         MediaQuery.orientationOf(context) == Orientation.portrait;
-    // Material plays motion artwork only as the full-screen cover; the card
-    // cover stays still.
-    final motionState =
-        (mornye || materialFullScreen) &&
-            ref.watch(settingsProvider.select((s) => s.motionArtworkEnabled)) &&
-            !MediaQuery.disableAnimationsOf(context)
-        ? ref.watch(
-            songMotionArtworkProvider((
-              album: mediaItem.album ?? '',
-              artist: mediaItem.artist ?? '',
-              source: source,
-            )),
-          )
-        : null;
-    // A new song looks up its artwork for a few frames. The outgoing motion
-    // cover keeps its layout meanwhile, so the gradient and its fade do not
-    // drop to the still cover's layout and come back.
-    final lookingUp =
-        motionState != null && motionState.isLoading && !motionState.hasValue;
-    final resolvedMotion = lookingUp ? _shownMotionArtwork : motionState?.value;
-    _shownMotionArtwork = resolvedMotion;
-    final motionArtwork = resolvedMotion?.source == _failedMotionSource
-        ? null
-        : resolvedMotion;
+    final motionSong = (
+      album: mediaItem.album ?? '',
+      artist: mediaItem.artist ?? '',
+      source: source,
+    );
+    // Material plays motion artwork only as the full-screen cover, which its
+    // backdrop looks up itself; the card cover stays still.
+    final motion = mornye
+        ? _watchShownMotion(context, ref, motionSong)
+        : (artwork: _shownMotion(null), resolving: false);
+    final motionArtwork = motion.artwork;
     final motionRatio = motionArtwork == null
         ? null
         : motionArtwork.aspectRatio ??
@@ -455,10 +480,11 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
     final fullBleed = mornye && (motionArtwork != null || fullScreenCover);
     final screen = MediaQuery.sizeOf(context);
     // A still cover is cropped at the sides to reach down to the title, as
-    // in the Material full-screen style; landscape keeps the square card.
+    // in the Material full-screen style; landscape keeps the square card,
+    // and so does the whole cover setting.
     final stillFullBleed = fullBleed && motionArtwork == null;
     final artworkRatio = stillFullBleed
-        ? _landscape || screen.height <= 0
+        ? _landscape || wholeCover || screen.height <= 0
               ? 1.0
               : (screen.width / (screen.height * 0.56)).clamp(0.5, 1.0)
         : motionRatio;
@@ -489,9 +515,11 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
     Widget artwork() => MornyePlayerArtwork(
       mediaItem: mediaItem,
       videoUrl: motionArtwork?.source,
-      resolvingVideo: motionState?.isLoading == true,
+      resolvingVideo: motion.resolving,
       onAspectRatioChanged: (ratio) {
+        // A saved ratio already shapes the layout; the measured one is unused.
         if (!mounted ||
+            motionArtwork?.aspectRatio != null ||
             (_measuredMotionSource == motionArtwork?.source &&
                 _motionAspectRatio == ratio)) {
           return;
@@ -502,7 +530,8 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
         });
       },
       onError: () {
-        if (mounted) {
+        // Every artwork placement reports the same failure.
+        if (mounted && _failedMotionSource != motionArtwork?.source) {
           setState(() => _failedMotionSource = motionArtwork?.source);
         }
       },
@@ -510,7 +539,7 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
 
     // The Mornye route moves the entire player together. A second,
     // delayed content fade would make dismissal appear to pause partway down.
-    final route = ModalRoute.of(context);
+    final route = NowPlayingRoute.routeOf(context);
     final routeAnimation = route?.animation ?? kAlwaysCompleteAnimation;
     if (_artworkRoute != route) {
       _artworkRoute?.readArtwork = null;
@@ -554,7 +583,7 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
     final contentOpacity = mornye
         ? kAlwaysCompleteAnimation
         : route is NowPlayingRoute
-        // Holds through the shrink back to the mini player.
+        // Follows the surface of a player that grows out of the mini player.
         ? route.contentOpacity(contentFade)
         : routeAnimation.drive(contentFade);
 
@@ -899,25 +928,47 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
       return Stack(
         fit: StackFit.expand,
         children: [
-          MaterialPlayerBackdrop(
-            mediaItem: mediaItem,
-            colorScheme: colorScheme,
-            showArtwork: materialFullScreen && _currentPage != 1,
-            playsMotionArtwork: true,
-            videoUrl: motionArtwork?.source,
-            resolvingVideo: motionState?.isLoading == true,
-            onVideoError: () {
-              if (mounted) {
-                setState(() => _failedMotionSource = motionArtwork?.source);
-              }
-            },
+          RepaintBoundary(
+            // Its answer, a few frames into the open or a song, rebuilds
+            // only the backdrop.
+            child: Consumer(
+              builder: (context, ref, _) {
+                final state = materialFullScreen
+                    ? _watchMotionArtwork(context, ref, motionSong)
+                    : null;
+                final motionArtwork = _shownMotion(state);
+                return MaterialPlayerBackdrop(
+                  mediaItem: mediaItem,
+                  colorScheme: colorScheme,
+                  showArtwork: materialFullScreen && _currentPage != 1,
+                  fadeStart: playerCoverFadeStart(
+                    MaterialPlayerBackdrop.mediumFadeStart,
+                    coverFade,
+                  ),
+                  wholeCover: wholeCover,
+                  playsMotionArtwork: true,
+                  videoUrl: motionArtwork?.source,
+                  resolvingVideo: state?.isLoading == true,
+                  onVideoError: () {
+                    if (mounted) {
+                      setState(
+                        () => _failedMotionSource = motionArtwork?.source,
+                      );
+                    }
+                  },
+                );
+              },
+            ),
           ),
           _lyricsPointerListener(player),
         ],
       );
     }
     final showsFullArtwork = fullBleed && !_landscape && _currentPage == 0;
-    final fadeStart = stillFullBleed ? 0.72 : 0.58;
+    final fadeStart = playerCoverFadeStart(
+      stillFullBleed ? 0.72 : 0.58,
+      coverFade,
+    );
     return HeroMode(
       // A route Hero renders outside the panel's gradient and slide, briefly
       // exposing a detached rectangle. Keep Mornye artwork inside its panel.
@@ -944,26 +995,39 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                 }
                 _coverDim[cover] = dim;
               },
-              child: MornyePlayerBackground(
-                artUri: mediaItem.artUri,
-                squareArtwork: squareArtwork,
-                artworkAspectRatio: artworkRatio,
-                fadeStart: fadeStart,
-                artwork: showsFullArtwork
-                    ? PlayerTransitionArtwork(
-                        artworkKey: _motionArtworkKey,
-                        child: Hero(
-                          tag: kNowPlayingArtworkHeroTag,
-                          child: artwork(),
-                        ),
-                      )
-                    : null,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  MornyePlayerBackground(
+                    artUri: mediaItem.artUri,
+                    squareArtwork: squareArtwork,
+                    artworkAspectRatio: artworkRatio,
+                    fadeStart: fadeStart,
+                    artwork: showsFullArtwork
+                        ? PlayerTransitionArtwork(
+                            artworkKey: _motionArtworkKey,
+                            child: Hero(
+                              tag: kNowPlayingArtworkHeroTag,
+                              child: artwork(),
+                            ),
+                          )
+                        : null,
+                  ),
+                  // Inside the sample: the labels sit on its colour.
+                  MornyeCoverGlow(
+                    artUri: mediaItem.artUri?.toString(),
+                    visible: showsFullArtwork && stillFullBleed,
+                    squareArtwork: squareArtwork,
+                    artworkAspectRatio: artworkRatio,
+                    fadeStart: fadeStart,
+                  ),
+                ],
               ),
             ),
             MornyeMotionGlow(
               videoUrl: motionArtwork?.source,
               visible: showsFullArtwork,
-              resolvingVideo: motionState?.isLoading == true,
+              resolvingVideo: motion.resolving,
               squareArtwork: squareArtwork,
               artworkAspectRatio: artworkRatio,
               fadeStart: fadeStart,
@@ -986,6 +1050,59 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
         ),
       ),
     );
+  }
+
+  static AsyncValue<MotionArtwork?>? _watchMotionArtwork(
+    BuildContext context,
+    WidgetRef ref,
+    PlayerArtworkSong song,
+  ) =>
+      ref.watch(settingsProvider.select((s) => s.motionArtworkEnabled)) &&
+          !MediaQuery.disableAnimationsOf(context)
+      ? ref.watch(songMotionArtworkProvider(song))
+      : null;
+
+  /// The Mornye player's motion cover, as [_shownMotion] picks it, and
+  /// whether the next one is still looked up. An answer that changes
+  /// neither, as for most songs, does not rebuild the player.
+  ({MotionArtwork? artwork, bool resolving}) _watchShownMotion(
+    BuildContext context,
+    WidgetRef ref,
+    PlayerArtworkSong song,
+  ) {
+    if (!ref.watch(settingsProvider.select((s) => s.motionArtworkEnabled)) ||
+        MediaQuery.disableAnimationsOf(context)) {
+      return (artwork: _shownMotion(null), resolving: false);
+    }
+    final shown = _shownMotionArtwork;
+    final (:artwork, :resolving) = ref.watch(
+      songMotionArtworkProvider(song).select((state) {
+        final lookingUp = state.isLoading && !state.hasValue;
+        final artwork = lookingUp ? shown : state.value;
+        // A lookup only holds a video that is on screen, and only matters
+        // while no usable video shows, so the same video again is no change.
+        final usable = artwork != null && artwork.source != _failedMotionSource;
+        return (
+          artwork: artwork,
+          resolving: !usable && shown != null && state.isLoading,
+        );
+      }),
+    );
+    _shownMotionArtwork = artwork;
+    return (
+      artwork: artwork?.source == _failedMotionSource ? null : artwork,
+      resolving: resolving,
+    );
+  }
+
+  /// A new song looks up its artwork for a few frames. The outgoing motion
+  /// cover keeps its layout meanwhile, so the gradient and its fade do not
+  /// drop to the still cover's layout and come back.
+  MotionArtwork? _shownMotion(AsyncValue<MotionArtwork?>? state) {
+    final lookingUp = state != null && state.isLoading && !state.hasValue;
+    final resolved = lookingUp ? _shownMotionArtwork : state?.value;
+    _shownMotionArtwork = resolved;
+    return resolved?.source == _failedMotionSource ? null : resolved;
   }
 
   /// A touch on the lyrics page holds the controls; a tap brings hidden
@@ -1114,7 +1231,8 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
         _lyricsOptionsOpen ||
         _audioOutputOpen ||
         _lyricsControlsHidden ||
-        _lyricsPointers.isNotEmpty) {
+        _lyricsPointers.isNotEmpty ||
+        !TickerMode.valuesOf(context).enabled) {
       _lyricsIdleTimer?.cancel();
       if (_currentPage == 1 && !_lyricsControlsHidden) {
         _logLyricsAutoHideBlockers();
@@ -1127,11 +1245,12 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
     _lyricsIdleTimer?.cancel();
     _lyricsIdleTimer = Timer(const Duration(seconds: 5), () {
       if (!mounted) return;
+      if (!TickerMode.valuesOf(context).enabled) return;
       if (!_canAutoHideLyricsControls) {
         _logLyricsAutoHideBlockers();
         return;
       }
-      if (ModalRoute.of(context)?.isCurrent == false) {
+      if (NowPlayingRoute.routeOf(context)?.isCurrent == false) {
         _logLyricsControlsStatus(
           'Lyrics controls stay visible: another route is active',
         );
@@ -1283,7 +1402,9 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
         state.speed <= 0) {
       return state.position;
     }
-    final lead = lyricsDisplayLead(View.maybeOf(context)?.display.refreshRate);
+    final lead = lyricsDisplayLead(
+      displayOf(View.maybeOf(context))?.refreshRate,
+    );
     return state.position + lead * state.speed;
   }
 
@@ -1450,6 +1571,11 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
                     onTap: () => Navigator.of(sheetContext).pop('details'),
                   ),
                   SettingsItem(
+                    icon: Icons.share_outlined,
+                    title: sheetContext.l10n.trackMetadataShare,
+                    onTap: () => Navigator.of(sheetContext).pop('share'),
+                  ),
+                  SettingsItem(
                     icon: Icons.format_quote_outlined,
                     title: sheetContext.l10n.lyricsShareTitle,
                     onTap: () => Navigator.of(sheetContext).pop('shareLyrics'),
@@ -1528,17 +1654,10 @@ class _NowPlayingScreenState extends ConsumerState<NowPlayingScreen> {
         await _goToCurrentArtist(mediaItem);
         break;
       case 'share':
-        await SharePlus.instance.share(
-          ShareParams(
-            text: '${mediaItem.title} — ${mediaItem.artist ?? ''}',
-            sharePositionOrigin:
-                anchor ??
-                Rect.fromCenter(
-                  center: MediaQuery.sizeOf(context).center(Offset.zero),
-                  width: 1,
-                  height: 1,
-                ),
-          ),
+        await showSongShare(
+          context,
+          title: mediaItem.title,
+          artist: mediaItem.artist ?? '',
         );
         break;
       case 'album':

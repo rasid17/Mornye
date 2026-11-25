@@ -33,9 +33,27 @@ class _DesktopScrollArrowsState extends State<DesktopScrollArrows> {
   final _controller = ScrollController();
   // Hovering shows the arrows alone; the list and its cards keep their build.
   final _hovered = ValueNotifier<bool>(false);
+  final _edges = ValueNotifier<(bool, bool)>((false, false));
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.addListener(_syncEdges);
+  }
+
+  void _syncEdges() {
+    final position = _controller.hasClients ? _controller.position : null;
+    final ready = position != null && position.hasContentDimensions;
+    final next = ready
+        ? (position.extentBefore > 0, position.extentAfter > 0)
+        : (false, false);
+    if (_edges.value != next) _edges.value = next;
+  }
 
   @override
   void dispose() {
+    _controller.removeListener(_syncEdges);
+    _edges.dispose();
     _hovered.dispose();
     _controller.dispose();
     super.dispose();
@@ -68,7 +86,10 @@ class _DesktopScrollArrowsState extends State<DesktopScrollArrows> {
     final list = widget.builder(context, _controller);
     if (!isDesktopPlatform) return list;
     return MouseRegion(
-      onEnter: (_) => _hovered.value = true,
+      onEnter: (_) {
+        _syncEdges();
+        _hovered.value = true;
+      },
       onExit: (_) => _hovered.value = false,
       child: Stack(
         children: [
@@ -96,8 +117,8 @@ class _DesktopScrollArrowsState extends State<DesktopScrollArrows> {
                     Curves.easeOut,
                   ),
                 ),
-                exit: const AppMotionSpec(
-                  Duration(milliseconds: 100),
+                exit: AppMotionSpec(
+                  MotionPace.duration(const Duration(milliseconds: 100)),
                   Curves.easeOut,
                 ),
                 child: _arrows(context),
@@ -109,20 +130,21 @@ class _DesktopScrollArrowsState extends State<DesktopScrollArrows> {
     );
   }
 
-  Widget _arrows(BuildContext context) => ListenableBuilder(
-    listenable: _controller,
-    builder: (context, _) {
-      final position = _controller.hasClients ? _controller.position : null;
-      final ready = position != null && position.hasContentDimensions;
-      return Stack(
-        children: [
-          if (ready && position.extentBefore > 0)
-            _arrow(context, forward: false),
-          if (ready && position.extentAfter > 0) _arrow(context, forward: true),
-        ],
-      );
-    },
-  );
+  Widget _arrows(BuildContext context) {
+    _syncEdges();
+    return ValueListenableBuilder<(bool, bool)>(
+      valueListenable: _edges,
+      builder: (context, edges, _) {
+        final (hasBack, hasForward) = edges;
+        return Stack(
+          children: [
+            if (hasBack) _arrow(context, forward: false),
+            if (hasForward) _arrow(context, forward: true),
+          ],
+        );
+      },
+    );
+  }
 
   /// How far Mornye's glass inspector reaches over this shelf, so the forward
   /// paddle stays beside it instead of beneath it.
@@ -132,6 +154,10 @@ class _DesktopScrollArrowsState extends State<DesktopScrollArrows> {
     if (box is! RenderBox || !box.hasSize) return 0;
     final windowWidth = MediaQuery.sizeOf(context).width;
     if (!desktopInspectorOverlays(windowWidth, mornye: true)) return 0;
+    if (Directionality.of(context) == TextDirection.rtl) {
+      final shelfStart = box.localToGlobal(Offset.zero).dx;
+      return math.max(0, mornyeGlassInspectorWidth - shelfStart);
+    }
     final shelfEnd = box.localToGlobal(Offset(box.size.width, 0)).dx;
     return math.max(0, shelfEnd - (windowWidth - mornyeGlassInspectorWidth));
   }
@@ -140,9 +166,10 @@ class _DesktopScrollArrowsState extends State<DesktopScrollArrows> {
     final l10n = context.l10n;
     final mornye = context.isMornye;
     final colorScheme = Theme.of(context).colorScheme;
-    final icon = forward
-        ? (mornye ? CupertinoIcons.forward : Icons.chevron_right)
-        : (mornye ? CupertinoIcons.back : Icons.chevron_left);
+    // Both icon sets mirror themselves in right-to-left layouts.
+    final icon = mornye
+        ? (forward ? CupertinoIcons.forward : CupertinoIcons.back)
+        : (forward ? Icons.chevron_right : Icons.chevron_left);
     if (mornye) {
       // A tall glass paddle stays close to the edge of the shelf.
       return PositionedDirectional(

@@ -18,7 +18,6 @@ import 'package:mornye/utils/file_access.dart' show deleteFile, fileExists;
 import 'package:mornye/widgets/app_alert_dialog.dart';
 import 'package:mornye/providers/network_offline_provider.dart';
 import 'package:mornye/services/network_offline_saver.dart';
-import 'package:mornye/widgets/album_detail_header.dart';
 import 'package:mornye/widgets/desktop/context_menu.dart';
 import 'package:mornye/widgets/app_bottom_sheet.dart';
 import 'package:mornye/widgets/app_progress_indicator.dart';
@@ -275,21 +274,19 @@ class _OfflineProgressState extends ConsumerState<_OfflineProgress> {
   }
 }
 
-class NetworkOfflineButton extends ConsumerWidget {
-  const NetworkOfflineButton({super.key, required this.items});
-  final List<UnifiedLibraryItem> items;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    if (!items.any((item) => networkOfflineOrigin(item) != null)) {
-      return const SizedBox.shrink();
-    }
-    return HeaderCircleButton(
-      icon: Icons.download_for_offline_outlined,
-      tooltip: context.l10n.offlineSave,
-      onPressed: () => saveNetworkOffline(context, ref, items),
-    );
-  }
+/// The header action that keeps [items] offline, or null when none of them
+/// is on network storage.
+ContextMenuAction? networkOfflineItemsAction(
+  BuildContext context,
+  WidgetRef ref,
+  List<UnifiedLibraryItem> items,
+) {
+  if (!items.any((item) => networkOfflineOrigin(item) != null)) return null;
+  return ContextMenuAction(
+    icon: Icons.download_for_offline_outlined,
+    label: context.l10n.offlineSave,
+    onSelected: () => saveNetworkOffline(context, ref, items),
+  );
 }
 
 ContextMenuAction networkOfflineTracksAction(
@@ -324,38 +321,57 @@ class OfflineAvailabilityCover extends StatelessWidget {
   /// source and play overlays on a grid card.
   final double inset;
 
+  /// The badge alone, placed in a [Stack] as it sits over [child]. A cover
+  /// in flight carries the picture and lets this go, apart from each other.
+  Widget get badge => OfflineAvailabilityBadge(item: item, inset: inset);
+
   @override
   Widget build(BuildContext context) {
     final label = offlineAvailabilityLabel(context, item);
     if (label == null) return child;
-    final local = item.historyItem?.originFilePath != null;
-    final colors = Theme.of(context).colorScheme;
     return Tooltip(
       message: label,
-      child: Stack(
-        children: [
-          child,
-          PositionedDirectional(
-            bottom: inset,
-            start: inset,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: colors.secondaryContainer,
-                shape: BoxShape.circle,
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(3),
-                child: AppIcon.adaptive(
-                  local ? Icons.offline_pin : Icons.cloud,
-                  size: 14,
-                  fill: 1,
-                  color: colors.onSecondaryContainer,
-                  semanticLabel: label,
-                ),
-              ),
-            ),
+      child: Stack(children: [child, badge]),
+    );
+  }
+}
+
+/// Where a song of a server is kept, as a small mark in a cover's bottom
+/// start corner. Nothing for a song that is only on this device.
+class OfflineAvailabilityBadge extends StatelessWidget {
+  const OfflineAvailabilityBadge({
+    super.key,
+    required this.item,
+    this.inset = 0,
+  });
+
+  final UnifiedLibraryItem item;
+  final double inset;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = offlineAvailabilityLabel(context, item);
+    if (label == null) return const SizedBox.shrink();
+    final local = item.historyItem?.originFilePath != null;
+    final colors = Theme.of(context).colorScheme;
+    return PositionedDirectional(
+      bottom: inset,
+      start: inset,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: colors.secondaryContainer,
+          shape: BoxShape.circle,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(3),
+          child: AppIcon.adaptive(
+            local ? Icons.offline_pin : Icons.cloud,
+            size: 14,
+            fill: 1,
+            color: colors.onSecondaryContainer,
+            semanticLabel: label,
           ),
-        ],
+        ),
       ),
     );
   }

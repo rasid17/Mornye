@@ -84,6 +84,7 @@ impl Backend {
             0,
             None,
             None,
+            None,
             &check,
         )
     }
@@ -99,6 +100,7 @@ impl Backend {
         mod_time: i64,
         covers: Option<&SyncBatch>,
         folder_image: Option<&FolderImage>,
+        known_lrc_sidecar: Option<bool>,
         check: &dyn Fn() -> Result<(), String>,
     ) -> Result<Value, String> {
         check()?;
@@ -129,17 +131,15 @@ impl Backend {
                 cache_key,
                 |_, format, check| {
                     let file = file.as_mut().ok_or("audio file unavailable")?;
-                    if format == "flac" {
+                    // The cover cache already files .mp4 and .aac under "m4a".
+                    if matches!(format, "flac" | "mp3" | "m4a" | "ogg" | "opus") {
                         let (tags, cover) = read_library_metadata_with_cover(
                             file, path, hint, scan_time, mod_time, check,
                         )?;
                         metadata = Some(tags);
                         cover.ok_or_else(|| "no cover art found in file".into())
                     } else {
-                        // The cover cache files .aac under its MP4 reader; the
-                        // container check also recognizes raw ADTS.
-                        let aac = library_extension(path, hint) == "aac";
-                        extract_cover(file, if aac { "aac" } else { format }, check)
+                        extract_cover(file, format, check)
                     }
                 },
                 covers,
@@ -178,7 +178,11 @@ impl Backend {
             result["coverPath"] = cover.into();
         }
         check()?;
-        if result["hasLyrics"] == false {
+        if result["hasLyrics"] == false
+            && known_lrc_sidecar != Some(false)
+            && !path.starts_with("/proc/self/fd/")
+            && !path.starts_with("/dev/fd/")
+        {
             let open = |path: &str| {
                 let input = files.resolve_legacy(path)?;
                 input.open_native_read().map_err(|error| error.to_string())

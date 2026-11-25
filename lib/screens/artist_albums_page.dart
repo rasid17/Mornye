@@ -47,10 +47,10 @@ class _ArtistAlbumsPage extends StatelessWidget {
                     slivers: [
                       SliverPadding(
                         padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                        sliver: SliverLayoutBuilder(
-                          builder: (context, constraints) {
+                        sliver: SliverLayoutInfoBuilder<double>(
+                          select: (constraints) => constraints.crossAxisExtent,
+                          builder: (context, width) {
                             const gap = 12.0;
-                            final width = constraints.crossAxisExtent;
                             final fit =
                                 (width + gap) ~/ (searchCoverMinExtent + gap);
                             final count = fit < 2 ? 2 : fit;
@@ -204,22 +204,23 @@ class _ArtistAlbumCover extends StatelessWidget {
       coverUrl: album.coverUrl,
       baseName: '${album.artists} - ${album.name}',
       enabled: enabled,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: album.coverUrl != null
-            ? CachedCoverImage(
-                imageUrl: album.coverUrl!,
-                width: size,
-                height: size,
-                fit: BoxFit.cover,
-                memCacheWidth: (size * 2).round(),
-                memCacheHeight: (size * 2).round(),
-                placeholder: (context, url) => ShimmerLoading(
-                  child: Container(color: colorScheme.surfaceContainerHighest),
-                ),
-                errorWidget: (context, url, error) => fallback,
-              )
-            : fallback,
+      child: SizedBox.square(
+        dimension: size,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: album.coverUrl != null
+              ? CachedCoverImage(
+                  imageUrl: album.coverUrl!,
+                  fit: BoxFit.cover,
+                  placeholder: (context, url) => ShimmerLoading(
+                    child: Container(
+                      color: colorScheme.surfaceContainerHighest,
+                    ),
+                  ),
+                  errorWidget: (context, url, error) => fallback,
+                )
+              : fallback,
+        ),
       ),
     );
   }
@@ -246,7 +247,7 @@ class _ArtistAlbumTypeBadge extends StatelessWidget {
             : context.l10n.releaseTypeSingle,
         style: const TextStyle(
           color: Colors.white,
-          fontSize: 10,
+          fontSize: 11,
           fontWeight: FontWeight.w600,
         ),
       ),

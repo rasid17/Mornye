@@ -8,6 +8,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.lang.ref.WeakReference
 import java.util.concurrent.atomic.AtomicReference
 import org.json.JSONObject
 import org.json.JSONTokener
@@ -20,40 +21,45 @@ private val LIBRARY_SCAN_PROGRESS_STREAM_CHANNEL =
 // disk-read wakeups during a scan vs the previous 200ms.
 private val LIBRARY_SCAN_PROGRESS_STREAM_POLLING_INTERVAL_MS = 400L
 
-internal fun MainActivity.registerProgressStreams(messenger: BinaryMessenger) {
-    EventChannel(
-        messenger,
-        DOWNLOAD_PROGRESS_STREAM_CHANNEL,
-    ).setStreamHandler(
-        object : EventChannel.StreamHandler {
-            override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
-                if (events != null) {
-                    startDownloadProgressStream(events)
-                }
-            }
-
-            override fun onCancel(arguments: Any?) {
-                stopDownloadProgressStream()
-            }
-        },
+private class ProgressStreams(messenger: BinaryMessenger) {
+    val messenger = WeakReference(messenger)
+    val downloads = ProgressStreamRelay(
+        MainActivity::startDownloadProgressStream,
+        MainActivity::stopDownloadProgressStream,
+    )
+    val libraryScans = ProgressStreamRelay(
+        MainActivity::startLibraryScanProgressStream,
+        MainActivity::stopLibraryScanProgressStream,
     )
 
-    EventChannel(
-        messenger,
-        LIBRARY_SCAN_PROGRESS_STREAM_CHANNEL,
-    ).setStreamHandler(
-        object : EventChannel.StreamHandler {
-            override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
-                if (events != null) {
-                    startLibraryScanProgressStream(events)
-                }
-            }
+    init {
+        EventChannel(messenger, DOWNLOAD_PROGRESS_STREAM_CHANNEL)
+            .setStreamHandler(downloads)
+        EventChannel(messenger, LIBRARY_SCAN_PROGRESS_STREAM_CHANNEL)
+            .setStreamHandler(libraryScans)
+    }
+}
 
-            override fun onCancel(arguments: Any?) {
-                stopLibraryScanProgressStream()
-            }
-        },
-    )
+// Registered once per engine. A handler registered again for each Activity
+// has no sink for the stream Dart still listens to, so its cancel fails.
+private var progressStreams: ProgressStreams? = null
+
+internal fun MainActivity.attachProgressStreams(messenger: BinaryMessenger) {
+    val streams = progressStreams?.takeIf { it.messenger.get() === messenger }
+        ?: ProgressStreams(messenger).also { progressStreams = it }
+    streams.downloads.attach(this)
+    streams.libraryScans.attach(this)
+}
+
+internal fun MainActivity.detachProgressStreams() {
+    val streams = progressStreams
+    if (streams == null) {
+        stopDownloadProgressStream()
+        stopLibraryScanProgressStream()
+        return
+    }
+    streams.downloads.detach(this)
+    streams.libraryScans.detach(this)
 }
 
 internal fun downloadProgressSequence(payload: String, previous: Long): Long {
@@ -125,12 +131,13 @@ private fun MainActivity.startLibraryScanProgressStream(sink: EventChannel.Event
     lastLibraryScanProgressPayload = null
     libraryScanProgressStreamJob = scope.launch {
         try {
-            val initialPayload = withContext(Dispatchers.IO) {
-                readLibraryScanProgressJsonForStream()
+            val (initialPayload, parsedInitial) = withContext(Dispatchers.IO) {
+                val raw = readLibraryScanProgressJsonForStream()
+                raw to parseJsonPayload(raw)
             }
             if (!isActive || libraryScanProgressEventSink !== sink) return@launch
             lastLibraryScanProgressPayload = initialPayload
-            sink.success(parseJsonPayload(initialPayload))
+            sink.success(parsedInitial)
         } catch (e: Exception) {
             android.util.Log.w(
                 "Mornye",
@@ -139,13 +146,15 @@ private fun MainActivity.startLibraryScanProgressStream(sink: EventChannel.Event
         }
         while (isActive && libraryScanProgressEventSink === sink) {
             try {
-                val payload = withContext(Dispatchers.IO) {
-                    readLibraryScanProgressJsonForStream()
+                val previous = lastLibraryScanProgressPayload
+                val update = withContext(Dispatchers.IO) {
+                    val raw = readLibraryScanProgressJsonForStream()
+                    if (raw == previous) null else raw to parseJsonPayload(raw)
                 }
                 if (!isActive || libraryScanProgressEventSink !== sink) break
-                if (payload != lastLibraryScanProgressPayload) {
-                    lastLibraryScanProgressPayload = payload
-                    sink.success(parseJsonPayload(payload))
+                if (update != null) {
+                    lastLibraryScanProgressPayload = update.first
+                    sink.success(update.second)
                 }
             } catch (e: Exception) {
                 android.util.Log.w(

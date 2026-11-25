@@ -215,7 +215,7 @@ class _ThemePreviewCard extends StatelessWidget {
                           : context.l10n.appearanceThemeLight,
                       style: const TextStyle(
                         color: Colors.white,
-                        fontSize: 10,
+                        fontSize: 11,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -305,7 +305,7 @@ class _MornyeGlassClaritySlider extends ConsumerWidget {
                       ),
                       child: Row(
                         children: [
-                          const AppIcon(Icons.music_note_rounded),
+                          const AppIcon.adaptive(Icons.music_note_rounded),
                           const SizedBox(width: 12),
                           Expanded(
                             child: Text(
@@ -313,7 +313,7 @@ class _MornyeGlassClaritySlider extends ConsumerWidget {
                               style: theme.textTheme.titleMedium,
                             ),
                           ),
-                          const AppIcon(Icons.play_arrow_rounded),
+                          const AppIcon.adaptive(Icons.play_arrow_rounded),
                         ],
                       ),
                     ),
@@ -322,19 +322,17 @@ class _MornyeGlassClaritySlider extends ConsumerWidget {
               ),
             ),
           ),
-          Semantics(
-            label: l10n.appearanceGlassClarity,
-            child: Slider(
-              key: const ValueKey('mornye-glass-clarity'),
-              value: clarity,
-              divisions: 20,
-              label: '${(clarity * 100).round()}%',
-              onChanged: adjustable
-                  ? (value) =>
-                        notifier.setMornyeGlassClarity(value, persist: false)
-                  : null,
-              onChangeEnd: adjustable ? notifier.setMornyeGlassClarity : null,
-            ),
+          AppSlider(
+            key: const ValueKey('mornye-glass-clarity'),
+            value: clarity,
+            divisions: 20,
+            label: '${(clarity * 100).round()}%',
+            semanticLabel: l10n.appearanceGlassClarity,
+            onChanged: adjustable
+                ? (value) =>
+                      notifier.setMornyeGlassClarity(value, persist: false)
+                : null,
+            onChangeEnd: adjustable ? notifier.setMornyeGlassClarity : null,
           ),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -587,23 +585,92 @@ class _ThemeModeSelector extends StatelessWidget {
 
 /// Scales the whole app. The size applies when the slider is released, so
 /// the slider does not move under the pointer while it is dragged.
-class _InterfaceSizeSlider extends ConsumerStatefulWidget {
+class _InterfaceSizeSlider extends ConsumerWidget {
   const _InterfaceSizeSlider();
 
   @override
-  ConsumerState<_InterfaceSizeSlider> createState() =>
-      _InterfaceSizeSliderState();
+  Widget build(BuildContext context, WidgetRef ref) {
+    final l10n = context.l10n;
+    return _PercentSlider(
+      sliderKey: const ValueKey('interface-size-slider'),
+      title: l10n.appearanceInterfaceSize,
+      description: l10n.appearanceInterfaceSizeDescription,
+      lowLabel: l10n.appearanceInterfaceSizeSmaller,
+      highLabel: l10n.appearanceInterfaceSizeLarger,
+      min: minInterfaceScale,
+      max: maxInterfaceScale,
+      divisions: 10,
+      saved: ref.watch(
+        settingsProvider.select((settings) => settings.interfaceScale),
+      ),
+      onCommitted: ref.read(settingsProvider.notifier).setInterfaceScale,
+    );
+  }
 }
 
-class _InterfaceSizeSliderState extends ConsumerState<_InterfaceSizeSlider> {
+/// How fast the app's own motion plays ([MotionPace]), in quarter steps
+/// from half to twice the designed speed.
+class _AnimationSpeedSlider extends ConsumerWidget {
+  const _AnimationSpeedSlider();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final l10n = context.l10n;
+    return _PercentSlider(
+      sliderKey: const ValueKey('animation-speed-slider'),
+      title: l10n.appearanceAnimationSpeed,
+      description: l10n.appearanceAnimationSpeedDescription,
+      lowLabel: l10n.appearanceAnimationSpeedSlower,
+      highLabel: l10n.appearanceAnimationSpeedFaster,
+      min: minAnimationSpeed,
+      max: maxAnimationSpeed,
+      divisions: 6,
+      saved: ref.watch(
+        settingsProvider.select((settings) => settings.animationSpeed),
+      ),
+      onCommitted: ref.read(settingsProvider.notifier).setAnimationSpeed,
+    );
+  }
+}
+
+/// A slider row for a factor shown as a percentage, with a label at each
+/// end and an explanation below. [onCommitted] runs when the slider is
+/// released.
+class _PercentSlider extends StatefulWidget {
+  const _PercentSlider({
+    required this.sliderKey,
+    required this.title,
+    required this.description,
+    required this.lowLabel,
+    required this.highLabel,
+    required this.min,
+    required this.max,
+    required this.divisions,
+    required this.saved,
+    required this.onCommitted,
+  });
+
+  final Key sliderKey;
+  final String title;
+  final String description;
+  final String lowLabel;
+  final String highLabel;
+  final double min;
+  final double max;
+  final int divisions;
+  final double saved;
+  final ValueChanged<double> onCommitted;
+
+  @override
+  State<_PercentSlider> createState() => _PercentSliderState();
+}
+
+class _PercentSliderState extends State<_PercentSlider> {
   double? _draft;
 
   @override
   Widget build(BuildContext context) {
-    final saved = ref.watch(
-      settingsProvider.select((settings) => settings.interfaceScale),
-    );
-    final value = interfaceScaleFromJson(_draft ?? saved);
+    final value = (_draft ?? widget.saved).clamp(widget.min, widget.max);
     final l10n = context.l10n;
     final tokens = context.tokens;
     final theme = Theme.of(context);
@@ -617,19 +684,19 @@ class _InterfaceSizeSliderState extends ConsumerState<_InterfaceSizeSlider> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SliderValueHeader(title: l10n.appearanceInterfaceSize, value: label),
+          SliderValueHeader(title: widget.title, value: label),
           AppSlider(
-            key: const ValueKey('interface-size-slider'),
+            key: widget.sliderKey,
             value: value,
-            min: minInterfaceScale,
-            max: maxInterfaceScale,
-            divisions: 10,
+            min: widget.min,
+            max: widget.max,
+            divisions: widget.divisions,
             label: label,
-            semanticLabel: l10n.appearanceInterfaceSize,
+            semanticLabel: widget.title,
             semanticFormatterCallback: format.format,
             onChanged: (value) => setState(() => _draft = value),
             onChangeEnd: (value) {
-              ref.read(settingsProvider.notifier).setInterfaceScale(value);
+              widget.onCommitted(value);
               setState(() => _draft = null);
             },
           ),
@@ -640,20 +707,17 @@ class _InterfaceSizeSliderState extends ConsumerState<_InterfaceSizeSlider> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(child: Text(l10n.appearanceInterfaceSizeSmaller)),
+                Expanded(child: Text(widget.lowLabel)),
                 SizedBox(width: tokens.gapMd),
                 Expanded(
-                  child: Text(
-                    l10n.appearanceInterfaceSizeLarger,
-                    textAlign: TextAlign.end,
-                  ),
+                  child: Text(widget.highLabel, textAlign: TextAlign.end),
                 ),
               ],
             ),
           ),
           SizedBox(height: tokens.gapSm),
           Text(
-            l10n.appearanceInterfaceSizeDescription,
+            widget.description,
             style: theme.textTheme.bodySmall?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
@@ -661,10 +725,7 @@ class _InterfaceSizeSliderState extends ConsumerState<_InterfaceSizeSlider> {
         ],
       ),
     );
-    return SettingsSearchTarget(
-      label: l10n.appearanceInterfaceSize,
-      child: content,
-    );
+    return SettingsSearchTarget(label: widget.title, child: content);
   }
 }
 
@@ -764,32 +825,39 @@ class _LanguageSelector extends StatelessWidget {
       builder: (context, controller) => ListView.builder(
         controller: controller,
         shrinkWrap: true,
+        padding: const EdgeInsets.only(bottom: 16),
         itemCount: supportedLanguageChoices.length,
         itemBuilder: (context, index) {
           final lang = supportedLanguageChoices[index];
           final isSelected = currentLocale == lang.$1;
-          return AppSheetOption(
-            leading: AppIcon(
-              lang.$3,
-              color: isSelected
-                  ? colorScheme.primary
-                  : colorScheme.onSurfaceVariant,
-            ),
-            title: Text(
-              lang.$2,
-              style: TextStyle(
-                color: isSelected ? colorScheme.primary : colorScheme.onSurface,
-                fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+          return ConnectedGroupRow(
+            index: index,
+            count: supportedLanguageChoices.length,
+            child: AppSheetOption(
+              leading: AppIcon(
+                lang.$3,
+                color: isSelected
+                    ? colorScheme.primary
+                    : colorScheme.onSurfaceVariant,
               ),
+              title: Text(
+                lang.$2,
+                style: TextStyle(
+                  color: isSelected
+                      ? colorScheme.primary
+                      : colorScheme.onSurface,
+                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                ),
+              ),
+              selected: isSelected,
+              trailing: isSelected
+                  ? AppIcon(Icons.check, color: colorScheme.primary)
+                  : null,
+              onTap: () {
+                onChanged(lang.$1);
+                Navigator.pop(context);
+              },
             ),
-            selected: isSelected,
-            trailing: isSelected
-                ? AppIcon(Icons.check, color: colorScheme.primary)
-                : null,
-            onTap: () {
-              onChanged(lang.$1);
-              Navigator.pop(context);
-            },
           );
         },
       ),

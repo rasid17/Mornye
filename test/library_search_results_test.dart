@@ -60,6 +60,62 @@ LibrarySearchHit _hit(
 );
 
 void main() {
+  testWidgets('results arriving kind by kind and a new query keep the filter '
+      'chips', (tester) async {
+    tester.view.physicalSize = const Size(390, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final query = ValueNotifier('Fo');
+    addTearDown(query.dispose);
+    final pending = <LibrarySearchKind, Completer<List<LibrarySearchHit>>>{};
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          librarySearchProvider.overrideWith((ref, request) {
+            final results = Completer<List<LibrarySearchHit>>();
+            pending[request.kind] = results;
+            return results.future;
+          }),
+        ],
+        child: MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(
+            body: ValueListenableBuilder<String>(
+              valueListenable: query,
+              builder: (context, value, _) => CustomScrollView(
+                slivers: [
+                  LibrarySearchResults(query: value, onOpenArtist: (_) {}),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    AppChoiceChip chip(String label) =>
+        tester.widget(find.widgetWithText(AppChoiceChip, label));
+    final all = chip('All');
+    for (final kind in LibrarySearchKind.values) {
+      pending[kind]!.complete([_hit(kind, 0)]);
+      await tester.pump();
+    }
+    expect(find.text('Found songs 0'), findsOneWidget);
+    expect(chip('All'), same(all));
+
+    query.value = 'Found';
+    await tester.pump();
+    expect(chip('All'), same(all));
+
+    // Choosing a filter makes them again.
+    await tester.tap(find.widgetWithText(AppChoiceChip, 'Songs'));
+    await tester.pump();
+    expect(chip('Songs').selected, isTrue);
+    expect(chip('All').selected, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
   for (final desktop in [false, true]) {
     for (final mornye in [false, true]) {
       testWidgets(
@@ -485,6 +541,72 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+
+  testWidgets('Material joins the results of each kind into a run', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          librarySearchProvider.overrideWith(
+            (ref, request) async => List.generate(
+              request.limit,
+              (i) => _hit(request.kind, request.offset + i),
+            ),
+          ),
+        ],
+        child: MaterialApp(
+          theme: ThemeData(),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(
+            body: CustomScrollView(
+              slivers: [
+                LibrarySearchResults(query: 'Found', onOpenArtist: (_) {}),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final scrollable = find.byType(Scrollable).first;
+    await tester.scrollUntilVisible(
+      find.text('Found songs 0'),
+      200,
+      scrollable: scrollable,
+    );
+    TrackCardSegment segment(String title) => tester.widget(
+      find.ancestor(
+        of: find.text(title),
+        matching: find.byType(TrackCardSegment),
+      ),
+    );
+    expect(segment('Found songs 0').first, isTrue);
+    expect(segment('Found songs 0').last, isFalse);
+    // The overview's last song row closes the run although more exist.
+    final last = find.byWidgetPredicate(
+      (widget) => widget is TrackCardSegment && widget.last,
+    );
+    await tester.scrollUntilVisible(last, 200, scrollable: scrollable);
+    expect(tester.widget<TrackCardSegment>(last.first).first, isFalse);
+    // Albums, artists and playlists are runs of the same filled rows.
+    for (final kind in ['albums', 'artists', 'playlists']) {
+      final first = find.text('Found $kind 0');
+      await tester.scrollUntilVisible(first, 200, scrollable: scrollable);
+      expect(segment('Found $kind 0').first, isTrue);
+      expect(segment('Found $kind 0').last, isFalse);
+      expect(
+        tester
+            .widget<TrackCard>(
+              find.ancestor(of: first, matching: find.byType(TrackCard)),
+            )
+            .style,
+        TrackCardStyle.filled,
+      );
+    }
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('an older query cannot replace newer results', (tester) async {
     final old = Completer<List<LibrarySearchHit>>();

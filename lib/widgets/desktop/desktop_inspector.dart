@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:ui' as ui;
 
 import 'package:audio_service/audio_service.dart';
 import 'package:cupertino_ui/cupertino_ui.dart' show CupertinoIcons;
@@ -21,6 +20,7 @@ import 'package:mornye/widgets/app_icon_button.dart';
 import 'package:mornye/widgets/desktop/desktop_window.dart'
     show desktopWindowFullScreen;
 import 'package:mornye/widgets/lyrics_options_button.dart';
+import 'package:mornye/widgets/mornye_chrome.dart';
 import 'package:mornye/widgets/mornye_player_background.dart';
 import 'package:mornye/widgets/mornye_player_queue.dart';
 import 'package:mornye/widgets/player_lyrics_section.dart';
@@ -89,8 +89,17 @@ void closeDesktopNowPlaying() {
 /// Whether the inspector floats over the content in a window [windowWidth]
 /// wide. Mornye's floats at any width until the window goes full screen.
 bool desktopInspectorOverlays(double windowWidth, {required bool mornye}) =>
-    windowWidth < desktopInspectorBesideBreakpoint ||
-    (mornye && !desktopWindowFullScreen.value);
+    desktopInspectorOverlaysWhen(
+      besideFits: windowWidth >= desktopInspectorBesideBreakpoint,
+      mornye: mornye,
+    );
+
+/// [desktopInspectorOverlays] for a window known only by whether it is at
+/// least [desktopInspectorBesideBreakpoint] wide ([besideFits]).
+bool desktopInspectorOverlaysWhen({
+  required bool besideFits,
+  required bool mornye,
+}) => !besideFits || (mornye && !desktopWindowFullScreen.value);
 
 /// Whether Escape or Back has a player layer to close in a window
 /// [windowWidth] wide.
@@ -148,7 +157,14 @@ class DesktopInspector extends ConsumerWidget {
     final mornye = context.isMornye;
     final glass = mornye && overlay;
     final l10n = context.l10n;
-    final mediaItem = ref.watch(currentMediaItemProvider).value;
+    final (:hasTrack, :artUri) = ref.watch(
+      currentMediaItemProvider.select(
+        (s) => (
+          hasTrack: s.value != null,
+          artUri: mornye && !overlay ? s.value?.artUri : null,
+        ),
+      ),
+    );
     final title = switch (panel) {
       DesktopInspectorPanel.lyrics => l10n.nowPlayingTabLyrics,
       DesktopInspectorPanel.upNext => l10n.nowPlayingUpNext,
@@ -184,7 +200,7 @@ class DesktopInspector extends ConsumerWidget {
         ),
       );
       final Widget body;
-      if (mediaItem == null) {
+      if (!hasTrack) {
         body = Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
@@ -230,32 +246,27 @@ class DesktopInspector extends ConsumerWidget {
         brightness: Brightness.dark,
       );
       final blur = ref.watch(mornyeBlurEnabledProvider);
+      final overlayContent = Material(
+        type: MaterialType.transparency,
+        child: Builder(builder: content),
+      );
       panelSurface = Theme(
         data: theme,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            // The floating panel samples the content beneath it; the full
-            // screen panel keeps the artwork backdrop.
-            if (overlay) ...[
-              if (blur)
-                BackdropFilter(
-                  filter: ui.ImageFilter.blur(sigmaX: 60, sigmaY: 60),
-                  child: const SizedBox.expand(),
-                ),
-              ColoredBox(
-                color: const Color(
-                  0xff363636,
-                ).withValues(alpha: blur ? 0.74 : 0.97),
+        child: overlay
+            ? MornyeGlassPanel.overlay(
+                radius: 0,
+                blurEnabled: blur,
+                tintColor: const Color(0xff363636),
+                tintOpacity: blur ? 0.74 : 0.97,
+                child: overlayContent,
+              )
+            : Stack(
+                fit: StackFit.expand,
+                children: [
+                  MornyePlayerBackground(artUri: artUri),
+                  overlayContent,
+                ],
               ),
-            ] else
-              MornyePlayerBackground(artUri: mediaItem?.artUri),
-            Material(
-              type: MaterialType.transparency,
-              child: Builder(builder: content),
-            ),
-          ],
-        ),
       );
     } else {
       final colorScheme = Theme.of(context).colorScheme;
@@ -286,8 +297,9 @@ class DesktopInspector extends ConsumerWidget {
                       ? BorderSide(color: Colors.white.withValues(alpha: 0.1))
                       : divider,
                 ),
-          // The shadow falls toward the content the pane floats over.
-          boxShadow: overlay
+          // The shadow falls toward the content the Mornye glass pane floats
+          // over; Material relies on its container tier.
+          boxShadow: overlay && mornye
               ? [
                   BoxShadow(
                     color: Colors.black.withValues(alpha: 0.18),
@@ -318,7 +330,7 @@ AppMotionSpec desktopInspectorMotion(BuildContext context) => AppMotion.spatial(
 /// pane's own velocity.
 SpringDescription _inspectorSpring(BuildContext context) => context.isMornye
     ? MornyeMotion.standardSpring
-    : M3EMotion.expressiveSpatialDefault.toDescription();
+    : MotionPace.spring(M3EMotion.expressiveSpatialDefault.toDescription());
 
 /// Opens and closes [panel] with motion, keeping the last panel on screen
 /// while it leaves. Beside the content the pane grows from the trailing
@@ -333,6 +345,8 @@ class DesktopInspectorTransition extends StatefulWidget {
   });
 
   final DesktopInspectorPanel? panel;
+
+  /// Called once per panel shown; it must depend on nothing but the panel.
   final Widget Function(BuildContext context, DesktopInspectorPanel panel)
   builder;
   final bool overlay;
@@ -350,6 +364,10 @@ class _DesktopInspectorTransitionState extends State<DesktopInspectorTransition>
   // so a reversal always goes on from where the pane is.
   late final AnimationController _controller;
   late DesktopInspectorPanel? _shown = widget.panel;
+
+  /// The shown panel as last built, kept through the parent's rebuilds (a
+  /// resize frame) so the lyrics or queue are not built again for each.
+  Widget? _panelView;
 
   @override
   void initState() {
@@ -386,22 +404,46 @@ class _DesktopInspectorTransitionState extends State<DesktopInspectorTransition>
         );
       }
     } else {
-      // Leaving uses a short ease without overshoot, so the pane never
-      // grows again on its way out.
-      _controller
-          .animateBack(
-            0,
-            duration: reduce
-                ? Duration.zero
-                : const Duration(milliseconds: 220),
-            curve: Curves.easeInCubic,
-          )
-          .whenCompleteOrCancel(() {
-            if (mounted && widget.panel == null && _controller.value == 0) {
-              setState(() => _shown = null);
-            }
-          });
+      void finish() {
+        if (mounted && widget.panel == null && _controller.value == 0) {
+          setState(() => _shown = null);
+        }
+      }
+
+      if (reduce) {
+        _controller.value = 0;
+        finish();
+      } else if (context.isMornye) {
+        // Mornye retreats on Apple's critically damped fast spring from the
+        // panel's current velocity, with no bounce back into the content.
+        _controller
+            .animateWith(
+              SpringSimulation(
+                MornyeMotion.fastSpring,
+                _controller.value,
+                0,
+                _controller.velocity,
+                snapToEnd: true,
+              ),
+            )
+            .whenCompleteOrCancel(finish);
+      } else {
+        // Material exits on M3's standard accelerate curve with no overshoot.
+        _controller
+            .animateBack(
+              0,
+              duration: MotionPace.duration(const Duration(milliseconds: 220)),
+              curve: Easing.standardAccelerate,
+            )
+            .whenCompleteOrCancel(finish);
+      }
     }
+  }
+
+  @override
+  void reassemble() {
+    super.reassemble();
+    _panelView = null;
   }
 
   @override
@@ -429,15 +471,17 @@ class _DesktopInspectorTransitionState extends State<DesktopInspectorTransition>
         alignment: AlignmentDirectional.topStart,
         children: [...previous, ?current],
       ),
-      child: KeyedSubtree(
-        key: ValueKey(shown),
-        child: widget.builder(context, shown),
-      ),
+      child: _panelView?.key == ValueKey(shown)
+          ? _panelView
+          : _panelView = KeyedSubtree(
+              key: ValueKey(shown),
+              child: widget.builder(context, shown),
+            ),
     );
     final rtl = Directionality.of(context) == TextDirection.rtl;
     return AnimatedBuilder(
       animation: _controller,
-      child: content,
+      child: RepaintBoundary(child: content),
       builder: (context, child) {
         // The open spring may overshoot. A floating panel can slide a little
         // past its place, but the pane beside the content stops at its

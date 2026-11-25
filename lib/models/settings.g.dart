@@ -37,6 +37,8 @@ AppSettings _$AppSettingsFromJson(Map<String, dynamic> json) => AppSettings(
   playbackNormalizationMode: json['playbackNormalizationMode'] == null
       ? 'track'
       : playbackNormalizationModeFromJson(json['playbackNormalizationMode']),
+  playbackNormalizationBoost:
+      json['playbackNormalizationBoost'] as bool? ?? false,
   confirmLoudVolume: json['confirmLoudVolume'] as bool? ?? true,
   loudVolumeLevel: json['loudVolumeLevel'] == null
       ? 80
@@ -65,6 +67,13 @@ AppSettings _$AppSettingsFromJson(Map<String, dynamic> json) => AppSettings(
       : autoMixPitchFromJson(json['autoMixPitch']),
   autoMixEcho: json['autoMixEcho'] as bool? ?? false,
   autoMixLowPass: json['autoMixLowPass'] as bool? ?? false,
+  autoMixMatching:
+      $enumDecodeNullable(
+        _$AutoMixMatchingEnumMap,
+        json['autoMixMatching'],
+        unknownValue: AutoMixMatching.standard,
+      ) ??
+      AutoMixMatching.standard,
   playbackSpeed: json['playbackSpeed'] == null
       ? 1
       : playbackSpeedFromJson(json['playbackSpeed']),
@@ -78,6 +87,8 @@ AppSettings _$AppSettingsFromJson(Map<String, dynamic> json) => AppSettings(
   usbDirect: json['usbDirect'] as bool? ?? false,
   usbDsdOverPcm: json['usbDsdOverPcm'] as bool? ?? false,
   usbAllowFixedVolume: json['usbAllowFixedVolume'] as bool? ?? false,
+  usbMaxSampleRate: (json['usbMaxSampleRate'] as num?)?.toInt() ?? 0,
+  usbDitherHighPass: json['usbDitherHighPass'] as bool? ?? false,
   dapExclusive: json['dapExclusive'] as bool? ?? false,
   media3Engine: json['media3Engine'] as bool? ?? false,
   skipSilence: json['skipSilence'] as bool? ?? false,
@@ -104,6 +115,10 @@ AppSettings _$AppSettingsFromJson(Map<String, dynamic> json) => AppSettings(
   playerCoverStyle: json['playerCoverStyle'] == null
       ? ''
       : playerCoverStyleFromJson(json['playerCoverStyle']),
+  playerCoverFade: json['playerCoverFade'] == null
+      ? 'medium'
+      : playerCoverFadeFromJson(json['playerCoverFade']),
+  playerCoverWhole: json['playerCoverWhole'] as bool? ?? false,
   landscapeLyricsArtwork: json['landscapeLyricsArtwork'] as bool? ?? false,
   autoHideLyricsControls: json['autoHideLyricsControls'] as bool? ?? true,
   autoHideLyricsControlsWithAccessibility:
@@ -154,6 +169,10 @@ AppSettings _$AppSettingsFromJson(Map<String, dynamic> json) => AppSettings(
           .toList() ??
       const ['shuffle', 'equalizer', 'listeningStats', 'networkStorage'],
   homeContinueListening: json['homeContinueListening'] as bool? ?? true,
+  homeRecommendations: json['homeRecommendations'] as bool? ?? true,
+  homeLayout: json['homeLayout'] == null
+      ? const HomeLayout()
+      : homeLayoutFromJson(json['homeLayout']),
   separateSingles: json['separateSingles'] as bool? ?? false,
   singleFilenameFormat:
       json['singleFilenameFormat'] as String? ?? '{title} - {artist}',
@@ -166,12 +185,17 @@ AppSettings _$AppSettingsFromJson(Map<String, dynamic> json) => AppSettings(
   interfaceScale: json['interfaceScale'] == null
       ? 1
       : interfaceScaleFromJson(json['interfaceScale']),
+  animationSpeed: json['animationSpeed'] == null
+      ? 1
+      : animationSpeedFromJson(json['animationSpeed']),
   extensionVerificationBrowserMode:
       json['extensionVerificationBrowserMode'] as String? ?? 'in_app_first',
   locale: json['locale'] as String? ?? 'system',
   lyricsMode: json['lyricsMode'] as String? ?? 'embed',
   keepScreenOnLyrics: json['keepScreenOnLyrics'] as bool? ?? true,
   lockScreenLyrics: json['lockScreenLyrics'] as bool? ?? false,
+  lockScreenLyricsKeepTitle:
+      json['lockScreenLyricsKeepTitle'] as bool? ?? false,
   motionArtworkEnabled: json['motionArtworkEnabled'] as bool? ?? true,
   saveMotionArtworkFile: json['saveMotionArtworkFile'] as bool? ?? false,
   saveFolderCover: json['saveFolderCover'] as bool? ?? false,
@@ -250,6 +274,8 @@ AppSettings _$AppSettingsFromJson(Map<String, dynamic> json) => AppSettings(
   playerShowTranslation: json['playerShowTranslation'] as bool? ?? true,
   playerShowVolume: json['playerShowVolume'] as bool? ?? true,
   playerShowLyricSnippet: json['playerShowLyricSnippet'] as bool? ?? false,
+  playerLyricSnippetTranslation:
+      json['playerLyricSnippetTranslation'] as bool? ?? false,
 );
 
 Map<String, dynamic> _$AppSettingsToJson(
@@ -274,6 +300,7 @@ Map<String, dynamic> _$AppSettingsToJson(
   'playbackNormalization': instance.playbackNormalization,
   'playbackNormalizationPreamp': instance.playbackNormalizationPreamp,
   'playbackNormalizationMode': instance.playbackNormalizationMode,
+  'playbackNormalizationBoost': instance.playbackNormalizationBoost,
   'confirmLoudVolume': instance.confirmLoudVolume,
   'loudVolumeLevel': instance.loudVolumeLevel,
   'pauseOnMute': instance.pauseOnMute,
@@ -286,6 +313,7 @@ Map<String, dynamic> _$AppSettingsToJson(
   'autoMixPitch': instance.autoMixPitch,
   'autoMixEcho': instance.autoMixEcho,
   'autoMixLowPass': instance.autoMixLowPass,
+  'autoMixMatching': _$AutoMixMatchingEnumMap[instance.autoMixMatching]!,
   'playbackSpeed': instance.playbackSpeed,
   'playbackKeepPitch': instance.playbackKeepPitch,
   'playbackPitch': instance.playbackPitch,
@@ -294,6 +322,8 @@ Map<String, dynamic> _$AppSettingsToJson(
   'usbDirect': instance.usbDirect,
   'usbDsdOverPcm': instance.usbDsdOverPcm,
   'usbAllowFixedVolume': instance.usbAllowFixedVolume,
+  'usbMaxSampleRate': instance.usbMaxSampleRate,
+  'usbDitherHighPass': instance.usbDitherHighPass,
   'dapExclusive': instance.dapExclusive,
   'media3Engine': instance.media3Engine,
   'skipSilence': instance.skipSilence,
@@ -311,6 +341,8 @@ Map<String, dynamic> _$AppSettingsToJson(
   'musicHapticsSensitivity': instance.musicHapticsSensitivity,
   'musicHapticsStrength': instance.musicHapticsStrength,
   'playerCoverStyle': instance.playerCoverStyle,
+  'playerCoverFade': instance.playerCoverFade,
+  'playerCoverWhole': instance.playerCoverWhole,
   'landscapeLyricsArtwork': instance.landscapeLyricsArtwork,
   'autoHideLyricsControls': instance.autoHideLyricsControls,
   'autoHideLyricsControlsWithAccessibility':
@@ -346,6 +378,8 @@ Map<String, dynamic> _$AppSettingsToJson(
   'homeFeedProvider': instance.homeFeedProvider,
   'homeShortcuts': instance.homeShortcuts,
   'homeContinueListening': instance.homeContinueListening,
+  'homeRecommendations': instance.homeRecommendations,
+  'homeLayout': instance.homeLayout.toJson(),
   'separateSingles': instance.separateSingles,
   'singleFilenameFormat': instance.singleFilenameFormat,
   'albumFolderStructure': instance.albumFolderStructure,
@@ -354,11 +388,13 @@ Map<String, dynamic> _$AppSettingsToJson(
   'heroAnimationsEnabled': instance.heroAnimationsEnabled,
   'forceBackdropBlur': instance.forceBackdropBlur,
   'interfaceScale': instance.interfaceScale,
+  'animationSpeed': instance.animationSpeed,
   'extensionVerificationBrowserMode': instance.extensionVerificationBrowserMode,
   'locale': instance.locale,
   'lyricsMode': instance.lyricsMode,
   'keepScreenOnLyrics': instance.keepScreenOnLyrics,
   'lockScreenLyrics': instance.lockScreenLyrics,
+  'lockScreenLyricsKeepTitle': instance.lockScreenLyricsKeepTitle,
   'motionArtworkEnabled': instance.motionArtworkEnabled,
   'saveMotionArtworkFile': instance.saveMotionArtworkFile,
   'saveFolderCover': instance.saveFolderCover,
@@ -418,6 +454,7 @@ Map<String, dynamic> _$AppSettingsToJson(
   'playerShowTranslation': instance.playerShowTranslation,
   'playerShowVolume': instance.playerShowVolume,
   'playerShowLyricSnippet': instance.playerShowLyricSnippet,
+  'playerLyricSnippetTranslation': instance.playerLyricSnippetTranslation,
 };
 
 const _$AutoMixEffectEnumMap = {
@@ -427,4 +464,10 @@ const _$AutoMixEffectEnumMap = {
   AutoMixEffect.echo: 'echo',
   AutoMixEffect.pitch: 'pitch',
   AutoMixEffect.custom: 'custom',
+};
+
+const _$AutoMixMatchingEnumMap = {
+  AutoMixMatching.standard: 'standard',
+  AutoMixMatching.more: 'more',
+  AutoMixMatching.most: 'most',
 };

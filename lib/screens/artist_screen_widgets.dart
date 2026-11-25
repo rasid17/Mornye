@@ -185,7 +185,7 @@ extension _ArtistScreenSections on _ArtistScreenState {
                     icon: CupertinoIcons.shuffle,
                     buttonSize: 50,
                     iconSize: 24,
-                    iconColor: colorScheme.primary,
+                    iconColor: Colors.white,
                     glassTintColor: Colors.white,
                     glassTintOpacity: 0.10,
                     tooltip: context.l10n.actionShuffle,
@@ -220,9 +220,11 @@ extension _ArtistScreenSections on _ArtistScreenState {
                       : CupertinoIcons.star,
                   buttonSize: 50,
                   iconSize: 24,
-                  iconColor: colorScheme.primary,
-                  glassTintColor: Colors.white,
-                  glassTintOpacity: 0.10,
+                  iconColor: Colors.white,
+                  glassTintColor: isFavoriteArtist
+                      ? colorScheme.primary
+                      : Colors.white,
+                  glassTintOpacity: isFavoriteArtist ? 0.45 : 0.10,
                   tooltip: isFavoriteArtist
                       ? context.l10n.artistOptionRemoveFromFavorites
                       : context.l10n.artistOptionAddToFavorites,
@@ -287,8 +289,7 @@ extension _ArtistScreenSections on _ArtistScreenState {
                 imageUrl: imageUrl,
                 fit: BoxFit.cover,
                 alignment: Alignment.topCenter,
-                memCacheWidth: (size * MediaQuery.devicePixelRatioOf(context))
-                    .round(),
+                memCacheWidth: detailHeaderCoverCacheWidth(context),
                 errorWidget: (_, _, _) => placeholder,
               ),
             ),
@@ -861,12 +862,19 @@ extension _ArtistScreenSections on _ArtistScreenState {
     );
     const tracksPerPage = 5;
     final pageCount = (tracks.length / tracksPerPage).ceil();
+    // Material joins a page's rows into one connected list, 2dp apart.
+    final rowGap = context.isMornye ? 0.0 : 2.0;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 24, 16, 12),
+          padding: EdgeInsetsDirectional.fromSTEB(
+            context.isMornye ? 16 : connectedRunTitleInset,
+            24,
+            16,
+            12,
+          ),
           child: Text(
             context.l10n.artistPopular,
             style: Theme.of(
@@ -875,7 +883,7 @@ extension _ArtistScreenSections on _ArtistScreenState {
           ),
         ),
         SizedBox(
-          height: tracksPerPage * 64.0,
+          height: tracksPerPage * 64.0 + (tracksPerPage - 1) * rowGap,
           child: PageView.builder(
             controller: _popularPageController,
             itemCount: pageCount,
@@ -900,6 +908,8 @@ extension _ArtistScreenSections on _ArtistScreenState {
                     entry.value,
                     colorScheme,
                     existingHistoryKeys.contains(historyKeys[globalIndex]),
+                    first: entry.key == 0,
+                    last: entry.key == pageTracks.length - 1,
                   );
                 }).toList(),
               );
@@ -940,7 +950,11 @@ extension _ArtistScreenSections on _ArtistScreenState {
     bool isInHistory, {
     bool compact = false,
     bool separated = true,
+    bool first = false,
+    bool last = false,
   }) {
+    // A filled row of a connected list in Material; Mornye rows are plain.
+    final joined = !context.isMornye && !compact;
     return Consumer(
       builder: (context, ref, child) {
         final queueItem = ref.watch(
@@ -994,6 +1008,8 @@ extension _ArtistScreenSections on _ArtistScreenState {
             child: Padding(
               padding: compact
                   ? const EdgeInsets.symmetric(vertical: 4)
+                  : joined
+                  ? const EdgeInsetsDirectional.fromSTEB(12, 8, 6, 8)
                   : EdgeInsetsDirectional.fromSTEB(
                       context.isMornye ? 20 : 16,
                       8,
@@ -1119,6 +1135,23 @@ extension _ArtistScreenSections on _ArtistScreenState {
             ),
           ),
         );
+        if (joined) {
+          return Padding(
+            padding: EdgeInsets.fromLTRB(16, 0, 16, last ? 0 : 2),
+            child: Material(
+              color: settingsGroupColor(context),
+              clipBehavior: Clip.antiAlias,
+              shape: RoundedRectangleBorder(
+                borderRadius: connectedRowRadius(
+                  context,
+                  first: first,
+                  last: last,
+                ),
+              ),
+              child: row,
+            ),
+          );
+        }
         if (!context.isMornye || !separated) return row;
         return Stack(
           children: [

@@ -77,7 +77,7 @@ Widget _home({
     theme: AppTheme.dark(),
     localizationsDelegates: AppLocalizations.localizationsDelegates,
     supportedLocales: AppLocalizations.supportedLocales,
-    home: const HomeTab(mode: HomeTabMode.combined),
+    home: const HomeTab(),
   ),
 );
 
@@ -272,6 +272,49 @@ void main() {
     await _settle(tester);
     expect(find.text('Loved'), findsNothing);
     expect(find.text('Equalizer'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('shortcuts can be removed down to none and added back', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    await _open(tester, desktop: false, width: 400);
+
+    await tester.longPress(find.text('Equalizer'));
+    await _settle(tester);
+    // Nothing to add while all four slots are taken.
+    expect(find.text('Add shortcut'), findsNothing);
+    await tester.tap(find.text('Remove shortcut'));
+    await _settle(tester);
+    expect(find.text('Equalizer'), findsNothing);
+    expect(find.text('Shuffle library'), findsOneWidget);
+
+    await tester.longPress(find.text('Shuffle library'));
+    await _settle(tester);
+    await tester.tap(find.text('Add shortcut'));
+    await _settle(tester);
+    await tester.ensureVisible(find.text('Loved'));
+    await _settle(tester);
+    await tester.tap(find.text('Loved'));
+    await _settle(tester);
+    expect(find.text('Loved'), findsOneWidget);
+
+    for (final label in [
+      'Shuffle library',
+      'Listening statistics',
+      'Network storage',
+      'Loved',
+    ]) {
+      await tester.ensureVisible(find.text(label));
+      await _settle(tester);
+      await tester.longPress(find.text(label));
+      await _settle(tester);
+      await tester.tap(find.text('Remove shortcut'));
+      await _settle(tester);
+    }
+    // With nothing left the section leaves Home.
+    expect(find.text('Shortcuts'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 

@@ -14,11 +14,7 @@ extension _QueueTabCollectionItemWidgets on _QueueTabState {
     final progress = item.progress.clamp(0.0, 1.0);
 
     final cover = item.track.coverUrl != null
-        ? CachedCoverImage(
-            imageUrl: item.track.coverUrl!,
-            borderRadius: radius,
-            fadeInDuration: const Duration(milliseconds: 180),
-          )
+        ? CachedCoverImage(imageUrl: item.track.coverUrl!, borderRadius: radius)
         : const TrackCoverPlaceholder();
 
     final onTap = isFailed || item.status == DownloadStatus.skipped
@@ -30,6 +26,9 @@ extension _QueueTabCollectionItemWidgets on _QueueTabState {
       animate: _shouldAnimateDownloadProgress(context, item),
       child: TrackGridCard(
         onTap: onTap,
+        onLongPress: () => _showDownloadItemMenu(context, item),
+        onContextMenu: (position) =>
+            _showDownloadItemMenu(context, item, position: position),
         semanticLabel: context.l10n.a11yTrackByArtist(
           item.track.name,
           item.track.artistName,
@@ -266,7 +265,11 @@ extension _QueueTabCollectionItemWidgets on _QueueTabState {
     if (!grid) {
       return TrackCard(
         onTap: onTap,
-        leading: Hero(tag: heroTag, child: cover),
+        leading: Hero(
+          tag: heroTag,
+          transitionOnUserGestures: heroFollowsBackSwipe(context),
+          child: cover,
+        ),
         title: trackName,
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -300,7 +303,11 @@ extension _QueueTabCollectionItemWidgets on _QueueTabState {
     return TrackGridCard(
       semanticLabel: context.l10n.a11yTrackByArtist(trackName, artistName),
       onTap: onTap,
-      cover: Hero(tag: heroTag, child: cover),
+      cover: Hero(
+        tag: heroTag,
+        transitionOnUserGestures: heroFollowsBackSwipe(context),
+        child: cover,
+      ),
       overlays: [
         PositionedDirectional(
           end: 4,
@@ -520,6 +527,11 @@ extension _QueueTabCollectionItemWidgets on _QueueTabState {
                   .read(libraryCollectionsProvider.notifier)
                   .renamePlaylist(playlist.id, trimmed);
             },
+          ),
+          homePinMenuAction(
+            context,
+            ref,
+            HomePin.playlist(id: playlist.id, name: playlist.name),
           ),
         ],
         [

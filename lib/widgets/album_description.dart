@@ -7,18 +7,40 @@ import 'package:mornye/widgets/album_detail_header.dart';
 import 'package:mornye/widgets/app_bottom_sheet.dart';
 
 /// A short editorial preview below the album controls, with a full reading sheet.
-class AlbumDescription extends StatelessWidget {
+class AlbumDescription extends StatefulWidget {
   const AlbumDescription({
     super.key,
     required this.title,
     required this.description,
+    this.underSheetEdge = false,
   });
 
   final String title;
   final String description;
 
-  TextSpan _text() {
-    final fragment = parseEditorialNotes(description);
+  /// Whether it is the first thing on the sheet a Material header rounds
+  /// off. The round edge is its space above, so it adds none of its own.
+  final bool underSheetEdge;
+
+  @override
+  State<AlbumDescription> createState() => _AlbumDescriptionState();
+}
+
+class _AlbumDescriptionState extends State<AlbumDescription> {
+  static final _horizontalWhitespace = RegExp(r'[\t\f\v ]+');
+
+  String? _parsedSource;
+  late TextSpan _parsedSpan;
+  bool _isEmpty = true;
+
+  Object? _measureKey;
+  bool _hasMore = false;
+
+  void _ensureParsed() {
+    if (_parsedSource == widget.description) return;
+    _parsedSource = widget.description;
+    _measureKey = null;
+    final fragment = parseEditorialNotes(widget.description);
     final formatted = fragment.children.isNotEmpty;
     List<InlineSpan> spans(List<dom.Node> nodes) => [
       for (final node in nodes)
@@ -27,7 +49,7 @@ class AlbumDescription extends StatelessWidget {
             text: formatted
                 // Catalog notes can mix inline markup with literal paragraph
                 // breaks. Only collapse horizontal whitespace.
-                ? node.data.replaceAll(RegExp(r'[\t\f\v ]+'), ' ')
+                ? node.data.replaceAll(_horizontalWhitespace, ' ')
                 : node.data,
           )
         else if (node is dom.Element)
@@ -42,7 +64,7 @@ class AlbumDescription extends StatelessWidget {
               },
               children: spans(node.nodes),
             ),
-            if (['p', 'div'].contains(node.localName))
+            if (node.localName == 'p' || node.localName == 'div')
               const TextSpan(text: '\n\n'),
           ],
     ];
@@ -64,7 +86,8 @@ class AlbumDescription extends StatelessWidget {
     }
 
     // Paragraph separators at the end are not hidden editorial content.
-    return trimEnd(TextSpan(children: spans(fragment.nodes)));
+    _parsedSpan = trimEnd(TextSpan(children: spans(fragment.nodes)));
+    _isEmpty = _parsedSpan.toPlainText().trim().isEmpty;
   }
 
   void _showFullDescription(BuildContext context, TextSpan text) {
@@ -75,11 +98,15 @@ class AlbumDescription extends StatelessWidget {
       useRootNavigator: true,
       builder: (context) {
         final theme = Theme.of(context);
-        return SizedBox(
-          height: MediaQuery.sizeOf(context).height * 0.9,
+        // As tall as the text, up to most of the screen.
+        return ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * 0.9,
+          ),
           child: SafeArea(
             top: false,
             child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
@@ -97,7 +124,7 @@ class AlbumDescription extends StatelessWidget {
                       ),
                       Expanded(
                         child: Text(
-                          title,
+                          widget.title,
                           textAlign: TextAlign.center,
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
@@ -110,7 +137,7 @@ class AlbumDescription extends StatelessWidget {
                     ],
                   ),
                 ),
-                Expanded(
+                Flexible(
                   child: SingleChildScrollView(
                     padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
                     child: SelectionArea(
@@ -133,10 +160,50 @@ class AlbumDescription extends StatelessWidget {
     );
   }
 
+  bool _measureHasMore(
+    BuildContext context,
+    double maxWidth,
+    TextStyle? previewStyle,
+  ) {
+    final defaultStyle = DefaultTextStyle.of(context).style;
+    final boldText = MediaQuery.boldTextOf(context);
+    final direction = Directionality.of(context);
+    final scaler = MediaQuery.textScalerOf(context);
+    final locale = Localizations.maybeLocaleOf(context);
+    final key = (
+      maxWidth,
+      defaultStyle,
+      previewStyle,
+      boldText,
+      direction,
+      scaler,
+      locale,
+    );
+    if (_measureKey == key) return _hasMore;
+    var effectiveStyle = defaultStyle.merge(previewStyle);
+    if (boldText) {
+      effectiveStyle = effectiveStyle.merge(
+        const TextStyle(fontWeight: FontWeight.bold),
+      );
+    }
+    final painter = TextPainter(
+      text: TextSpan(style: effectiveStyle, children: [_parsedSpan]),
+      maxLines: 2,
+      textDirection: direction,
+      textScaler: scaler,
+      locale: locale,
+    )..layout(maxWidth: maxWidth);
+    _hasMore = painter.didExceedMaxLines;
+    painter.dispose();
+    _measureKey = key;
+    return _hasMore;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final text = _text();
-    if (text.toPlainText().trim().isEmpty) return const SizedBox.shrink();
+    _ensureParsed();
+    if (_isEmpty) return const SizedBox.shrink();
+    final text = _parsedSpan;
     final theme = Theme.of(context);
     final more = MaterialLocalizations.of(context).moreButtonTooltip;
     final previewStyle = theme.textTheme.bodyLarge?.copyWith(
@@ -148,23 +215,11 @@ class AlbumDescription extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          var effectiveStyle = DefaultTextStyle.of(
+          final hasMore = _measureHasMore(
             context,
-          ).style.merge(previewStyle);
-          if (MediaQuery.boldTextOf(context)) {
-            effectiveStyle = effectiveStyle.merge(
-              const TextStyle(fontWeight: FontWeight.bold),
-            );
-          }
-          final painter = TextPainter(
-            text: TextSpan(style: effectiveStyle, children: [text]),
-            maxLines: 2,
-            textDirection: Directionality.of(context),
-            textScaler: MediaQuery.textScalerOf(context),
-            locale: Localizations.maybeLocaleOf(context),
-          )..layout(maxWidth: constraints.maxWidth);
-          final hasMore = painter.didExceedMaxLines;
-          painter.dispose();
+            constraints.maxWidth,
+            previewStyle,
+          );
           return Column(
             children: [
               InkWell(
@@ -172,7 +227,10 @@ class AlbumDescription extends StatelessWidget {
                     ? () => _showFullDescription(context, text)
                     : null,
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  padding: EdgeInsets.only(
+                    top: widget.underSheetEdge ? 0 : 8,
+                    bottom: 8,
+                  ),
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
@@ -182,6 +240,12 @@ class AlbumDescription extends StatelessWidget {
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: previewStyle,
+                          // The line's own space above would add to the edge.
+                          textHeightBehavior: widget.underSheetEdge
+                              ? const TextHeightBehavior(
+                                  applyHeightToFirstAscent: false,
+                                )
+                              : null,
                         ),
                       ),
                       if (hasMore) ...[

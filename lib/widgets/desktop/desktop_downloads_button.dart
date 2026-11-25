@@ -9,6 +9,9 @@ import 'package:mornye/theme/mornye_theme.dart';
 import 'package:mornye/widgets/app_icon.dart';
 import 'package:mornye/widgets/app_icon_button.dart';
 import 'package:mornye/widgets/app_progress_indicator.dart';
+import 'package:mornye/widgets/connected_icon_buttons.dart';
+import 'package:mornye/widgets/expressive_button.dart';
+import 'package:mornye/widgets/mornye_chrome.dart';
 import 'package:mornye/widgets/player_artwork.dart';
 
 /// How many of [items] are active and their overall progress: waiting items
@@ -35,6 +38,30 @@ import 'package:mornye/widgets/player_artwork.dart';
   return (count: count, progress: count == 0 ? 0 : total / count);
 }
 
+/// Active count and quantized percentage (0..100) from [DownloadQueueLookup],
+/// scanning only active items so large completed queues stay O(active) and
+/// fractional progress ticks do not trigger redundant rebuilds.
+({int count, int progressPercent}) _desktopDownloadsRing(
+  DownloadQueueLookup lookup,
+) {
+  final activeIds = lookup.activeItemIds;
+  if (activeIds.isEmpty) return (count: 0, progressPercent: 0);
+  var total = 0.0;
+  for (final id in activeIds) {
+    final item = lookup.byItemId[id];
+    if (item == null) continue;
+    total += item.status == DownloadStatus.finalizing
+        ? 1
+        : item.status == DownloadStatus.downloading
+        ? item.progress.clamp(0.0, 1.0)
+        : 0;
+  }
+  return (
+    count: activeIds.length,
+    progressPercent: ((total / activeIds.length) * 100).round().clamp(0, 100),
+  );
+}
+
 /// The desktop toolbar button for downloads: a ring shows overall progress
 /// while anything downloads, and clicking opens a popover that lists the
 /// active downloads with cancel buttons and a link to the full queue.
@@ -51,7 +78,10 @@ class _DesktopDownloadsButtonState
   final _menu = MenuController();
   // The toolbar ring changes with every progress sample. Keep the open panel
   // mounted with the same widget so those samples do not rebuild its list.
-  late final _popover = DesktopDownloadsPopover(onShowAll: _showAll);
+  // The popover inherits from the button, which may be a group segment.
+  late final _popover = ConnectedIconSegment.exclude(
+    child: DesktopDownloadsPopover(onShowAll: _showAll),
+  );
 
   void _toggle() => _menu.isOpen ? _menu.close() : _menu.open();
 
@@ -68,13 +98,6 @@ class _DesktopDownloadsButtonState
   Widget build(BuildContext context) {
     final mornye = context.isMornye;
     final colorScheme = Theme.of(context).colorScheme;
-    // Rebuilds only when the count or the ring value changes.
-    final (:count, :progress) = ref.watch(
-      downloadQueueProvider.select(
-        (state) => desktopDownloadsSummary(state.items),
-      ),
-    );
-    final idle = count == 0;
     final label = context.l10n.libraryDownloads;
     return MenuAnchor(
       controller: _menu,
@@ -82,57 +105,74 @@ class _DesktopDownloadsButtonState
       style: MenuStyle(
         padding: const WidgetStatePropertyAll(EdgeInsets.zero),
         backgroundColor: WidgetStatePropertyAll(
-          mornye
-              ? colorScheme.surfaceContainerHigh
-              : colorScheme.surfaceContainer,
+          mornye ? Colors.transparent : colorScheme.surfaceContainer,
         ),
+        elevation: mornye ? const WidgetStatePropertyAll(0) : null,
+        shadowColor: mornye
+            ? const WidgetStatePropertyAll(Colors.transparent)
+            : null,
         shape: WidgetStatePropertyAll(
           RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(mornye ? 14 : 16),
           ),
         ),
       ),
-      menuChildren: [_popover],
-      child: Semantics(
-        value: idle ? null : '$count',
-        child: AppIconButton(
-          key: const ValueKey('desktop-downloads-button'),
-          tooltip: label,
-          color: mornye ? colorScheme.onSurface : null,
-          onPressed: _toggle,
-          // Mornye sizes it with the other glyphs in the player capsule.
-          icon: SizedBox.square(
-            dimension: mornye ? 20 : 24,
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                if (!idle)
-                  Positioned.fill(
-                    child: AppProgressIndicator.circular(
-                      key: const ValueKey('desktop-downloads-progress'),
-                      wavy: false,
-                      value: progress,
-                      strokeWidth: mornye ? 2 : 2.5,
-                      strokeCap: StrokeCap.round,
+      menuChildren: [
+        if (mornye)
+          MornyeGlassPanel.overlay(radius: 14, child: _popover)
+        else
+          _popover,
+      ],
+      child: Consumer(
+        builder: (context, ref, _) {
+          // Scope progress updates to the button so MenuAnchor and its glass
+          // popover wrapper stay untouched during downloads.
+          final (:count, :progressPercent) = ref.watch(
+            downloadQueueLookupProvider.select(_desktopDownloadsRing),
+          );
+          final idle = count == 0;
+          return Semantics(
+            value: idle ? null : '$count',
+            child: AppIconButton(
+              key: const ValueKey('desktop-downloads-button'),
+              tooltip: label,
+              color: mornye ? colorScheme.onSurface : null,
+              onPressed: _toggle,
+              // Mornye sizes it with the other glyphs in the player capsule.
+              icon: SizedBox.square(
+                dimension: mornye ? 20 : 24,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    if (!idle)
+                      Positioned.fill(
+                        child: AppProgressIndicator.circular(
+                          key: const ValueKey('desktop-downloads-progress'),
+                          wavy: false,
+                          value: progressPercent / 100.0,
+                          strokeWidth: mornye ? 2 : 2.5,
+                          strokeCap: StrokeCap.round,
+                        ),
+                      ),
+                    AppIcon(
+                      mornye
+                          ? (idle
+                                ? CupertinoIcons.arrow_down_circle
+                                : CupertinoIcons.arrow_down)
+                          : Icons.download_rounded,
+                      size: switch ((mornye, idle)) {
+                        (true, true) => 18,
+                        (true, false) => 11,
+                        (false, true) => 24,
+                        (false, false) => 14,
+                      },
                     ),
-                  ),
-                AppIcon(
-                  mornye
-                      ? (idle
-                            ? CupertinoIcons.arrow_down_circle
-                            : CupertinoIcons.arrow_down)
-                      : Icons.download_rounded,
-                  size: switch ((mornye, idle)) {
-                    (true, true) => 18,
-                    (true, false) => 11,
-                    (false, true) => 24,
-                    (false, false) => 14,
-                  },
+                  ],
                 ),
-              ],
+              ),
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
   }
@@ -206,8 +246,9 @@ class DesktopDownloadsPopover extends ConsumerWidget {
             padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
             child: Align(
               alignment: AlignmentDirectional.centerEnd,
-              child: TextButton(
+              child: ExpressiveButton(
                 key: const ValueKey('desktop-downloads-show-all'),
+                text: true,
                 onPressed: onShowAll,
                 child: Text(l10n.desktopDownloadsShowAll),
               ),

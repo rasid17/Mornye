@@ -26,6 +26,7 @@ import 'package:mornye/utils/lyrics_parser.dart';
 import 'package:mornye/utils/lyrics_timeline.dart';
 import 'package:mornye/utils/synced_lyrics_scroll.dart';
 import 'package:mornye/utils/text_direction.dart';
+import 'package:mornye/utils/view_display.dart';
 import 'package:mornye/widgets/aligned_lyric_pronunciation.dart';
 import 'package:mornye/widgets/lyric_blur.dart';
 import 'package:mornye/widgets/lyric_supplement_transition.dart';
@@ -365,7 +366,7 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView>
     super.didChangeDependencies();
     _rowsDirty = true;
     _displayLead = lyricsDisplayLead(
-      View.maybeOf(context)?.display.refreshRate,
+      displayOf(View.maybeOf(context))?.refreshRate,
     );
     // Appearance can rebuild when transport controls fade (for example with
     // custom glass clarity). Keep the existing playback subscription and the
@@ -1043,6 +1044,22 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView>
 
   @override
   Widget build(BuildContext context) {
+    // Watch providers in build() rather than inside TweenAnimationBuilder so
+    // animation frames never leak duplicate Riverpod .select() subscriptions.
+    final loading = _visible
+        ? ref.watch(playbackLoadingProvider)
+        : ref.read(playbackLoadingProvider);
+    final mornye = context.isMornye;
+    final highContrast = MediaQuery.highContrastOf(context);
+    final blurStrength = ref.watch(
+      themeProvider.select((theme) => theme.lyricsBlur),
+    );
+    final blurLyrics =
+        mornye &&
+        !highContrast &&
+        blurStrength > 0 &&
+        // Defocused lines are filtered on every frame while their focus eases.
+        ref.watch(mornyeLiquidGlassProvider);
     // Turning pronunciation or translation on resizes every line, so the
     // lines below move: Material's slow spatial spring stops at the new
     // size, and Mornye moves them as content, on its standard spring.
@@ -1061,29 +1078,31 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView>
         ),
         duration: supplements.duration,
         curve: supplements.curve,
-        builder: (context, visibility, _) => _buildLyrics(context, visibility),
+        builder: (context, visibility, _) => _buildLyrics(
+          context,
+          visibility,
+          loading: loading,
+          mornye: mornye,
+          highContrast: highContrast,
+          blurStrength: blurStrength,
+          blurLyrics: blurLyrics,
+        ),
       ),
     );
   }
 
-  Widget _buildLyrics(BuildContext context, Offset visibility) {
+  Widget _buildLyrics(
+    BuildContext context,
+    Offset visibility, {
+    required bool loading,
+    required bool mornye,
+    required bool highContrast,
+    required double blurStrength,
+    required bool blurLyrics,
+  }) {
     final lines = _lines;
     final active = _active;
     final rowVisibility = _rowVisibility;
-    final loading = _visible
-        ? ref.watch(playbackLoadingProvider)
-        : ref.read(playbackLoadingProvider);
-    final mornye = context.isMornye;
-    final highContrast = MediaQuery.highContrastOf(context);
-    final blurStrength = ref.watch(
-      themeProvider.select((theme) => theme.lyricsBlur),
-    );
-    final blurLyrics =
-        mornye &&
-        !highContrast &&
-        blurStrength > 0 &&
-        // Defocused lines are filtered on every frame while their focus eases.
-        ref.watch(mornyeLiquidGlassProvider);
     // Line emphasis eases over most of the scroll, so the new line brightens
     // as it arrives instead of switching ahead of the movement.
     final motion = MediaQuery.disableAnimationsOf(context)
@@ -1250,13 +1269,16 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView>
             _rowInputs = rowInputs;
             _rowsRevision++;
           }
+          final creditsHeight = mornye && widget.credits != null
+              ? widget.credits!.heightFor(context, contentWidth)
+              : null;
           final list = _lyricList(
             revision: _rowsRevision,
             controller: _scroll,
             itemExtentBuilder: mornye
                 ? (index, _) => index < lines.length
                       ? _lineExtents![index]
-                      : widget.credits!.heightFor(context, contentWidth)
+                      : creditsHeight!
                 : null,
             padding: EdgeInsets.fromLTRB(
               inset,
@@ -1371,7 +1393,7 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView>
                 duration: Duration(milliseconds: timed ? 160 : 320),
                 reverseDuration: const Duration(milliseconds: 260),
                 switchInCurve: Curves.easeOutCubic,
-                switchOutCurve: Curves.easeInCubic,
+                switchOutCurve: Curves.easeOutCubic.flipped,
                 transitionBuilder: mornye
                     ? LyricBlur.fadeTransition
                     : AnimatedSwitcher.defaultTransitionBuilder,
@@ -1399,6 +1421,19 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView>
                               : distance == 2
                               ? 3.6
                               : 4.8);
+                final blurContentKey = (
+                  index,
+                  line.text,
+                  line.romanization,
+                  line.translation,
+                  timed,
+                  visibility,
+                  layoutWidth,
+                  textAlign,
+                  lineDirection,
+                  _pronunciationLayouts[index],
+                  _primaryLyricStyle(context, background: line.isBackground),
+                );
                 content = TweenAnimationBuilder<double>(
                   tween: Tween(end: sigma),
                   duration: motion,
@@ -1407,6 +1442,7 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView>
                   builder: (context, value, child) => LyricBlur(
                     sigma: value,
                     settled: value == sigma,
+                    contentKey: blurContentKey,
                     child: child!,
                   ),
                 );
@@ -1417,14 +1453,6 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView>
                 );
               }
 
-              content = LyricScrollMotion(
-                progress: _scrollMotion,
-                distance: _scrollMotionDistance,
-                rowsAfterFocus: row - _scrollMotionFocus,
-                motionRevision: _scrollMotionRevision,
-                previousProgress: _previousScrollMotionProgress,
-                child: content,
-              );
               return _revealRow(
                 index,
                 textAlign,
@@ -1457,6 +1485,8 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView>
                               .resolve(lineDirection),
                       duration: motion,
                       curve: Curves.easeOutCubic,
+                      // The fade sits above the scroll motion, whose shape
+                      // changes as focus moves, so the fade keeps its state.
                       child: AnimatedOpacity(
                         opacity: mornye
                             ? (isActive || highContrast ? 1 : 0.48)
@@ -1467,7 +1497,14 @@ class _SyncedLyricsViewState extends ConsumerState<SyncedLyricsView>
                         curve: timed
                             ? Curves.easeOutCubic
                             : Curves.easeInOutCubic,
-                        child: content,
+                        child: LyricScrollMotion(
+                          progress: _scrollMotion,
+                          distance: _scrollMotionDistance,
+                          rowsAfterFocus: row - _scrollMotionFocus,
+                          motionRevision: _scrollMotionRevision,
+                          previousProgress: _previousScrollMotionProgress,
+                          child: RepaintBoundary(child: content),
+                        ),
                       ),
                     ),
                   ),

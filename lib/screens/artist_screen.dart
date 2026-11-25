@@ -36,6 +36,7 @@ import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/utils/string_utils.dart';
 import 'package:mornye/utils/artist_album_sort.dart';
 import 'package:mornye/utils/adaptive_layout.dart';
+import 'package:mornye/utils/image_cache_utils.dart';
 import 'package:mornye/utils/nav_bar_inset.dart';
 import 'package:mornye/utils/provider_resource_ids.dart';
 import 'package:mornye/utils/ttl_cache.dart';
@@ -55,12 +56,15 @@ import 'package:mornye/controllers/track_history_snapshot.dart';
 import 'package:mornye/widgets/download_service_picker.dart';
 import 'package:mornye/widgets/error_card.dart';
 import 'package:mornye/widgets/selection_bottom_bar.dart';
+import 'package:mornye/widgets/settings_group.dart';
+import 'package:mornye/widgets/track_card.dart';
 import 'package:mornye/widgets/in_library_badge.dart';
 import 'package:mornye/widgets/track_collection_quick_actions.dart';
 import 'package:mornye/widgets/animation_utils.dart';
 import 'package:mornye/widgets/cached_cover_image.dart';
 import 'package:mornye/widgets/playlist_picker_sheet.dart';
 import 'package:mornye/widgets/motion_header_banner.dart';
+import 'package:mornye/widgets/sliver_layout_info_builder.dart';
 import 'package:mornye/widgets/cross_extension_share_sheet.dart';
 import 'package:mornye/widgets/view_queue_snackbar_action.dart';
 import 'package:mornye/widgets/app_snack_bar.dart';
@@ -580,7 +584,13 @@ class _ArtistScreenState extends ConsumerState<ArtistScreen>
   }
 
   void _requestMoreAlbums() {
-    if (_isLoadingDiscography) return;
+    if (_isLoadingDiscography ||
+        _isLoadingMoreAlbums ||
+        _albumsNext == null ||
+        _albumsNext!.isEmpty ||
+        _directMetadataProviderId() == null) {
+      return;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _loadMoreAlbums();
     });

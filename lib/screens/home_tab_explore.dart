@@ -3,40 +3,13 @@ part of 'home_tab.dart';
 extension _HomeTabExploreUI on _HomeTabState {
   List<Widget> _buildExploreSections(
     List<ExploreSection> sections,
-    String? greeting,
     ColorScheme colorScheme,
   ) {
-    final hasGreeting =
-        !context.isMornye && greeting != null && greeting.isNotEmpty;
-    final isTablet = _usesTabletSizes(context);
-    final sectionOffset = hasGreeting ? 1 : 0;
-    final totalCount = sections.length + sectionOffset + 1;
-
     return [
       SliverList(
         delegate: SliverChildBuilderDelegate((context, index) {
-          if (hasGreeting && index == 0) {
-            return Padding(
-              padding: EdgeInsets.fromLTRB(
-                16 + homeContentInset(context),
-                12,
-                16 + homeContentInset(context),
-                4,
-              ),
-              child: Text(
-                greeting,
-                style:
-                    (isTablet
-                            ? Theme.of(context).textTheme.headlineMedium
-                            : Theme.of(context).textTheme.headlineSmall)
-                        ?.copyWith(fontWeight: FontWeight.bold),
-              ),
-            );
-          }
-
-          final sectionIndex = index - sectionOffset;
-          if (sectionIndex < sections.length) {
-            final section = sections[sectionIndex];
+          if (index < sections.length) {
+            final section = sections[index];
             return KeyedSubtree(
               key: ValueKey('explore-section-${section.uri}-${section.title}'),
               child: _buildExploreSection(section, colorScheme),
@@ -44,7 +17,7 @@ extension _HomeTabExploreUI on _HomeTabState {
           }
 
           return const SizedBox(height: 24);
-        }, childCount: totalCount),
+        }, childCount: sections.length + 1),
       ),
     ];
   }
@@ -84,6 +57,7 @@ extension _HomeTabExploreUI on _HomeTabState {
             builder: (context, controller) => ListView.builder(
               controller: controller,
               scrollDirection: Axis.horizontal,
+              itemExtent: _exploreCardSize(context),
               padding: EdgeInsets.symmetric(horizontal: 12 + inset),
               itemCount: section.items.length,
               itemBuilder: (context, index) {
@@ -125,6 +99,7 @@ extension _HomeTabExploreUI on _HomeTabState {
           height: _exploreSectionHeight(context),
           child: ListView.builder(
             scrollDirection: Axis.horizontal,
+            itemExtent: cardSize,
             physics: const NeverScrollableScrollPhysics(),
             padding: EdgeInsets.symmetric(horizontal: 12 + inset),
             itemCount: 6,
@@ -385,14 +360,37 @@ extension _HomeTabExploreUI on _HomeTabState {
         );
         return;
       default:
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('${item.type}: ${item.name}')));
+        showAppSnackBar(context, content: Text('${item.type}: ${item.name}'));
         return;
     }
   }
 
   void _showTrackBottomSheet(ExploreItem item, BuildContext itemContext) {
+    if (isDesktopPlatform) {
+      final origin =
+          contextMenuPositionBelow(itemContext) ??
+          contextMenuOriginOf(itemContext) ??
+          MediaQuery.sizeOf(context).center(Offset.zero);
+      showContextMenu(
+        itemContext,
+        position: origin,
+        groups: [
+          [
+            ContextMenuAction(
+              icon: Icons.download,
+              label: context.l10n.downloadTitle,
+              onSelected: () => _handleExploreTrackPrimaryAction(item),
+            ),
+            ContextMenuAction(
+              icon: Icons.album,
+              label: context.l10n.homeGoToAlbum,
+              onSelected: () => _navigateToTrackAlbum(item),
+            ),
+          ],
+        ],
+      );
+      return;
+    }
     if (context.isMornye) {
       final box = itemContext.findRenderObject();
       final anchor = box is RenderBox && box.hasSize
@@ -494,21 +492,28 @@ extension _HomeTabExploreUI on _HomeTabState {
             ),
             // Material sheets separate the header by space alone.
             if (context.isMornye) const Divider(height: 1),
-            ListTile(
-              leading: Icon(Icons.download, color: colorScheme.primary),
-              title: Text(context.l10n.downloadTitle),
-              onTap: () {
-                Navigator.pop(context);
-                _handleExploreTrackPrimaryAction(item);
-              },
-            ),
-            ListTile(
-              leading: Icon(Icons.album, color: colorScheme.onSurfaceVariant),
-              title: Text(context.l10n.homeGoToAlbum),
-              onTap: () {
-                Navigator.pop(context);
-                _navigateToTrackAlbum(item);
-              },
+            AppSheetOptions(
+              children: [
+                ListTile(
+                  leading: Icon(Icons.download, color: colorScheme.primary),
+                  title: Text(context.l10n.downloadTitle),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _handleExploreTrackPrimaryAction(item);
+                  },
+                ),
+                ListTile(
+                  leading: Icon(
+                    Icons.album,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                  title: Text(context.l10n.homeGoToAlbum),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _navigateToTrackAlbum(item);
+                  },
+                ),
+              ],
             ),
             const SizedBox(height: 8),
           ],
@@ -697,15 +702,16 @@ extension _HomeTabExploreUI on _HomeTabState {
                                 ),
                               ],
                             ),
-                            child: CachedCoverImage(
-                              imageUrl: cover,
-                              width: coverSize,
-                              height: coverSize,
-                              borderRadius: BorderRadius.circular(
-                                tokens.radiusThumb,
+                            child: SizedBox.square(
+                              dimension: coverSize,
+                              child: CachedCoverImage(
+                                imageUrl: cover,
+                                borderRadius: BorderRadius.circular(
+                                  tokens.radiusThumb,
+                                ),
+                                errorWidget: (context, url, error) =>
+                                    const SizedBox.shrink(),
                               ),
-                              errorWidget: (context, url, error) =>
-                                  const SizedBox.shrink(),
                             ),
                           ),
                         ),

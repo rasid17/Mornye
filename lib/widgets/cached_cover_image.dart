@@ -12,6 +12,7 @@ import 'package:mornye/services/downloaded_embedded_cover_resolver.dart';
 import 'package:mornye/theme/app_motion.dart';
 import 'package:mornye/theme/cover_palette.dart';
 import 'package:mornye/theme/mornye_theme.dart';
+import 'package:mornye/utils/desktop_platform.dart';
 import 'package:mornye/utils/image_cache_utils.dart';
 
 class CachedCoverImage extends StatelessWidget {
@@ -88,9 +89,7 @@ class CachedCoverImage extends StatelessWidget {
     }
     // Grid cells size their children through constraints rather than explicit
     // width/height. Use those bounds for decoding as well as explicit sizes.
-    return LayoutBuilder(
-      builder: (context, constraints) => _buildImage(context, constraints),
-    );
+    return _decodeLayout(_buildImage);
   }
 
   Widget _buildImage(BuildContext context, BoxConstraints constraints) {
@@ -179,6 +178,13 @@ class LocalOrNetworkCoverImage extends StatelessWidget {
   final String Function(String)? urlTransform;
   final Widget Function(BuildContext) placeholder;
 
+  /// A song file on this device whose own artwork shows when [url] cannot
+  /// load, as a web cover that is not cached while offline.
+  final String? songFile;
+
+  /// Looks up [songFile] when the cover cannot load and none was given.
+  final Future<String?> Function()? findSongFile;
+
   const LocalOrNetworkCoverImage({
     super.key,
     required this.url,
@@ -192,7 +198,30 @@ class LocalOrNetworkCoverImage extends StatelessWidget {
     this.fadeOutDuration = Duration.zero,
     this.urlTransform,
     required this.placeholder,
+    this.songFile,
+    this.findSongFile,
   });
+
+  /// What shows when the cover cannot load: the song file's artwork when
+  /// there is a song file, otherwise [placeholder].
+  Widget _unavailable(BuildContext context) {
+    if (songFile == null && findSongFile == null) return placeholder(context);
+    return EmbeddedCoverFallback(
+      key: ValueKey(url),
+      songFile: songFile,
+      findSongFile: findSongFile,
+      placeholder: placeholder(context),
+      builder: (_, preview) => LocalOrNetworkCoverImage(
+        url: preview,
+        width: width,
+        height: height,
+        fit: fit,
+        localCacheWidth: localCacheWidth ?? networkCacheWidth,
+        fadeInDuration: fadeInDuration ?? Duration.zero,
+        placeholder: placeholder,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -207,7 +236,7 @@ class LocalOrNetworkCoverImage extends StatelessWidget {
         fadeInDuration: fadeInDuration,
         fadeOutDuration: fadeOutDuration,
         placeholder: (_, _) => placeholder(context),
-        errorWidget: (_, _, _) => placeholder(context),
+        errorWidget: (_, _, _) => _unavailable(context),
       );
     }
 
@@ -223,9 +252,8 @@ class LocalOrNetworkCoverImage extends StatelessWidget {
     if (localCacheWidth != null) {
       return _buildLocalImage(context, file, const BoxConstraints());
     }
-    return LayoutBuilder(
-      builder: (context, constraints) =>
-          _buildLocalImage(context, file, constraints),
+    return _decodeLayout(
+      (context, constraints) => _buildLocalImage(context, file, constraints),
     );
   }
 
@@ -288,7 +316,7 @@ class LocalOrNetworkCoverImage extends StatelessWidget {
                 ],
               );
             },
-      errorBuilder: (_, _, _) => placeholder(context),
+      errorBuilder: (_, _, _) => _unavailable(context),
     );
     return _clip(image);
   }
@@ -296,6 +324,135 @@ class LocalOrNetworkCoverImage extends StatelessWidget {
   static int? _localDecodeExtent(BuildContext context, double? size) {
     if (size == null || !size.isFinite || size <= 0) return null;
     return (size * MediaQuery.devicePixelRatioOf(context)).ceil();
+  }
+}
+
+/// Builds a cover with the constraints it decodes for. On desktop a pane
+/// resizes across many frames, so a cover keeps its decode while its cell
+/// shrinks or grows a little and decodes again once the size settles.
+Widget _decodeLayout(
+  Widget Function(BuildContext context, BoxConstraints constraints) builder,
+) => isDesktopPlatform
+    ? _SettledDecodeLayout(builder: builder)
+    : LayoutBuilder(builder: builder);
+
+class _SettledDecodeLayout extends StatefulWidget {
+  const _SettledDecodeLayout({required this.builder});
+
+  final Widget Function(BuildContext context, BoxConstraints constraints)
+  builder;
+
+  @override
+  State<_SettledDecodeLayout> createState() => _SettledDecodeLayoutState();
+}
+
+class _SettledDecodeLayoutState extends State<_SettledDecodeLayout> {
+  static const _settleAfter = Duration(milliseconds: 150);
+
+  /// Growth past this decodes at once, so a cover is never shown blurred
+  /// by more than a quarter.
+  static const _maxUpscale = 1.25;
+
+  BoxConstraints? _decoded;
+  Timer? _settle;
+
+  static double _growth(double from, double to) {
+    if (from == to) return 1;
+    if (!from.isFinite || !to.isFinite || from <= 0) return double.infinity;
+    return to / from;
+  }
+
+  @override
+  void dispose() {
+    _settle?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final decoded = _decoded;
+      if (decoded == constraints) {
+        _settle?.cancel();
+      } else if (decoded == null ||
+          _growth(decoded.maxWidth, constraints.maxWidth) > _maxUpscale ||
+          _growth(decoded.maxHeight, constraints.maxHeight) > _maxUpscale) {
+        _settle?.cancel();
+        _decoded = constraints;
+      } else {
+        _settle?.cancel();
+        _settle = Timer(_settleAfter, () {
+          if (mounted) setState(() => _decoded = null);
+        });
+      }
+      return widget.builder(context, _decoded!);
+    },
+  );
+}
+
+/// The artwork inside a song file on this device, for a cover whose own
+/// image cannot load. [placeholder] shows until it is read, and when the
+/// file has none or is not on this device.
+class EmbeddedCoverFallback extends StatefulWidget {
+  const EmbeddedCoverFallback({
+    super.key,
+    this.songFile,
+    this.findSongFile,
+    required this.placeholder,
+    required this.builder,
+  });
+
+  /// The song file; [findSongFile] looks it up once when this is null.
+  final String? songFile;
+  final Future<String?> Function()? findSongFile;
+  final Widget placeholder;
+
+  /// Shows the artwork read from the song, a file at [preview].
+  final Widget Function(BuildContext context, String preview) builder;
+
+  @override
+  State<EmbeddedCoverFallback> createState() => _EmbeddedCoverFallbackState();
+}
+
+class _EmbeddedCoverFallbackState extends State<EmbeddedCoverFallback> {
+  String? _found;
+
+  @override
+  void initState() {
+    super.initState();
+    DownloadedEmbeddedCoverResolver.previewsCleared.addListener(_changed);
+    unawaited(_find());
+  }
+
+  @override
+  void dispose() {
+    DownloadedEmbeddedCoverResolver.previewsCleared.removeListener(_changed);
+    super.dispose();
+  }
+
+  Future<void> _find() async {
+    final find = widget.findSongFile;
+    if (widget.songFile != null || find == null) return;
+    String? found;
+    try {
+      found = await find();
+    } catch (_) {}
+    if (found != null && mounted) setState(() => _found = found);
+  }
+
+  void _changed() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final file = widget.songFile ?? _found;
+    final preview = DownloadedEmbeddedCoverResolver.isLocalSource(file)
+        ? DownloadedEmbeddedCoverResolver.resolve(file, onChanged: _changed)
+        : null;
+    return preview == null
+        ? widget.placeholder
+        : widget.builder(context, preview);
   }
 }
 
@@ -523,6 +680,10 @@ Future<void> precacheMetadataBackdrop(
   final normalized = source?.trim();
   if (normalized == null || normalized.isEmpty) return;
 
+  // A cover in a file starts decoding at the header's size now instead of
+  // when the page is built. Not waited for: the row's picture flies in until
+  // it is there. Openers warm a web cover themselves.
+  if (!isHttpCoverUrl(normalized)) precacheCoverImage(context, normalized);
   final extent = metadataBackdropCacheExtent(context);
   final provider = coverImageProvider(
     normalized,
@@ -568,8 +729,12 @@ Future<void> prepareTrackDetailsCover(
   String? fallback,
 }) async {
   final embedded = await trackDetailsEmbeddedCover(filePath);
+  if (!context.mounted) return;
   // Only Material's header has the blurred backdrop.
-  if (!context.mounted || context.isMornye) return;
+  if (context.isMornye) {
+    precacheCoverImage(context, embedded ?? fallback);
+    return;
+  }
   await precacheMetadataBackdrop(context, embedded ?? fallback);
 }
 

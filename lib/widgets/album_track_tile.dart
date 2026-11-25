@@ -58,7 +58,7 @@ class AlbumTrackTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return TrackCard(
-      style: TrackCardStyle.flat,
+      style: collectionTrackCardStyle(context),
       queueSwipe: queueSwipe,
       isSelectionMode: isSelectionMode,
       isSelected: isSelected,
@@ -67,7 +67,7 @@ class AlbumTrackTile extends ConsumerWidget {
       onTap: isSelectionMode
           ? onToggleSelection
           : songRowTap(ref, path: filePath, openDetails: onOpen, play: onPlay),
-      onLongPress: isSelectionMode ? null : onEnterSelectionMode,
+      onLongPress: onEnterSelectionMode,
       leading: SizedBox(
         width: 24,
         // Takes the row's supporting colour, which follows a current fill.

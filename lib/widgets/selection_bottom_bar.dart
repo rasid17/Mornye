@@ -240,10 +240,13 @@ class _AnimatedSelectionBottomBarState extends State<AnimatedSelectionBottomBar>
 
   @override
   Widget build(BuildContext context) {
-    return FadeTransition(
-      opacity: _fadeAnimation,
-      child: SlideTransition(position: _slideAnimation, child: widget.child),
+    final slide = SlideTransition(
+      position: _slideAnimation,
+      child: widget.child,
     );
+    // An opacity layer isolates Mornye's glass BackdropFilter during entrance.
+    if (context.isMornye) return slide;
+    return FadeTransition(opacity: _fadeAnimation, child: slide);
   }
 }
 
@@ -373,7 +376,23 @@ class SelectionBottomBar extends StatelessWidget {
     const floatingMargin = 12.0;
     Widget surface(Widget content) {
       if (context.isMornye) {
-        return MornyeGlassPanel.overlay(child: content);
+        final glass = MornyeGlassPanel.overlay(
+          child: MediaQuery.removePadding(
+            context: context,
+            removeBottom: !isDesktopPlatform,
+            child: content,
+          ),
+        );
+        if (isDesktopPlatform) return glass;
+        return Padding(
+          padding: EdgeInsets.fromLTRB(
+            floatingMargin,
+            0,
+            floatingMargin,
+            floatingMargin + MediaQuery.viewPaddingOf(context).bottom,
+          ),
+          child: glass,
+        );
       }
       final toolbar = Material(
         color: colorScheme.surfaceContainerHigh,
@@ -431,7 +450,7 @@ class SelectionBottomBar extends StatelessWidget {
         onClose: onClose,
         header: header,
         bottomPadding: bottomPadding,
-        floatingMargin: context.isMornye ? 0 : floatingMargin,
+        floatingMargin: floatingMargin,
         surfaceBuilder: surface,
         children: children,
       );
@@ -587,7 +606,7 @@ class _SelectionPanelDragState extends State<_SelectionPanelDrag>
   /// The style's slow spatial spring, critically damped in both styles.
   SpringDescription get _spring => context.isMornye
       ? MornyeMotion.slowSpring
-      : M3EMotion.expressiveSpatialSlow.toDescription();
+      : MotionPace.spring(M3EMotion.expressiveSpatialSlow.toDescription());
 
   /// Tucks the actions away or brings them back. A drag hands over its
   /// [velocity] in pixels a second, downward positive; otherwise the
@@ -626,20 +645,37 @@ class _SelectionPanelDragState extends State<_SelectionPanelDrag>
   }
 
   /// Moves the panel back to its place on the slow spring, from the drag's
-  /// [velocity] when one hands over, or off the screen when closing: a
-  /// short eased exit, faster than any drag that ends it.
+  /// [velocity] when one hands over, or off the screen when closing: Apple's
+  /// fast spring in Mornye (preserving velocity), or M3's standard accelerate
+  /// exit in Material.
   Future<void> _animateToRest(double target, {double? velocity}) async {
     try {
-      if (_closing) {
-        await _offset
-            .animateTo(
-              target,
-              duration: const Duration(milliseconds: 180),
-              curve: Curves.easeOutCubic,
-            )
-            .orCancel;
-      } else if (MediaQuery.disableAnimationsOf(context)) {
+      if (MediaQuery.disableAnimationsOf(context)) {
         _offset.value = target;
+      } else if (_closing) {
+        if (context.isMornye) {
+          await _offset
+              .animateWith(
+                SpringSimulation(
+                  MornyeMotion.fastSpring,
+                  _offset.value,
+                  target,
+                  velocity ?? _offset.velocity,
+                  snapToEnd: true,
+                ),
+              )
+              .orCancel;
+        } else {
+          await _offset
+              .animateTo(
+                target,
+                duration: MotionPace.duration(
+                  const Duration(milliseconds: 180),
+                ),
+                curve: Easing.standardAccelerate,
+              )
+              .orCancel;
+        }
       } else {
         await _offset
             .animateWith(

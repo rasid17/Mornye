@@ -15,6 +15,44 @@ extension _QueueTabSelectionActions on _QueueTabState {
     }
   }
 
+  /// A long press on a song of the [filterMode] page: selects it, or the
+  /// range up to it from the song selected last, then follows the finger
+  /// over more songs.
+  void _holdToSelect(
+    String filterMode,
+    UnifiedLibraryItem item,
+    List<UnifiedLibraryItem> visibleItems,
+  ) {
+    // A slide replaces that range with the songs it passes.
+    final before = {..._selectedIds};
+    if (_isSelectionMode) {
+      _selectRangeTo(item.id, visibleItems);
+    } else {
+      _enterSelectionMode(item.id);
+    }
+    _slideSelect.begin(item.id);
+    if (!_slideSelect.isActive) return;
+    _slideSelectFilter = filterMode;
+    _slideSelectItems = visibleItems;
+    _slideSelectItemIds = [for (final entry in visibleItems) entry.id];
+    _slideSelectBase = before;
+  }
+
+  void _applySlideSelection(Object anchor, Object current) {
+    final base = _slideSelectBase;
+    if (base == null || !mounted) return;
+    _setState(() {
+      applySlideSelection(
+        selected: _selectedIds,
+        base: base,
+        visibleItems: _slideSelectItemIds,
+        anchor: anchor as String,
+        target: current as String,
+      );
+      _selectionAnchorId = current;
+    });
+  }
+
   void _startLibraryTrackDrag() {
     _setState(() => _isDraggingLibraryTrack = true);
     _hideSelectionOverlay();

@@ -27,6 +27,9 @@ import 'package:mornye/widgets/desktop/detail_header.dart';
 import 'package:mornye/widgets/settled_blur.dart';
 import 'package:mornye/widgets/sliver_layout_info_builder.dart';
 
+/// Corner of the sheet the list under a Material header rises as.
+const materialHeaderSheetEdge = 28.0;
+
 /// Collapsing album-detail header shared by the album, local-album, and
 /// downloaded-album screens: full-bleed [background] (optionally blurred and
 /// scrimmed), bottom gradient, centered square cover, title, optional
@@ -351,6 +354,10 @@ class AlbumDetailHeader extends StatelessWidget {
   Widget _buildAppBar(BuildContext context, ColorScheme headerScheme) {
     final tokens = context.tokens;
     final plainArtworkHeader = context.isMornye && coverBuilder != null;
+    // Material: the list below comes forward as a sheet over the backdrop.
+    final sheetEdge = context.isMornye ? 0.0 : materialHeaderSheetEdge;
+    final contentBottom = sheetEdge == 0 ? 40.0 : sheetEdge + 24;
+    final sheetColor = Theme.of(context).colorScheme.surface;
     // iOS does not add horizontal safe-area padding in portrait. Give toolbar
     // controls and header content an explicit inset so circular actions do not
     // sit against the glass edge on either iPhone or iPad. Android uses a
@@ -412,83 +419,58 @@ class AlbumDetailHeader extends StatelessWidget {
           final contentProgress = Curves.easeOut.transform(
             ((collapseRatio - 0.3) / 0.5).clamp(0.0, 1.0),
           );
-          final content = Column(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (coverBuilder != null) ...[
-                Builder(
-                  builder: (context) {
-                    // Landscape headers are short: the cover also yields to
-                    // the height left below the toolbar once the title,
-                    // details and actions are placed, so it never rises
-                    // into the status bar or toolbar buttons.
-                    final toolbarBottom =
-                        MediaQuery.paddingOf(context).top + kToolbarHeight;
-                    final detailsHeight =
-                        40 +
-                        20 +
-                        58 +
-                        (subtitle == null ? 0 : 28) +
-                        (meta == null ? 0 : 34) +
-                        (actions == null ? 0 : 64);
-                    final coverSize = math.min(
-                      (constraints.maxWidth * 0.5).clamp(150.0, 210.0),
-                      math.max(
-                        96.0,
-                        expandedHeight - toolbarBottom - detailsHeight,
-                      ),
-                    );
-                    // Material uses the expressive extra-large corner.
-                    final coverRadius = context.isMornye
-                        ? tokens.radiusControl
-                        : 28.0;
-                    return Container(
-                      width: coverSize,
-                      height: coverSize,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(
-                          plainArtworkHeader ? tokens.radiusCover : coverRadius,
-                        ),
-                        boxShadow: [
-                          if (coverShadow)
-                            BoxShadow(
-                              color: headerScheme.shadow.withValues(
-                                alpha: 0.45,
-                              ),
-                              blurRadius: 24,
-                              offset: const Offset(0, 8),
-                            ),
-                        ],
-                      ),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(coverRadius),
-                        child: coverBuilder!(context, coverSize),
-                      ),
-                    );
-                  },
-                ),
-                const SizedBox(height: 20),
-              ],
-              Text(
-                title,
-                style: TextStyle(
-                  color: onHeader,
-                  fontSize: _titleFontSize(),
-                  fontWeight: FontWeight.bold,
-                  height: 1.2,
-                ),
-                textAlign: TextAlign.center,
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-              ),
-              if (subtitle != null) ...[const SizedBox(height: 6), subtitle!],
-              if (meta != null) ...[const SizedBox(height: 12), meta!],
-              if (actions != null) ...[const SizedBox(height: 16), actions!],
-            ],
+          final toolbarBottom =
+              MediaQuery.paddingOf(context).top + kToolbarHeight;
+          final detailsHeight =
+              contentBottom +
+              20 +
+              58 +
+              (subtitle == null ? 0 : 28) +
+              (meta == null ? 0 : 34) +
+              (actions == null ? 0 : 64);
+          final coverSize = math.min(
+            (constraints.maxWidth * 0.5).clamp(150.0, 210.0),
+            math.max(96.0, expandedHeight - toolbarBottom - detailsHeight),
+          );
+          final content = _AlbumHeaderBody(
+            coverBuilder: coverBuilder,
+            coverSize: coverSize,
+            coverShadow: coverShadow,
+            plainArtworkHeader: plainArtworkHeader,
+            shadowColor: headerScheme.shadow,
+            title: title,
+            titleColor: onHeader,
+            titleFontSize: _titleFontSize(),
+            subtitle: subtitle,
+            meta: meta,
+            actions: actions,
           );
 
-          return FlexibleSpaceBar(
+          // The sheet's rounded top edge covers the backdrop's end and
+          // flattens as the header docks under the toolbar.
+          final rise =
+              (constraints.maxHeight -
+                      MediaQuery.paddingOf(context).top -
+                      kToolbarHeight)
+                  .clamp(0.0, sheetEdge);
+          final sheet = Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: rise,
+            child: IgnorePointer(
+              child: DecoratedBox(
+                key: const ValueKey('header-sheet-edge'),
+                decoration: BoxDecoration(
+                  color: sheetColor,
+                  borderRadius: BorderRadius.vertical(
+                    top: Radius.circular(rise),
+                  ),
+                ),
+              ),
+            ),
+          );
+          final bar = FlexibleSpaceBar(
             collapseMode: CollapseMode.pin,
             background: Stack(
               fit: StackFit.expand,
@@ -523,7 +505,7 @@ class AlbumDetailHeader extends StatelessWidget {
                 Positioned(
                   left: 20 + iosEdgeInset,
                   right: 20 + iosEdgeInset,
-                  bottom: 40,
+                  bottom: contentBottom,
                   child: expressive
                       ? IgnorePointer(
                           ignoring: contentProgress == 0,
@@ -546,6 +528,11 @@ class AlbumDetailHeader extends StatelessWidget {
               ],
             ),
             stretchModes: const [StretchMode.zoomBackground],
+          );
+          // One Stack either way, so docking keeps the bar's subtree.
+          return Stack(
+            fit: StackFit.expand,
+            children: [bar, if (rise > 0) sheet],
           );
         },
       ),
@@ -575,6 +562,129 @@ class AlbumDetailHeader extends StatelessWidget {
       actionsPadding: EdgeInsetsDirectional.only(end: iosEdgeInset),
       actions: appBarActions,
     );
+  }
+}
+
+/// Caches the header body widget across vertical scroll ticks so collapsing
+/// [LayoutBuilder] rebuilds do not reconstruct cover artwork and metadata.
+class _AlbumHeaderBody extends StatefulWidget {
+  const _AlbumHeaderBody({
+    required this.coverBuilder,
+    required this.coverSize,
+    required this.coverShadow,
+    required this.plainArtworkHeader,
+    required this.shadowColor,
+    required this.title,
+    required this.titleColor,
+    required this.titleFontSize,
+    required this.subtitle,
+    required this.meta,
+    required this.actions,
+  });
+
+  final Widget Function(BuildContext context, double coverSize)? coverBuilder;
+  final double coverSize;
+  final bool coverShadow;
+  final bool plainArtworkHeader;
+  final Color shadowColor;
+  final String title;
+  final Color titleColor;
+  final double titleFontSize;
+  final Widget? subtitle;
+  final Widget? meta;
+  final Widget? actions;
+
+  @override
+  State<_AlbumHeaderBody> createState() => _AlbumHeaderBodyState();
+}
+
+class _AlbumHeaderBodyState extends State<_AlbumHeaderBody> {
+  Widget? _cached;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _cached = null;
+  }
+
+  @override
+  void didUpdateWidget(_AlbumHeaderBody oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.coverBuilder != widget.coverBuilder ||
+        oldWidget.coverSize != widget.coverSize ||
+        oldWidget.coverShadow != widget.coverShadow ||
+        oldWidget.plainArtworkHeader != widget.plainArtworkHeader ||
+        oldWidget.shadowColor != widget.shadowColor ||
+        oldWidget.title != widget.title ||
+        oldWidget.titleColor != widget.titleColor ||
+        oldWidget.titleFontSize != widget.titleFontSize ||
+        oldWidget.subtitle != widget.subtitle ||
+        oldWidget.meta != widget.meta ||
+        oldWidget.actions != widget.actions) {
+      _cached = null;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cached = _cached;
+    if (cached != null) return cached;
+    final tokens = context.tokens;
+    // Material uses the expressive extra-large corner.
+    final coverRadius = context.isMornye ? tokens.radiusControl : 28.0;
+    final built = Column(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (widget.coverBuilder != null) ...[
+          Container(
+            width: widget.coverSize,
+            height: widget.coverSize,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(
+                widget.plainArtworkHeader ? tokens.radiusCover : coverRadius,
+              ),
+              boxShadow: [
+                if (widget.coverShadow)
+                  BoxShadow(
+                    color: widget.shadowColor.withValues(alpha: 0.45),
+                    blurRadius: 24,
+                    offset: const Offset(0, 8),
+                  ),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(coverRadius),
+              child: widget.coverBuilder!(context, widget.coverSize),
+            ),
+          ),
+          const SizedBox(height: 20),
+        ],
+        Text(
+          widget.title,
+          style: TextStyle(
+            color: widget.titleColor,
+            fontSize: widget.titleFontSize,
+            fontWeight: FontWeight.bold,
+            height: 1.2,
+          ),
+          textAlign: TextAlign.center,
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
+        ),
+        if (widget.subtitle != null) ...[
+          const SizedBox(height: 6),
+          widget.subtitle!,
+        ],
+        if (widget.meta != null) ...[const SizedBox(height: 12), widget.meta!],
+        if (widget.actions != null) ...[
+          const SizedBox(height: 16),
+          widget.actions!,
+        ],
+      ],
+    );
+    _cached = built;
+    return built;
   }
 }
 
@@ -622,40 +732,74 @@ class MornyeActionCapsule extends ConsumerWidget {
   }
 }
 
-class _AlbumStretchArtwork extends StatelessWidget {
+class _AlbumStretchArtwork extends StatefulWidget {
   const _AlbumStretchArtwork({required this.child});
 
   final Widget child;
 
   @override
+  State<_AlbumStretchArtwork> createState() => _AlbumStretchArtworkState();
+}
+
+class _AlbumStretchArtworkState extends State<_AlbumStretchArtwork> {
+  final GlobalKey _artworkKey = GlobalKey();
+  ScrollPosition? _position;
+  double _overscroll = 0;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final next = MediaQuery.disableAnimationsOf(context)
+        ? null
+        : Scrollable.maybeOf(context)?.position;
+    if (next == _position) return;
+    _position?.removeListener(_onScroll);
+    _position = next;
+    _position?.addListener(_onScroll);
+    _overscroll = _readOverscroll();
+  }
+
+  double _readOverscroll() {
+    final position = _position;
+    if (position == null || !position.hasContentDimensions) return 0;
+    return (position.minScrollExtent - position.pixels).clamp(
+      0.0,
+      double.infinity,
+    );
+  }
+
+  void _onScroll() {
+    final next = _readOverscroll();
+    if (next != _overscroll && mounted) {
+      setState(() => _overscroll = next);
+    }
+  }
+
+  @override
+  void dispose() {
+    _position?.removeListener(_onScroll);
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    if (MediaQuery.disableAnimationsOf(context)) return child;
-    final position = Scrollable.of(context).position;
+    final artwork = RepaintBoundary(key: _artworkKey, child: widget.child);
+    if (_position == null || _overscroll <= 0) return artwork;
     return LayoutBuilder(
-      builder: (context, constraints) => AnimatedBuilder(
-        animation: position,
-        child: RepaintBoundary(child: child),
-        builder: (context, artwork) {
-          final overscroll = position.hasContentDimensions
-              ? (position.minScrollExtent - position.pixels).clamp(
-                  0.0,
-                  double.infinity,
-                )
-              : 0.0;
-          final height = constraints.maxHeight;
-          final scale = height > 0 ? 1 + overscroll / height : 1.0;
-          // The viewport moves the details down during a pull. Keep the image
-          // at the top and enlarge it without changing the scrollable layout.
-          return Transform.translate(
-            offset: Offset(0, -overscroll),
-            child: Transform.scale(
-              scale: scale,
-              alignment: Alignment.topCenter,
-              child: artwork,
-            ),
-          );
-        },
-      ),
+      builder: (context, constraints) {
+        final height = constraints.maxHeight;
+        final scale = height > 0 ? 1 + _overscroll / height : 1.0;
+        // The viewport moves the details down during a pull. Keep the image
+        // at the top and enlarge it without changing the scrollable layout.
+        return Transform.translate(
+          offset: Offset(0, -_overscroll),
+          child: Transform.scale(
+            scale: scale,
+            alignment: Alignment.topCenter,
+            child: artwork,
+          ),
+        );
+      },
     );
   }
 }
@@ -706,6 +850,7 @@ class AlbumPlayActions extends StatelessWidget {
     required this.shuffleTooltip,
     required this.onPlay,
     required this.onShuffle,
+    this.showShuffle = true,
     this.isPlaying = false,
     this.onAddToPlaylist,
     this.onDownload,
@@ -715,6 +860,9 @@ class AlbumPlayActions extends StatelessWidget {
   final String shuffleTooltip;
   final VoidCallback onPlay;
   final VoidCallback onShuffle;
+
+  /// Off while another app plays the music: it takes one song at a time.
+  final bool showShuffle;
   final bool isPlaying;
 
   /// Desktop only: a round "+" after Play that adds the songs to a playlist.
@@ -733,6 +881,7 @@ class AlbumPlayActions extends StatelessWidget {
             HeaderCircleButton(
               icon: Icons.download_for_offline_outlined,
               tooltip: context.l10n.offlineSave,
+              tonal: true,
               onPressed: onDownload,
             ),
             const SizedBox(width: 12),
@@ -746,14 +895,16 @@ class AlbumPlayActions extends StatelessWidget {
               onPressed: onPlay,
             ),
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: _MornyeHeaderButton(
-              icon: CupertinoIcons.shuffle,
-              label: shuffleTooltip,
-              onPressed: onShuffle,
+          if (showShuffle) ...[
+            const SizedBox(width: 12),
+            Expanded(
+              child: _MornyeHeaderButton(
+                icon: CupertinoIcons.shuffle,
+                label: shuffleTooltip,
+                onPressed: onShuffle,
+              ),
             ),
-          ),
+          ],
         ],
       );
     }
@@ -779,14 +930,15 @@ class AlbumPlayActions extends StatelessWidget {
           ),
           child: Text(playLabel, maxLines: 1, overflow: TextOverflow.ellipsis),
         ),
-        ExpressiveIconButton(
-          tooltip: shuffleTooltip,
-          onPressed: onShuffle,
-          icon: const AppIcon(Icons.shuffle),
-          size: tokens.minTouchTarget,
-          backgroundColor: scheme.secondaryContainer.withValues(alpha: 0.8),
-          foregroundColor: scheme.onSecondaryContainer,
-        ),
+        if (showShuffle)
+          ExpressiveIconButton(
+            tooltip: shuffleTooltip,
+            onPressed: onShuffle,
+            icon: const AppIcon(Icons.shuffle),
+            size: tokens.minTouchTarget,
+            backgroundColor: scheme.secondaryContainer,
+            foregroundColor: scheme.onSecondaryContainer,
+          ),
       ],
     );
   }
@@ -805,14 +957,16 @@ class AlbumPlayActions extends StatelessWidget {
             HeaderCircleButton(
               icon: Icons.download_for_offline_outlined,
               tooltip: context.l10n.offlineSave,
+              tonal: true,
               onPressed: onDownload,
             ),
-          HeaderCircleButton(
-            icon: CupertinoIcons.shuffle,
-            tooltip: shuffleTooltip,
-            tonal: true,
-            onPressed: onShuffle,
-          ),
+          if (showShuffle)
+            HeaderCircleButton(
+              icon: CupertinoIcons.shuffle,
+              tooltip: shuffleTooltip,
+              tonal: true,
+              onPressed: onShuffle,
+            ),
           _MornyeHeaderButton(
             icon: isPlaying
                 ? CupertinoIcons.pause_fill
@@ -844,13 +998,20 @@ class AlbumPlayActions extends StatelessWidget {
           onPressed: onPlay,
           icon: AppIcon(isPlaying ? Icons.pause : Icons.play_arrow, size: 20),
           label: Text(playLabel),
-          style: FilledButton.styleFrom(minimumSize: const Size(112, 40)),
+          // As tall as the 40dp icon buttons beside it, whatever the theme's
+          // button height and the desktop's compact density say.
+          style: FilledButton.styleFrom(
+            minimumSize: const Size(112, 40),
+            fixedSize: const Size.fromHeight(40),
+            visualDensity: VisualDensity.standard,
+          ),
         ),
-        IconButton.filledTonal(
-          tooltip: shuffleTooltip,
-          onPressed: onShuffle,
-          icon: const AppIcon(Icons.shuffle),
-        ),
+        if (showShuffle)
+          IconButton.filledTonal(
+            tooltip: shuffleTooltip,
+            onPressed: onShuffle,
+            icon: const AppIcon(Icons.shuffle),
+          ),
         if (onAddToPlaylist != null)
           IconButton.filledTonal(
             tooltip: addLabel,

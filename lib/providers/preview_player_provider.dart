@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mornye/models/track.dart';
 import 'package:mornye/providers/music_player_provider.dart';
 import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/services/playback_deck.dart';
@@ -34,6 +35,98 @@ Future<String> _playablePreviewUrl(String url) async {
   }
   return resolved;
 }
+
+/// Reads a song's preview link again; null when there is none to offer.
+typedef PreviewLinkRefresh = Future<String?> Function();
+
+/// Asks the extension a song came from for its preview link again, then the
+/// other extensions for the same song. A link is a snapshot, and a service
+/// can let it expire minutes after the search that gave it.
+final previewLinkRefreshProvider =
+    Provider<Future<String?> Function(Track track)>(
+      (ref) => (track) async {
+        final query = '${track.name} ${track.artistName}'.trim();
+        if (query.isEmpty) return null;
+        final old = track.previewUrl?.trim() ?? '';
+        String? newer(Track found) {
+          final link = found.previewUrl?.trim() ?? '';
+          return link.isEmpty || link == old ? null : link;
+        }
+
+        var answered = false;
+        Object? failure;
+        final extensionId = track.source ?? '';
+        if (extensionId.isNotEmpty && track.id.isNotEmpty) {
+          try {
+            final results =
+                await PlatformBridge.searchTracksWithMetadataProvider(
+                  extensionId,
+                  query,
+                  limit: 10,
+                );
+            answered = true;
+            for (final result in results) {
+              final found = Track.fromBackendMap(result, source: extensionId);
+              if (found.id != track.id) continue;
+              final link = newer(found);
+              if (link != null) return link;
+              break;
+            }
+          } catch (error) {
+            failure = error;
+          }
+        }
+        // Its own extension has nothing newer: any other one that knows the
+        // song can give its preview.
+        try {
+          final results =
+              await PlatformBridge.searchTracksWithMetadataProviders(
+                query,
+                limit: 20,
+              );
+          answered = true;
+          for (final result in results) {
+            final found = Track.fromBackendMap(result);
+            final link = newer(found);
+            if (link != null && _sameSong(track, found)) return link;
+          }
+        } catch (error) {
+          failure ??= error;
+        }
+        if (!answered && failure != null) throw failure;
+        return null;
+      },
+    );
+
+/// Whether two results are one recording: by ISRC when both carry one, else
+/// by the same title and first artist.
+bool _sameSong(Track a, Track b) {
+  final isrcA = a.isrc?.trim().toUpperCase() ?? '';
+  final isrcB = b.isrc?.trim().toUpperCase() ?? '';
+  if (isrcA.isNotEmpty && isrcB.isNotEmpty) return isrcA == isrcB;
+  String key(String text) =>
+      text.toLowerCase().replaceAll(RegExp(r'\s+'), ' ').trim();
+  String firstArtist(String artists) =>
+      key(artists.split(RegExp(r'[,;&]| feat\.? | ft\.? ')).first);
+  return key(a.name) == key(b.name) &&
+      firstArtist(a.artistName) == firstArtist(b.artistName);
+}
+
+/// Preview links that did not play although their extension answered, so the
+/// button is not offered for them again while the app runs.
+class PreviewUnavailableLinks extends Notifier<Set<String>> {
+  @override
+  Set<String> build() => const {};
+
+  void add(String url) {
+    if (!state.contains(url)) state = {...state, url};
+  }
+}
+
+final previewUnavailableLinksProvider =
+    NotifierProvider<PreviewUnavailableLinks, Set<String>>(
+      PreviewUnavailableLinks.new,
+    );
 
 enum PreviewStatus { idle, loading, playing, paused }
 
@@ -75,6 +168,9 @@ class PreviewPlayerState {
 /// use the same engine and in-app volume as the main player.
 class PreviewPlayerController extends Notifier<PreviewPlayerState> {
   PlaybackDeck? _player;
+
+  /// The playable link read again for a link that had stopped playing.
+  final _refreshed = <String, String>{};
   final List<StreamSubscription<dynamic>> _subscriptions = [];
   AppLifecycleListener? _lifecycleListener;
 
@@ -183,7 +279,8 @@ class PreviewPlayerController extends Notifier<PreviewPlayerState> {
     }
   }
 
-  Future<void> toggle(String? url) async {
+  /// [refresh] reads the link again when the one given no longer plays.
+  Future<void> toggle(String? url, {PreviewLinkRefresh? refresh}) async {
     final trimmed = url?.trim() ?? '';
     if (trimmed.isEmpty) return;
 
@@ -196,10 +293,31 @@ class PreviewPlayerController extends Notifier<PreviewPlayerState> {
       return;
     }
 
-    await play(trimmed);
+    await play(trimmed, refresh: refresh);
   }
 
-  Future<void> play(String url) async {
+  /// The link in place of one that stopped playing, with whether its
+  /// extension answered at all.
+  Future<({String? source, bool answered})> _freshSource(
+    String url,
+    String failed,
+    PreviewLinkRefresh? refresh,
+  ) async {
+    final deferred = Uri.tryParse(url)?.scheme == deferredPreviewScheme;
+    // A deferred link was resolved a moment ago: there is nothing newer.
+    if (deferred || refresh == null) return (source: null, answered: deferred);
+    try {
+      final link = (await refresh())?.trim() ?? '';
+      if (link.isEmpty) return (source: null, answered: true);
+      final source = await _playablePreviewUrl(link);
+      return (source: source == failed ? null : source, answered: true);
+    } catch (e) {
+      _log.w('Preview link could not be read again: $e');
+      return (source: null, answered: false);
+    }
+  }
+
+  Future<void> play(String url, {PreviewLinkRefresh? refresh}) async {
     final trimmed = url.trim();
     // The main player holds the device in exclusive mode.
     if (trimmed.isEmpty || playbackExclusiveOutput.value) return;
@@ -215,9 +333,13 @@ class PreviewPlayerController extends Notifier<PreviewPlayerState> {
 
     final String source;
     try {
-      source = await _playablePreviewUrl(trimmed);
+      source = _refreshed[trimmed] ?? await _playablePreviewUrl(trimmed);
     } catch (e) {
       _log.w('Preview link could not be resolved: $e');
+      // The extension answered that it has no preview for this song.
+      if (e is StateError) {
+        ref.read(previewUnavailableLinksProvider.notifier).add(trimmed);
+      }
       if (state.isActiveUrl(trimmed)) state = const PreviewPlayerState();
       rethrow;
     }
@@ -229,21 +351,34 @@ class PreviewPlayerController extends Notifier<PreviewPlayerState> {
     } catch (e) {
       _log.w('Preview playback failed, recreating player and retrying: $e');
       _discardActivePlayer();
+      _refreshed.remove(trimmed);
+      // The link may have expired: its extension has the current one.
+      final fresh = await _freshSource(trimmed, source, refresh);
+      if (!state.isActiveUrl(trimmed)) return;
       try {
-        await _playOnPlayer(_ensurePlayer(), source);
+        await _playOnPlayer(_ensurePlayer(), fresh.source ?? source);
+        if (fresh.source != null) _refreshed[trimmed] = fresh.source!;
       } catch (retryError) {
         _log.e('Preview playback failed after retry', retryError);
         _discardActivePlayer();
+        // The extension answered and the link still does not play.
+        if (fresh.answered) {
+          ref.read(previewUnavailableLinksProvider.notifier).add(trimmed);
+        }
         state = const PreviewPlayerState();
         rethrow;
       }
     }
   }
 
+  /// Longer than a preview takes to start. A link that never answers would
+  /// otherwise keep the button loading for the player's own, longer wait.
+  static const _startTimeout = Duration(seconds: 10);
+
   Future<void> _playOnPlayer(PlaybackDeck player, String url) async {
     // Applies the in-app volume; previews have no normalization gain.
     await player.setVolume(1);
-    await player.setNetworkSource(url);
+    await player.setNetworkSource(url).timeout(_startTimeout);
     await player.resume();
   }
 

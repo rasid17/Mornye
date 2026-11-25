@@ -1,9 +1,11 @@
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mornye/l10n/l10n.dart';
+import 'package:mornye/providers/music_player_provider.dart';
 import 'package:mornye/providers/settings_provider.dart';
 import 'package:mornye/services/shell_navigation_service.dart';
 import 'package:mornye/theme/mornye_theme.dart';
+import 'package:mornye/utils/nav_bar_inset.dart';
 import 'package:mornye/widgets/app_sliver_header.dart';
 import 'package:mornye/widgets/desktop/desktop_commands.dart';
 import 'package:mornye/widgets/settings_group.dart';
@@ -22,10 +24,9 @@ class KeyboardShortcutsPage extends ConsumerWidget {
     final showStore = ref.watch(
       settingsProvider.select((s) => s.showExtensionStore),
     );
-    final tabs = desktopDestinationTabs(
-      mornye: context.isMornye,
-      showStore: showStore,
-    );
+    final tabs = desktopDestinationTabs(showStore: showStore);
+    // With an external player the player's keys do nothing; leave them out.
+    final player = ref.watch(playerUiEnabledProvider);
 
     List<SingleActivator> keys(DesktopCommand command) =>
         desktopCommandShortcuts(command, platform);
@@ -53,22 +54,21 @@ class KeyboardShortcutsPage extends ConsumerWidget {
           (l10n.openAudioFolder, keys(DesktopCommand.openAudioFolder)),
         ],
       ),
-      (
-        l10n.desktopMenuControls,
-        [
-          (l10n.desktopMenuPlayPause, keys(DesktopCommand.playPause)),
-          (l10n.nowPlayingNextTrack, keys(DesktopCommand.next)),
-          (l10n.nowPlayingPreviousTrack, keys(DesktopCommand.previous)),
-          (l10n.desktopVolumeUp, keys(DesktopCommand.volumeUp)),
-          (l10n.desktopVolumeDown, keys(DesktopCommand.volumeDown)),
-        ],
-      ),
+      if (player)
+        (
+          l10n.desktopMenuControls,
+          [
+            (l10n.desktopMenuPlayPause, keys(DesktopCommand.playPause)),
+            (l10n.nowPlayingNextTrack, keys(DesktopCommand.next)),
+            (l10n.nowPlayingPreviousTrack, keys(DesktopCommand.previous)),
+            (l10n.desktopVolumeUp, keys(DesktopCommand.volumeUp)),
+            (l10n.desktopVolumeDown, keys(DesktopCommand.volumeDown)),
+          ],
+        ),
       (
         l10n.desktopShortcutsNavigation,
         [
           for (final tab in tabs) (tabLabel(tab), tabKeys(tab)),
-          if (!tabs.contains(ShellTab.search))
-            (l10n.mornyeSearch, keys(DesktopCommand.search)),
           (
             MaterialLocalizations.of(context).backButtonTooltip,
             keys(DesktopCommand.back),
@@ -81,40 +81,54 @@ class KeyboardShortcutsPage extends ConsumerWidget {
       (
         l10n.desktopMenuView,
         [
-          (l10n.nowPlayingTabLyrics, keys(DesktopCommand.lyrics)),
-          (l10n.nowPlayingUpNext, keys(DesktopCommand.upNext)),
+          if (player) ...[
+            (l10n.nowPlayingTabLyrics, keys(DesktopCommand.lyrics)),
+            (l10n.nowPlayingUpNext, keys(DesktopCommand.upNext)),
+          ],
           (
             l10n.desktopShortcutToggleSidebar,
             keys(DesktopCommand.toggleSidebar),
           ),
-          (l10n.desktopMenuMiniPlayer, keys(DesktopCommand.miniPlayer)),
+          if (player)
+            (l10n.desktopMenuMiniPlayer, keys(DesktopCommand.miniPlayer)),
           (l10n.desktopWindowFullscreen, keys(DesktopCommand.fullScreen)),
           (l10n.desktopWindowBorderless, keys(DesktopCommand.borderless)),
         ],
       ),
     ];
 
-    return Scaffold(
-      body: CustomScrollView(
-        slivers: [
-          AppSliverHeader.page(title: l10n.settingsKeyboardShortcuts),
-          for (final (title, rows) in sections)
-            ...settingsSectionSlivers(
-              title: title,
-              children: [
-                for (final (label, activators) in rows)
-                  if (activators.isNotEmpty)
-                    SettingsItem(
-                      title: label,
-                      trailing: _ShortcutKeys(
-                        activators: activators,
-                        platform: platform,
-                      ),
-                    ),
-              ],
-            ),
-          const SliverToBoxAdapter(child: SizedBox(height: 24)),
-        ],
+    return MornyeSettingsTheme(
+      child: Scaffold(
+        body: CustomScrollView(
+          slivers: [
+            AppSliverHeader.page(title: l10n.settingsKeyboardShortcuts),
+            for (final (title, rows) in sections) ...[
+              () {
+                final active = [
+                  for (final row in rows)
+                    if (row.$2.isNotEmpty) row,
+                ];
+                return SliverMainAxisGroup(
+                  slivers: settingsSectionSlivers(
+                    title: title,
+                    children: [
+                      for (var i = 0; i < active.length; i++)
+                        SettingsItem(
+                          title: active[i].$1,
+                          showDivider: i < active.length - 1,
+                          trailing: _ShortcutKeys(
+                            activators: active[i].$2,
+                            platform: platform,
+                          ),
+                        ),
+                    ],
+                  ),
+                );
+              }(),
+            ],
+            const NavBarSliverSpacer(),
+          ],
+        ),
       ),
     );
   }

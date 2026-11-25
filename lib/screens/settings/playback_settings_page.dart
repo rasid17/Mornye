@@ -8,6 +8,7 @@ import 'package:mornye/controllers/clickable_metadata.dart';
 import 'package:mornye/l10n/l10n.dart';
 import 'package:mornye/models/settings.dart'
     show headphoneResumeModes, loudVolumeLevels;
+import 'package:mornye/providers/home_recommendations_provider.dart';
 import 'package:mornye/providers/music_player_provider.dart';
 import 'package:mornye/providers/settings_provider.dart';
 import 'package:mornye/services/alsa_output_devices.dart';
@@ -18,6 +19,7 @@ import 'package:mornye/services/music_player_service.dart'
     show resetAutoplayLearning;
 import 'package:mornye/services/song_analysis.dart';
 import 'package:mornye/services/spatial_audio.dart';
+import 'package:mornye/services/suggestion_outcomes.dart';
 import 'package:mornye/screens/listening_statistics_screen.dart';
 import 'package:mornye/screens/equalizer_screen.dart';
 import 'package:mornye/theme/app_tokens.dart';
@@ -38,6 +40,7 @@ import 'package:mornye/widgets/mornye_chrome.dart';
 import 'package:mornye/widgets/player_volume_control.dart';
 import 'package:mornye/widgets/settings_group.dart';
 import 'package:mornye/widgets/discord_presence_settings.dart';
+import 'package:mornye/widgets/dither_type_choice.dart';
 import 'package:mornye/widgets/lastfm_settings.dart';
 import 'package:mornye/widgets/scrobble_settings.dart';
 import 'package:mornye/widgets/automix_settings.dart';
@@ -76,6 +79,8 @@ class _PlaybackSettingsPageState extends ConsumerState<PlaybackSettingsPage>
       .read(musicPlayerRuntimeProvider)
       .ranker
       .evaluation;
+  late final ValueListenable<SuggestionOutcomeSummary?> _suggestionOutcomes =
+      ref.read(musicPlayerRuntimeProvider).suggestionOutcomes.summary;
 
   Future<bool> _confirmAudioVolume(String message) => showAppConfirmDialog(
     context,
@@ -84,6 +89,39 @@ class _PlaybackSettingsPageState extends ConsumerState<PlaybackSettingsPage>
     confirmLabel: context.l10n.usbVolumeAccept,
     filled: false,
   );
+
+  String _usbRateLabel(int rate) => rate <= 0
+      ? context.l10n.usbMaxSampleRateAuto
+      : '${(rate / 1000).toStringAsFixed(rate % 1000 == 0 ? 0 : 1)} kHz';
+
+  Future<void> _showUsbMaxSampleRate(int current) async {
+    const rates = [0, 48000, 96000, 192000];
+    final colorScheme = Theme.of(context).colorScheme;
+    final rate = await showAppBottomSheet<int>(
+      context: context,
+      title: context.l10n.usbMaxSampleRate,
+      builder: (sheetContext) => Padding(
+        padding: const EdgeInsets.only(bottom: 16),
+        child: SettingsGroup(
+          children: [
+            for (final rate in rates)
+              SettingsItem(
+                title: _usbRateLabel(rate),
+                selected: rate == current,
+                trailing: rate == current
+                    ? AppIcon(Icons.check, color: colorScheme.primary)
+                    : null,
+                showDivider: rate != rates.last,
+                onTap: () => Navigator.pop(sheetContext, rate),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (rate != null && mounted) {
+      ref.read(settingsProvider.notifier).setUsbMaxSampleRate(rate);
+    }
+  }
 
   /// Learning cannot be restored once cleared, so a stray tap must not wipe it.
   Future<void> _confirmResetLearning() async {
@@ -95,7 +133,11 @@ class _PlaybackSettingsPageState extends ConsumerState<PlaybackSettingsPage>
       destructive: true,
       filled: false,
     );
-    if (confirmed) await resetAutoplayLearning();
+    if (!confirmed) return;
+    await resetAutoplayLearning();
+    // The order of Home's recommended songs came from what was learned.
+    await forgetHomeRecommendationOrder();
+    if (mounted) ref.invalidate(homeRecommendationsProvider);
   }
 
   /// Analysis cannot be restored without analyzing every song again.
@@ -111,26 +153,24 @@ class _PlaybackSettingsPageState extends ConsumerState<PlaybackSettingsPage>
     if (confirmed) await _songAnalysis.clear();
   }
 
+  late final Listenable _analysisListenable = Listenable.merge([
+    _songAnalysis.progress,
+    _rankEvaluation,
+    _suggestionOutcomes,
+  ]);
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _refreshOutputStatus();
-    _songAnalysis.progress.addListener(_onAnalysisProgress);
-    _rankEvaluation.addListener(_onAnalysisProgress);
     unawaited(_songAnalysis.refreshProgress());
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _songAnalysis.progress.removeListener(_onAnalysisProgress);
-    _rankEvaluation.removeListener(_onAnalysisProgress);
     super.dispose();
-  }
-
-  void _onAnalysisProgress() {
-    if (mounted) setState(() {});
   }
 
   /// How far ranking has learned the listener, and whether that ranks their
@@ -158,6 +198,24 @@ class _PlaybackSettingsPageState extends ConsumerState<PlaybackSettingsPage>
           );
   }
 
+  /// How the mixes and recommendations go, one line each; null until
+  /// either has [suggestionShareMinimum] outcomes.
+  String? _suggestionSummary() {
+    final summary = _suggestionOutcomes.value;
+    if (summary == null) return null;
+    int? percent(OutcomeShare outcomes) =>
+        outcomes.total >= suggestionShareMinimum
+        ? (outcomes.share! * 100).round()
+        : null;
+    final lines = [
+      if (percent(summary.mixes) case final mixes?)
+        context.l10n.suggestionOutcomesMixes(mixes),
+      if (percent(summary.recommendations) case final recommendations?)
+        context.l10n.suggestionOutcomesRecommendations(recommendations),
+    ];
+    return lines.isEmpty ? null : lines.join('\n');
+  }
+
   @override
   Widget build(BuildContext context) {
     final settings = ref.watch(settingsProvider);
@@ -175,13 +233,6 @@ class _PlaybackSettingsPageState extends ConsumerState<PlaybackSettingsPage>
     final chargingOption = settings.songAnalysis && Platform.isAndroid;
     final androidAudio =
         debugAndroidAudioSettingsOverride ?? Platform.isAndroid;
-    final progress = _songAnalysis.progress.value;
-    final analysis =
-        progress != null &&
-            progress.total > 0 &&
-            (settings.songAnalysis || progress.completed > 0)
-        ? progress
-        : null;
     return Scaffold(
       body: CustomScrollView(
         slivers: [
@@ -216,572 +267,677 @@ class _PlaybackSettingsPageState extends ConsumerState<PlaybackSettingsPage>
               ),
             ],
           ),
-          ...settingsSectionSlivers(
-            title: context.l10n.sectionVolumeAndTransitions,
-            children: [
-              SettingsItem(
-                icon: Icons.equalizer,
-                title: context.l10n.equalizerTitle,
-                titleTrailing: const BetaBadge(),
-                subtitle: context.l10n.equalizerDescription,
-                onTap: () =>
-                    pushPage<void>(context, (_) => const EqualizerScreen()),
-              ),
-              SettingsItem(
-                icon: Icons.speed,
-                title: context.l10n.playbackTempoTitle,
-                subtitle:
-                    playbackTempoSettingsSummary(context.l10n, settings) ??
-                    context.l10n.playbackTempoDescription,
-                onTap: () => showPlaybackTempoSheet(context),
-              ),
-              SettingsSwitchItem(
-                icon: Icons.graphic_eq,
-                title: context.l10n.libraryPlaybackNormalization,
-                subtitle: context.l10n.libraryPlaybackNormalizationSubtitle,
-                value: settings.playbackNormalization,
-                enabled: !settings.usbBitPerfect,
-                onChanged: (value) => ref
-                    .read(settingsProvider.notifier)
-                    .setPlaybackNormalization(value),
-              ),
-              if (settings.playbackNormalization)
-                PlaybackNormalizationSettings(enabled: !settings.usbBitPerfect),
-              SettingsSwitchItem(
-                icon: Icons.volume_up_outlined,
-                title: context.l10n.confirmLoudVolume,
-                subtitle: context.l10n.confirmLoudVolumeDescription,
-                value: settings.confirmLoudVolume,
-                onChanged: (value) => ref
-                    .read(settingsProvider.notifier)
-                    .setConfirmLoudVolume(value),
-              ),
-              if (settings.confirmLoudVolume)
-                _LoudVolumeLevelChoice(
-                  level: settings.loudVolumeLevel,
-                  onChanged: ref
-                      .read(settingsProvider.notifier)
-                      .setLoudVolumeLevel,
-                ),
-              if (!isDesktopPlatform) ...[
-                SettingsSwitchItem(
-                  icon: Icons.vibration,
-                  title: context.l10n.musicHaptics,
-                  subtitle: context.l10n.musicHapticsDescription,
-                  value: settings.musicHaptics,
-                  enabled: settings.playerMode == 'internal',
-                  onChanged: (value) => ref
-                      .read(settingsProvider.notifier)
-                      .setMusicHaptics(value),
-                ),
-                if (settings.musicHaptics)
-                  MusicHapticsSettings(
-                    enabled: settings.playerMode == 'internal',
-                  ),
-              ],
-              SettingsSwitchItem(
-                icon: Icons.linear_scale,
-                title: context.l10n.gaplessPlayback,
-                subtitle: context.l10n.gaplessPlaybackDescription,
-                value: settings.gaplessPlayback && !autoMixActive,
-                enabled:
-                    settings.playerMode == 'internal' &&
-                    !autoMixActive &&
-                    !settings.usbBitPerfect,
-                onChanged: (value) => ref
-                    .read(settingsProvider.notifier)
-                    .setGaplessPlayback(value),
-              ),
-              SettingsSwitchItem(
-                icon: Icons.compare_arrows,
-                title: 'AutoMix',
-                subtitle: context.l10n.autoMixDescription,
-                value: autoMixActive,
-                enabled:
-                    !settings.usbBitPerfect &&
-                    !(isDesktopPlatform && settings.exclusiveOutput),
-                onChanged: (value) =>
-                    ref.read(settingsProvider.notifier).setAutoMix(value),
-                showDivider: false,
-              ),
-            ],
-          ),
-          if (autoMixActive) ...[
+          // Everything below shapes the built-in player.
+          if (!settings.usesBuiltInPlayer)
             SliverToBoxAdapter(
-              child: SettingsSectionHeader(
-                title: context.l10n.autoMixSettingsTitle,
+              child: SettingsInfoCard(
+                icon: Icons.info_outline,
+                message: context.l10n.playbackExternalHidden,
               ),
             ),
-            const SliverToBoxAdapter(child: AutoMixSettings()),
-          ],
-          ...settingsSectionSlivers(
-            title: context.l10n.autoplayFromLibrary,
-            children: [
-              SettingsSwitchItem(
-                icon: Icons.playlist_play_rounded,
-                title: context.l10n.autoplayFromLibrary,
-                subtitle: context.l10n.autoplayDescription,
-                value: settings.autoplay,
-                enabled: settings.playerMode == 'internal',
-                onChanged: (value) =>
-                    ref.read(settingsProvider.notifier).setAutoplay(value),
-              ),
-              const AutoplayRandomnessSlider(),
-              SettingsSwitchItem(
-                icon: Icons.auto_awesome_outlined,
-                title: context.l10n.autoplayPersonalization,
-                subtitle: context.l10n.autoplayPersonalizationDescription,
-                value: settings.autoplayPersonalization,
-                enabled: settings.playerMode == 'internal',
-                onChanged: (value) => ref
-                    .read(settingsProvider.notifier)
-                    .setAutoplayPersonalization(value),
-              ),
-              if (settings.autoplayPersonalization)
-                SettingsItem(
-                  icon: Icons.restart_alt,
-                  title: context.l10n.autoplayResetLearning,
-                  subtitle: _learningSummary(),
-                  onTap: _confirmResetLearning,
-                ),
-              SettingsSwitchItem(
-                icon: Icons.multitrack_audio,
-                title: context.l10n.songAnalysis,
-                subtitle: context.l10n.songAnalysisDescription,
-                value: settings.songAnalysis,
-                enabled: settings.playerMode == 'internal',
-                onChanged: (value) =>
-                    ref.read(settingsProvider.notifier).setSongAnalysis(value),
-                showDivider: chargingOption || analysis != null,
-              ),
-              if (chargingOption)
-                SettingsSwitchItem(
-                  icon: Icons.battery_charging_full,
-                  title: context.l10n.songAnalysisOnlyWhileCharging,
-                  subtitle:
-                      context.l10n.songAnalysisOnlyWhileChargingDescription,
-                  value: settings.songAnalysisOnlyWhileCharging,
-                  enabled: settings.playerMode == 'internal',
-                  onChanged: (value) => ref
-                      .read(settingsProvider.notifier)
-                      .setSongAnalysisOnlyWhileCharging(value),
-                  showDivider: analysis != null,
-                ),
-              if (analysis != null)
-                SettingsItem(
-                  icon: Icons.delete_outline,
-                  title: context.l10n.songAnalysisClear,
-                  subtitle: analysis.skipped > 0
-                      ? context.l10n.songAnalysisProgressWithSkipped(
-                          analysis.analyzed,
-                          analysis.total,
-                          analysis.skipped,
-                        )
-                      : context.l10n.songAnalysisProgress(
-                          analysis.analyzed,
-                          analysis.total,
-                        ),
-                  footer:
-                      settings.songAnalysis &&
-                          analysis.completed < analysis.total
-                      ? AppProgressIndicator.linear(
-                          value: analysis.completed / analysis.total,
-                          trackColor: colorScheme.surfaceContainerHighest,
-                          wavy: false,
-                        )
-                      : null,
-                  onTap: analysis.completed > 0 ? _confirmClearAnalysis : null,
-                  showDivider: false,
-                ),
-            ],
-          ),
-          ...settingsSectionSlivers(
-            title: context.l10n.sectionPlaybackQueue,
-            children: [
-              SettingsSwitchItem(
-                icon: Icons.playlist_remove,
-                title: context.l10n.queueNoDuplicates,
-                subtitle: context.l10n.queueNoDuplicatesDescription,
-                value: settings.queueNoDuplicates,
-                enabled: settings.playerMode == 'internal',
-                onChanged: (value) => ref
-                    .read(settingsProvider.notifier)
-                    .setQueueNoDuplicates(value),
-              ),
-              SettingsSwitchItem(
-                icon: Icons.lock_outline,
-                title: context.l10n.queueLock,
-                subtitle: context.l10n.queueLockDescription,
-                value: settings.queueLocked,
-                onChanged: (value) =>
-                    ref.read(settingsProvider.notifier).setQueueLocked(value),
-                showDivider: false,
-              ),
-            ],
-          ),
-          // Mute and headphone routes come from mobile system audio.
-          if (!isDesktopPlatform)
+          if (settings.usesBuiltInPlayer) ...[
             ...settingsSectionSlivers(
-              title: context.l10n.playbackAutomation,
+              title: context.l10n.sectionVolumeAndTransitions,
               children: [
-                SettingsSwitchItem(
-                  icon: Icons.volume_off_outlined,
-                  title: context.l10n.playbackPauseOnMute,
-                  subtitle: context.l10n.playbackPauseOnMuteDescription,
-                  value: settings.pauseOnMute,
-                  enabled:
-                      settings.playerMode == 'internal' &&
-                      !settings.usbBitPerfect,
-                  onChanged: (value) =>
-                      ref.read(settingsProvider.notifier).setPauseOnMute(value),
-                ),
-                _HeadphoneResumeChoice(
-                  mode: settings.headphoneResume,
-                  enabled: settings.playerMode == 'internal',
-                  onChanged: (mode) => ref
-                      .read(settingsProvider.notifier)
-                      .setHeadphoneResume(mode),
-                ),
-              ],
-            ),
-          ...settingsSectionSlivers(
-            title: context.l10n.playerCoverStyle,
-            children: [
-              for (final (style, icon, title, subtitle) in [
-                (
-                  'default',
-                  Icons.crop_square,
-                  context.l10n.playerCoverStyleCard,
-                  context.l10n.playerCoverStyleDefaultDescription,
-                ),
-                (
-                  'fullscreen',
-                  Icons.fullscreen,
-                  context.l10n.playerCoverStyleFullScreen,
-                  context.l10n.playerCoverStyleFullScreenDescription,
-                ),
-              ])
                 SettingsItem(
-                  icon: icon,
-                  title: title,
-                  subtitle: subtitle,
-                  selected: coverStyle == style,
-                  trailing: coverStyle == style
-                      ? AppIcon(Icons.check, color: colorScheme.primary)
-                      : null,
-                  onTap: () => ref
-                      .read(settingsProvider.notifier)
-                      .setPlayerCoverStyle(style),
-                  showDivider: true,
-                ),
-              SettingsSwitchItem(
-                icon: Icons.splitscreen_outlined,
-                title: context.l10n.landscapeLyricsArtwork,
-                subtitle: context.l10n.landscapeLyricsArtworkDescription,
-                value: settings.landscapeLyricsArtwork,
-                enabled: !context.isMornye,
-                onChanged: (value) => ref
-                    .read(settingsProvider.notifier)
-                    .setLandscapeLyricsArtwork(value),
-              ),
-              if (!isDesktopPlatform)
-                SettingsSwitchItem(
-                  key: const ValueKey('auto-hide-lyrics-controls'),
-                  icon: Icons.fullscreen,
-                  title: context.l10n.autoHideLyricsControls,
-                  subtitle: accessibleNavigation
-                      ? context
-                            .l10n
-                            .autoHideLyricsControlsAccessibilityDescription
-                      : context.l10n.autoHideLyricsControlsDescription,
-                  value: settings.shouldAutoHideLyricsControls(
-                    accessibleNavigation: accessibleNavigation,
-                  ),
-                  onChanged: ref
-                      .read(settingsProvider.notifier)
-                      .setAutoHideLyricsControls,
-                ),
-              SettingsSwitchItem(
-                icon: Icons.short_text,
-                title: context.l10n.compactPlayer,
-                subtitle: context.l10n.compactPlayerDescription,
-                value: settings.compactPlayer,
-                enabled: !context.isMornye,
-                onChanged: (value) =>
-                    ref.read(settingsProvider.notifier).setCompactPlayer(value),
-                showDivider: false,
-              ),
-            ],
-          ),
-          ...settingsSectionSlivers(
-            title: context.l10n.motionArtwork,
-            children: [
-              SettingsSwitchItem(
-                icon: Icons.motion_photos_on_outlined,
-                title: context.l10n.motionArtwork,
-                subtitle: context.l10n.motionArtworkDescription,
-                value: settings.motionArtworkEnabled,
-                onChanged: (value) => ref
-                    .read(settingsProvider.notifier)
-                    .setMotionArtworkEnabled(value),
-                showDivider: false,
-              ),
-            ],
-          ),
-          if (Platform.isAndroid || Platform.isIOS || isDesktopPlatform) ...[
-            const SliverToBoxAdapter(
-              child: SettingsSectionHeader(title: 'Discord'),
-            ),
-            const SliverToBoxAdapter(child: DiscordPresenceSettings()),
-          ],
-          const SliverToBoxAdapter(
-            child: SettingsSectionHeader(title: 'Last.fm'),
-          ),
-          SliverToBoxAdapter(
-            child: LastfmSettings(
-              service: ref.read(musicPlayerRuntimeProvider).lastfm,
-            ),
-          ),
-          const SliverToBoxAdapter(
-            child: SettingsSectionHeader(title: 'Libre.fm'),
-          ),
-          SliverToBoxAdapter(
-            child: LastfmSettings(
-              service: ref.read(musicPlayerRuntimeProvider).librefm,
-              serviceName: 'Libre.fm',
-            ),
-          ),
-          const SliverToBoxAdapter(
-            child: SettingsSectionHeader(title: 'ListenBrainz'),
-          ),
-          SliverToBoxAdapter(
-            child: ListenBrainzSettings(
-              service: ref.read(musicPlayerRuntimeProvider).listenBrainz,
-            ),
-          ),
-          if (isDesktopPlatform)
-            ...settingsSectionSlivers(
-              title: context.l10n.sectionAudioOutput,
-              children: [
-                ValueListenableBuilder<ExclusiveOutputStatus>(
-                  valueListenable: playbackExclusiveStatus,
-                  builder: (context, status, _) {
-                    final labels = exclusiveOutputLabels(context.l10n);
-                    return SettingsSwitchItem(
-                      icon: Icons.speaker_outlined,
-                      title: labels.title,
-                      subtitle: [
-                        labels.description,
-                        if (settings.exclusiveOutput)
-                          switch (status) {
-                            ExclusiveOutputStatus.pending =>
-                              context.l10n.exclusiveOutputPending,
-                            ExclusiveOutputStatus.active =>
-                              context.l10n.exclusiveOutputActive,
-                            ExclusiveOutputStatus.unavailable =>
-                              labels.unavailable,
-                          },
-                      ].join('\n\n'),
-                      value: settings.exclusiveOutput,
-                      onChanged: (value) => ref
-                          .read(settingsProvider.notifier)
-                          .setExclusiveOutput(value),
-                      showDivider: linuxDevice || macSpatialAudio,
-                    );
-                  },
-                ),
-                if (linuxDevice)
-                  _AlsaDeviceItem(device: settings.exclusiveOutputDevice),
-                if (macSpatialAudio)
-                  const _SpatialAudioItem(
-                    platform: SpatialAudioPlatform.macos,
-                    showDivider: false,
-                  ),
-              ],
-            ),
-          // iOS has no other audio output setting.
-          if (spatialAudioPlatform == SpatialAudioPlatform.ios)
-            ...settingsSectionSlivers(
-              title: context.l10n.sectionAudioOutput,
-              children: const [
-                _SpatialAudioItem(
-                  platform: SpatialAudioPlatform.ios,
-                  showDivider: false,
-                ),
-              ],
-            ),
-          if (androidAudio)
-            ...settingsSectionSlivers(
-              title: context.l10n.sectionAudioOutput,
-              connected: true,
-              children: [
-                SettingsSwitchItem(
-                  icon: Icons.play_circle_outline,
-                  title: context.l10n.newPlaybackEngine,
+                  icon: Icons.equalizer,
+                  title: context.l10n.equalizerTitle,
                   titleTrailing: const BetaBadge(),
-                  subtitle: context.l10n.newPlaybackEngineDescription,
-                  value: settings.media3Engine,
+                  subtitle: context.l10n.equalizerDescription,
+                  onTap: () =>
+                      pushPage<void>(context, (_) => const EqualizerScreen()),
+                ),
+                SettingsItem(
+                  icon: Icons.speed,
+                  title: context.l10n.playbackTempoTitle,
+                  subtitle:
+                      playbackTempoSettingsSummary(context.l10n, settings) ??
+                      context.l10n.playbackTempoDescription,
+                  onTap: () => showPlaybackTempoSheet(context),
+                ),
+                SettingsSwitchItem(
+                  icon: Icons.graphic_eq,
+                  title: context.l10n.libraryPlaybackNormalization,
+                  subtitle: context.l10n.libraryPlaybackNormalizationSubtitle,
+                  value: settings.playbackNormalization,
+                  enabled: !settings.usbBitPerfect,
                   onChanged: (value) => ref
                       .read(settingsProvider.notifier)
-                      .setMedia3Engine(value),
+                      .setPlaybackNormalization(value),
                 ),
-                // Phones and tablets only; media3 does the skipping.
-                if (!isAndroidTv)
+                if (settings.playbackNormalization) ...[
+                  PlaybackNormalizationSettings(
+                    enabled: !settings.usbBitPerfect,
+                  ),
                   SettingsSwitchItem(
-                    icon: Icons.fast_forward_outlined,
-                    title: context.l10n.skipSilence,
-                    subtitle: [
-                      context.l10n.skipSilenceDescription,
-                      if (!settings.media3Engine)
-                        context.l10n.skipSilenceNeedsEngine
-                      else if (settings.autoMix)
-                        context.l10n.skipSilenceAutoMix,
-                    ].join('\n\n'),
-                    value: settings.skipSilence,
-                    enabled: settings.media3Engine,
+                    icon: Icons.trending_up,
+                    title: context.l10n.playbackNormalizationBoost,
+                    subtitle: context.l10n.playbackNormalizationBoostSubtitle,
+                    value: settings.playbackNormalizationBoost,
+                    enabled: !settings.usbBitPerfect,
                     onChanged: (value) => ref
                         .read(settingsProvider.notifier)
-                        .setSkipSilence(value),
+                        .setPlaybackNormalizationBoost(value),
                   ),
-                // TV output is HDMI or a soundbar, outside the spatializer.
-                if (!isAndroidTv)
-                  const _SpatialAudioItem(
-                    platform: SpatialAudioPlatform.android,
-                  ),
-                ValueListenableBuilder<UsbAudioStatus>(
-                  valueListenable: usbAudioStatus,
-                  builder: (context, status, _) => SettingsSwitchItem(
-                    icon: Icons.usb,
-                    title: context.l10n.usbBitPerfect,
-                    titleTrailing: const BetaBadge(),
-                    subtitle: [
-                      context.l10n.usbBitPerfectDescription,
-                      if (settings.usbBitPerfect)
-                        usbOutputStatusLabel(context.l10n, status),
-                    ].join('\n\n'),
-                    value: settings.usbBitPerfect,
-                    onChanged: (value) async {
-                      if (value &&
-                          !await _confirmAudioVolume(
-                            context.l10n.usbVolumeWarning,
-                          )) {
-                        return;
-                      }
-                      if (mounted) {
-                        ref
-                            .read(settingsProvider.notifier)
-                            .setUsbBitPerfect(value);
-                      }
-                    },
-                    showDivider: settings.usbBitPerfect,
-                  ),
+                ],
+                SettingsSwitchItem(
+                  icon: Icons.volume_up_outlined,
+                  title: context.l10n.confirmLoudVolume,
+                  subtitle: context.l10n.confirmLoudVolumeDescription,
+                  value: settings.confirmLoudVolume,
+                  onChanged: (value) => ref
+                      .read(settingsProvider.notifier)
+                      .setConfirmLoudVolume(value),
                 ),
-                if (settings.usbBitPerfect) ...[
+                if (settings.confirmLoudVolume)
+                  _LoudVolumeLevelChoice(
+                    level: settings.loudVolumeLevel,
+                    onChanged: ref
+                        .read(settingsProvider.notifier)
+                        .setLoudVolumeLevel,
+                  ),
+                if (!isDesktopPlatform) ...[
                   SettingsSwitchItem(
-                    icon: Icons.usb,
-                    title: context.l10n.usbDirect,
-                    subtitle: context.l10n.usbDirectDescription,
-                    value: settings.usbDirect,
-                    onChanged: (value) async {
-                      if (value &&
-                          !await _confirmAudioVolume(
-                            context.l10n.usbVolumeWarning,
-                          )) {
-                        return;
-                      }
-                      if (mounted) {
-                        ref.read(settingsProvider.notifier).setUsbDirect(value);
-                      }
+                    icon: Icons.vibration,
+                    title: context.l10n.musicHaptics,
+                    subtitle: context.l10n.musicHapticsDescription,
+                    value: settings.musicHaptics,
+                    enabled: settings.playerMode == 'internal',
+                    onChanged: (value) => ref
+                        .read(settingsProvider.notifier)
+                        .setMusicHaptics(value),
+                  ),
+                  if (settings.musicHaptics)
+                    MusicHapticsSettings(
+                      enabled: settings.playerMode == 'internal',
+                    ),
+                ],
+                SettingsSwitchItem(
+                  icon: Icons.linear_scale,
+                  title: context.l10n.gaplessPlayback,
+                  subtitle: context.l10n.gaplessPlaybackDescription,
+                  value: settings.gaplessPlayback && !autoMixActive,
+                  enabled:
+                      settings.playerMode == 'internal' &&
+                      !autoMixActive &&
+                      !settings.usbBitPerfect,
+                  onChanged: (value) => ref
+                      .read(settingsProvider.notifier)
+                      .setGaplessPlayback(value),
+                ),
+                SettingsSwitchItem(
+                  icon: Icons.compare_arrows,
+                  title: 'AutoMix',
+                  subtitle: context.l10n.autoMixDescription,
+                  value: autoMixActive,
+                  enabled:
+                      !settings.usbBitPerfect &&
+                      !(isDesktopPlatform && settings.exclusiveOutput),
+                  onChanged: (value) =>
+                      ref.read(settingsProvider.notifier).setAutoMix(value),
+                  showDivider: false,
+                ),
+              ],
+            ),
+            if (autoMixActive) ...[
+              SliverToBoxAdapter(
+                child: SettingsSectionHeader(
+                  title: context.l10n.autoMixSettingsTitle,
+                ),
+              ),
+              const SliverToBoxAdapter(child: AutoMixSettings()),
+            ],
+            SliverToBoxAdapter(
+              child: SettingsSectionHeader(
+                title: context.l10n.autoplayFromLibrary,
+              ),
+            ),
+            SliverToBoxAdapter(
+              child: ListenableBuilder(
+                listenable: _analysisListenable,
+                builder: (context, _) {
+                  final progress = _songAnalysis.progress.value;
+                  final analysis =
+                      progress != null &&
+                          progress.total > 0 &&
+                          (settings.songAnalysis || progress.completed > 0)
+                      ? progress
+                      : null;
+                  final suggestions = settings.autoplayPersonalization
+                      ? _suggestionSummary()
+                      : null;
+                  return SettingsGroup(
+                    children: [
+                      SettingsSwitchItem(
+                        icon: Icons.playlist_play_rounded,
+                        title: context.l10n.autoplayFromLibrary,
+                        subtitle: context.l10n.autoplayDescription,
+                        value: settings.autoplay,
+                        enabled: settings.playerMode == 'internal',
+                        onChanged: (value) => ref
+                            .read(settingsProvider.notifier)
+                            .setAutoplay(value),
+                      ),
+                      const AutoplayRandomnessSlider(),
+                      SettingsSwitchItem(
+                        icon: Icons.auto_awesome_outlined,
+                        title: context.l10n.autoplayPersonalization,
+                        subtitle:
+                            context.l10n.autoplayPersonalizationDescription,
+                        value: settings.autoplayPersonalization,
+                        enabled: settings.playerMode == 'internal',
+                        onChanged: (value) => ref
+                            .read(settingsProvider.notifier)
+                            .setAutoplayPersonalization(value),
+                      ),
+                      if (settings.autoplayPersonalization)
+                        SettingsItem(
+                          icon: Icons.restart_alt,
+                          title: context.l10n.autoplayResetLearning,
+                          subtitle: _learningSummary(),
+                          onTap: _confirmResetLearning,
+                        ),
+                      if (suggestions != null)
+                        SettingsItem(
+                          icon: Icons.insights_outlined,
+                          title: context.l10n.suggestionOutcomesTitle,
+                          subtitle: suggestions,
+                        ),
+                      SettingsSwitchItem(
+                        icon: Icons.multitrack_audio,
+                        title: context.l10n.songAnalysis,
+                        subtitle: context.l10n.songAnalysisDescription,
+                        value: settings.songAnalysis,
+                        enabled: settings.playerMode == 'internal',
+                        onChanged: (value) => ref
+                            .read(settingsProvider.notifier)
+                            .setSongAnalysis(value),
+                        showDivider: chargingOption || analysis != null,
+                      ),
+                      if (chargingOption)
+                        SettingsSwitchItem(
+                          icon: Icons.battery_charging_full,
+                          title: context.l10n.songAnalysisOnlyWhileCharging,
+                          subtitle: context
+                              .l10n
+                              .songAnalysisOnlyWhileChargingDescription,
+                          value: settings.songAnalysisOnlyWhileCharging,
+                          enabled: settings.playerMode == 'internal',
+                          onChanged: (value) => ref
+                              .read(settingsProvider.notifier)
+                              .setSongAnalysisOnlyWhileCharging(value),
+                          showDivider: analysis != null,
+                        ),
+                      if (analysis != null)
+                        SettingsItem(
+                          icon: Icons.delete_outline,
+                          title: context.l10n.songAnalysisClear,
+                          subtitle: analysis.skipped > 0
+                              ? context.l10n.songAnalysisProgressWithSkipped(
+                                  analysis.analyzed,
+                                  analysis.total,
+                                  analysis.skipped,
+                                )
+                              : context.l10n.songAnalysisProgress(
+                                  analysis.analyzed,
+                                  analysis.total,
+                                ),
+                          footer:
+                              settings.songAnalysis &&
+                                  analysis.completed < analysis.total
+                              ? AppProgressIndicator.linear(
+                                  value: analysis.completed / analysis.total,
+                                  trackColor:
+                                      colorScheme.surfaceContainerHighest,
+                                  wavy: false,
+                                )
+                              : null,
+                          onTap: analysis.completed > 0
+                              ? _confirmClearAnalysis
+                              : null,
+                          showDivider: false,
+                        ),
+                    ],
+                  );
+                },
+              ),
+            ),
+            ...settingsSectionSlivers(
+              title: context.l10n.sectionPlaybackQueue,
+              children: [
+                SettingsSwitchItem(
+                  icon: Icons.playlist_remove,
+                  title: context.l10n.queueNoDuplicates,
+                  subtitle: context.l10n.queueNoDuplicatesDescription,
+                  value: settings.queueNoDuplicates,
+                  enabled: settings.playerMode == 'internal',
+                  onChanged: (value) => ref
+                      .read(settingsProvider.notifier)
+                      .setQueueNoDuplicates(value),
+                ),
+                SettingsSwitchItem(
+                  icon: Icons.lock_outline,
+                  title: context.l10n.queueLock,
+                  subtitle: context.l10n.queueLockDescription,
+                  value: settings.queueLocked,
+                  onChanged: (value) =>
+                      ref.read(settingsProvider.notifier).setQueueLocked(value),
+                  showDivider: false,
+                ),
+              ],
+            ),
+            // Mute and headphone routes come from mobile system audio.
+            if (!isDesktopPlatform)
+              ...settingsSectionSlivers(
+                title: context.l10n.playbackAutomation,
+                children: [
+                  SettingsSwitchItem(
+                    icon: Icons.volume_off_outlined,
+                    title: context.l10n.playbackPauseOnMute,
+                    subtitle: context.l10n.playbackPauseOnMuteDescription,
+                    value: settings.pauseOnMute,
+                    enabled:
+                        settings.playerMode == 'internal' &&
+                        !settings.usbBitPerfect,
+                    onChanged: (value) => ref
+                        .read(settingsProvider.notifier)
+                        .setPauseOnMute(value),
+                  ),
+                  _HeadphoneResumeChoice(
+                    mode: settings.headphoneResume,
+                    enabled: settings.playerMode == 'internal',
+                    onChanged: (mode) => ref
+                        .read(settingsProvider.notifier)
+                        .setHeadphoneResume(mode),
+                  ),
+                ],
+              ),
+            ...settingsSectionSlivers(
+              title: context.l10n.playerCoverStyle,
+              children: [
+                for (final (style, icon, title, subtitle) in [
+                  (
+                    'default',
+                    Icons.crop_square,
+                    context.l10n.playerCoverStyleCard,
+                    context.l10n.playerCoverStyleDefaultDescription,
+                  ),
+                  (
+                    'fullscreen',
+                    Icons.fullscreen,
+                    context.l10n.playerCoverStyleFullScreen,
+                    context.l10n.playerCoverStyleFullScreenDescription,
+                  ),
+                ])
+                  SettingsItem(
+                    icon: icon,
+                    title: title,
+                    subtitle: subtitle,
+                    selected: coverStyle == style,
+                    trailing: coverStyle == style
+                        ? AppIcon(Icons.check, color: colorScheme.primary)
+                        : null,
+                    onTap: () => ref
+                        .read(settingsProvider.notifier)
+                        .setPlayerCoverStyle(style),
+                    showDivider: true,
+                  ),
+                _CoverFadeChoice(
+                  fade: settings.playerCoverFade,
+                  // Motion artwork is full screen in Mornye with either style.
+                  enabled:
+                      coverStyle == 'fullscreen' ||
+                      (context.isMornye && settings.motionArtworkEnabled),
+                  onChanged: (fade) => ref
+                      .read(settingsProvider.notifier)
+                      .setPlayerCoverFade(fade),
+                ),
+                SettingsSwitchItem(
+                  icon: Icons.fit_screen_outlined,
+                  title: context.l10n.playerCoverWhole,
+                  subtitle: context.l10n.playerCoverWholeDescription,
+                  value: settings.playerCoverWhole,
+                  enabled: coverStyle == 'fullscreen',
+                  onChanged: (value) => ref
+                      .read(settingsProvider.notifier)
+                      .setPlayerCoverWhole(value),
+                ),
+                SettingsSwitchItem(
+                  icon: Icons.splitscreen_outlined,
+                  title: context.l10n.landscapeLyricsArtwork,
+                  subtitle: context.l10n.landscapeLyricsArtworkDescription,
+                  value: settings.landscapeLyricsArtwork,
+                  enabled: !context.isMornye,
+                  onChanged: (value) => ref
+                      .read(settingsProvider.notifier)
+                      .setLandscapeLyricsArtwork(value),
+                ),
+                if (!isDesktopPlatform)
+                  SettingsSwitchItem(
+                    key: const ValueKey('auto-hide-lyrics-controls'),
+                    icon: Icons.fullscreen,
+                    title: context.l10n.autoHideLyricsControls,
+                    subtitle: accessibleNavigation
+                        ? context
+                              .l10n
+                              .autoHideLyricsControlsAccessibilityDescription
+                        : context.l10n.autoHideLyricsControlsDescription,
+                    value: settings.shouldAutoHideLyricsControls(
+                      accessibleNavigation: accessibleNavigation,
+                    ),
+                    onChanged: ref
+                        .read(settingsProvider.notifier)
+                        .setAutoHideLyricsControls,
+                  ),
+                SettingsSwitchItem(
+                  icon: Icons.short_text,
+                  title: context.l10n.compactPlayer,
+                  subtitle: context.l10n.compactPlayerDescription,
+                  value: settings.compactPlayer,
+                  enabled: !context.isMornye,
+                  onChanged: (value) => ref
+                      .read(settingsProvider.notifier)
+                      .setCompactPlayer(value),
+                  showDivider: false,
+                ),
+              ],
+            ),
+            ...settingsSectionSlivers(
+              title: context.l10n.motionArtwork,
+              children: [
+                SettingsSwitchItem(
+                  icon: Icons.motion_photos_on_outlined,
+                  title: context.l10n.motionArtwork,
+                  subtitle: context.l10n.motionArtworkDescription,
+                  value: settings.motionArtworkEnabled,
+                  onChanged: (value) => ref
+                      .read(settingsProvider.notifier)
+                      .setMotionArtworkEnabled(value),
+                  showDivider: false,
+                ),
+              ],
+            ),
+            if (Platform.isAndroid || Platform.isIOS || isDesktopPlatform) ...[
+              const SliverToBoxAdapter(
+                child: SettingsSectionHeader(title: 'Discord'),
+              ),
+              const SliverToBoxAdapter(child: DiscordPresenceSettings()),
+            ],
+            const SliverToBoxAdapter(
+              child: SettingsSectionHeader(title: 'Last.fm'),
+            ),
+            SliverToBoxAdapter(
+              child: LastfmSettings(
+                service: ref.read(musicPlayerRuntimeProvider).lastfm,
+              ),
+            ),
+            const SliverToBoxAdapter(
+              child: SettingsSectionHeader(title: 'Libre.fm'),
+            ),
+            SliverToBoxAdapter(
+              child: LastfmSettings(
+                service: ref.read(musicPlayerRuntimeProvider).librefm,
+                serviceName: 'Libre.fm',
+              ),
+            ),
+            const SliverToBoxAdapter(
+              child: SettingsSectionHeader(title: 'ListenBrainz'),
+            ),
+            SliverToBoxAdapter(
+              child: ListenBrainzSettings(
+                service: ref.read(musicPlayerRuntimeProvider).listenBrainz,
+              ),
+            ),
+            if (isDesktopPlatform)
+              ...settingsSectionSlivers(
+                title: context.l10n.sectionAudioOutput,
+                children: [
+                  ValueListenableBuilder<ExclusiveOutputStatus>(
+                    valueListenable: playbackExclusiveStatus,
+                    builder: (context, status, _) {
+                      final labels = exclusiveOutputLabels(context.l10n);
+                      return SettingsSwitchItem(
+                        icon: Icons.speaker_outlined,
+                        title: labels.title,
+                        subtitle: [
+                          labels.description,
+                          if (settings.exclusiveOutput)
+                            switch (status) {
+                              ExclusiveOutputStatus.pending =>
+                                context.l10n.exclusiveOutputPending,
+                              ExclusiveOutputStatus.active =>
+                                context.l10n.exclusiveOutputActive,
+                              ExclusiveOutputStatus.unavailable =>
+                                labels.unavailable,
+                            },
+                        ].join('\n\n'),
+                        value: settings.exclusiveOutput,
+                        onChanged: (value) => ref
+                            .read(settingsProvider.notifier)
+                            .setExclusiveOutput(value),
+                        showDivider: linuxDevice || macSpatialAudio,
+                      );
                     },
                   ),
-                  if (settings.usbDirect) ...[
+                  if (linuxDevice)
+                    _AlsaDeviceItem(device: settings.exclusiveOutputDevice),
+                  if (macSpatialAudio)
+                    const _SpatialAudioItem(
+                      platform: SpatialAudioPlatform.macos,
+                      showDivider: false,
+                    ),
+                ],
+              ),
+            // iOS has no other audio output setting.
+            if (spatialAudioPlatform == SpatialAudioPlatform.ios)
+              ...settingsSectionSlivers(
+                title: context.l10n.sectionAudioOutput,
+                children: const [
+                  _SpatialAudioItem(
+                    platform: SpatialAudioPlatform.ios,
+                    showDivider: false,
+                  ),
+                ],
+              ),
+            if (androidAudio)
+              ...settingsSectionSlivers(
+                title: context.l10n.sectionAudioOutput,
+                connected: true,
+                children: [
+                  SettingsSwitchItem(
+                    icon: Icons.play_circle_outline,
+                    title: context.l10n.newPlaybackEngine,
+                    titleTrailing: const BetaBadge(),
+                    subtitle: context.l10n.newPlaybackEngineDescription,
+                    value: settings.media3Engine,
+                    onChanged: (value) => ref
+                        .read(settingsProvider.notifier)
+                        .setMedia3Engine(value),
+                  ),
+                  // Phones and tablets only; media3 does the skipping.
+                  if (!isAndroidTv)
                     SettingsSwitchItem(
-                      icon: Icons.graphic_eq,
-                      title: context.l10n.usbDsdOverPcm,
-                      subtitle: context.l10n.usbDsdOverPcmDescription,
-                      value: settings.usbDsdOverPcm,
+                      icon: Icons.fast_forward_outlined,
+                      title: context.l10n.skipSilence,
+                      subtitle: [
+                        context.l10n.skipSilenceDescription,
+                        if (!settings.media3Engine)
+                          context.l10n.skipSilenceNeedsEngine
+                        else if (settings.autoMix)
+                          context.l10n.skipSilenceAutoMix,
+                      ].join('\n\n'),
+                      value: settings.skipSilence,
+                      enabled: settings.media3Engine,
                       onChanged: (value) => ref
                           .read(settingsProvider.notifier)
-                          .setUsbDsdOverPcm(value),
+                          .setSkipSilence(value),
                     ),
-                    SettingsSwitchItem(
-                      icon: Icons.volume_up_outlined,
-                      title: context.l10n.usbFixedVolume,
-                      subtitle: context.l10n.usbFixedVolumeDescription,
-                      value: settings.usbAllowFixedVolume,
+                  // TV output is HDMI or a soundbar, outside the spatializer.
+                  if (!isAndroidTv)
+                    const _SpatialAudioItem(
+                      platform: SpatialAudioPlatform.android,
+                    ),
+                  ValueListenableBuilder<UsbAudioStatus>(
+                    valueListenable: usbAudioStatus,
+                    builder: (context, status, _) => SettingsSwitchItem(
+                      icon: Icons.usb,
+                      title: context.l10n.usbBitPerfect,
+                      titleTrailing: const BetaBadge(),
+                      subtitle: [
+                        context.l10n.usbBitPerfectDescription,
+                        if (settings.usbBitPerfect)
+                          usbOutputStatusLabel(context.l10n, status),
+                      ].join('\n\n'),
+                      value: settings.usbBitPerfect,
                       onChanged: (value) async {
                         if (value &&
                             !await _confirmAudioVolume(
-                              context.l10n.usbFixedVolumeWarning,
+                              context.l10n.usbVolumeWarning,
                             )) {
                           return;
                         }
                         if (mounted) {
                           ref
                               .read(settingsProvider.notifier)
-                              .setUsbAllowFixedVolume(value);
+                              .setUsbBitPerfect(value);
+                        }
+                      },
+                      showDivider: settings.usbBitPerfect,
+                    ),
+                  ),
+                  if (settings.usbBitPerfect) ...[
+                    SettingsSwitchItem(
+                      icon: Icons.usb,
+                      title: context.l10n.usbDirect,
+                      subtitle: context.l10n.usbDirectDescription,
+                      value: settings.usbDirect,
+                      onChanged: (value) async {
+                        if (value &&
+                            !await _confirmAudioVolume(
+                              context.l10n.usbVolumeWarning,
+                            )) {
+                          return;
+                        }
+                        if (mounted) {
+                          ref
+                              .read(settingsProvider.notifier)
+                              .setUsbDirect(value);
                         }
                       },
                     ),
-                    ValueListenableBuilder<UsbVolumeState?>(
-                      valueListenable: usbHardwareVolume,
-                      builder: (context, volume, _) => Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 20,
-                          vertical: 12,
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              context.l10n.usbHardwareVolume,
-                              style: Theme.of(context).textTheme.titleMedium,
-                            ),
-                            Text(
-                              volume == null
-                                  ? context.l10n.usbBitPerfectPending
-                                  : volume.available
-                                  ? '${volume.currentDb.toStringAsFixed(1)} dB'
-                                  : context.l10n.usbVolumeUnavailable,
-                            ),
-                            if (volume?.available == true)
-                              PlayerVolumeControl(
-                                foreground: colorScheme.onSurface,
+                    if (settings.usbDirect) ...[
+                      SettingsSwitchItem(
+                        icon: Icons.graphic_eq,
+                        title: context.l10n.usbDsdOverPcm,
+                        subtitle: context.l10n.usbDsdOverPcmDescription,
+                        value: settings.usbDsdOverPcm,
+                        onChanged: (value) => ref
+                            .read(settingsProvider.notifier)
+                            .setUsbDsdOverPcm(value),
+                      ),
+                      SettingsItem(
+                        icon: Icons.speed,
+                        title: context.l10n.usbMaxSampleRate,
+                        subtitle: [
+                          _usbRateLabel(settings.usbMaxSampleRate),
+                          context.l10n.usbMaxSampleRateDescription,
+                        ].join('\n\n'),
+                        onTap: () =>
+                            _showUsbMaxSampleRate(settings.usbMaxSampleRate),
+                      ),
+                      DitherTypeChoice(
+                        title: context.l10n.usbDitherType,
+                        plainDescription:
+                            context.l10n.usbDitherPlainDescription,
+                        highPassDescription:
+                            context.l10n.usbDitherHighPassDescription,
+                        highPass: settings.usbDitherHighPass,
+                        showDivider: true,
+                        onChanged: ref
+                            .read(settingsProvider.notifier)
+                            .setUsbDitherHighPass,
+                      ),
+                      SettingsSwitchItem(
+                        icon: Icons.volume_up_outlined,
+                        title: context.l10n.usbFixedVolume,
+                        subtitle: context.l10n.usbFixedVolumeDescription,
+                        value: settings.usbAllowFixedVolume,
+                        onChanged: (value) async {
+                          if (value &&
+                              !await _confirmAudioVolume(
+                                context.l10n.usbFixedVolumeWarning,
+                              )) {
+                            return;
+                          }
+                          if (mounted) {
+                            ref
+                                .read(settingsProvider.notifier)
+                                .setUsbAllowFixedVolume(value);
+                          }
+                        },
+                      ),
+                      ValueListenableBuilder<UsbVolumeState?>(
+                        valueListenable: usbHardwareVolume,
+                        builder: (context, volume, _) => Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 20,
+                            vertical: 12,
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                context.l10n.usbHardwareVolume,
+                                style: Theme.of(context).textTheme.titleMedium,
                               ),
-                          ],
+                              Text(
+                                volume == null
+                                    ? context.l10n.usbBitPerfectPending
+                                    : volume.available
+                                    ? '${volume.currentDb.toStringAsFixed(1)} dB'
+                                    : context.l10n.usbVolumeUnavailable,
+                              ),
+                              if (volume?.available == true)
+                                PlayerVolumeControl(
+                                  foreground: colorScheme.onSurface,
+                                ),
+                            ],
+                          ),
                         ),
                       ),
+                    ],
+                    SettingsSwitchItem(
+                      icon: Icons.headphones,
+                      title: context.l10n.dapExclusive,
+                      titleTrailing: const BetaBadge(),
+                      subtitle: context.l10n.dapExclusiveDescription,
+                      value: settings.dapExclusive,
+                      onChanged: (value) => ref
+                          .read(settingsProvider.notifier)
+                          .setDapExclusive(value),
+                      showDivider: false,
                     ),
                   ],
-                  SettingsSwitchItem(
-                    icon: Icons.headphones,
-                    title: context.l10n.dapExclusive,
-                    titleTrailing: const BetaBadge(),
-                    subtitle: context.l10n.dapExclusiveDescription,
-                    value: settings.dapExclusive,
-                    onChanged: (value) => ref
-                        .read(settingsProvider.notifier)
-                        .setDapExclusive(value),
-                    showDivider: false,
-                  ),
                 ],
+              ),
+            const SliverToBoxAdapter(child: SizedBox(height: 32)),
+            ...settingsSectionSlivers(
+              title: context.l10n.listeningStats,
+              children: [
+                SettingsItem(
+                  icon: Icons.insights_outlined,
+                  title: context.l10n.listeningStats,
+                  subtitle: context.l10n.listeningStatsDescription,
+                  onTap: () => Navigator.of(context).push(
+                    slidePageRoute<void>(
+                      page: const ListeningStatisticsScreen(),
+                    ),
+                  ),
+                  showDivider: false,
+                ),
               ],
             ),
-          const SliverToBoxAdapter(child: SizedBox(height: 32)),
-          ...settingsSectionSlivers(
-            title: context.l10n.listeningStats,
-            children: [
-              SettingsItem(
-                icon: Icons.insights_outlined,
-                title: context.l10n.listeningStats,
-                subtitle: context.l10n.listeningStatsDescription,
-                onTap: () => Navigator.of(context).push(
-                  slidePageRoute<void>(page: const ListeningStatisticsScreen()),
-                ),
-                showDivider: false,
-              ),
-            ],
-          ),
+          ],
           const SliverToBoxAdapter(child: SizedBox(height: 32)),
           const NavBarSliverSpacer(),
         ],
@@ -850,29 +1006,92 @@ class _HeadphoneResumeChoice extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
+    return _SegmentedSettingRow(
+      icon: Icons.headphones_outlined,
+      title: l10n.playbackOnHeadphonesConnected,
+      description: switch (mode) {
+        'after_disconnect' => l10n.playbackResumeOnReconnectDescription,
+        'always' => l10n.playbackOnHeadphonesConnectedDescription,
+        _ => l10n.playbackHeadphonesOffDescription,
+      },
+      labels: {
+        'off': l10n.playbackHeadphonesOff,
+        'after_disconnect': l10n.playbackHeadphonesAfterDisconnect,
+        'always': l10n.playbackHeadphonesAlways,
+      },
+      selected: mode,
+      enabled: enabled,
+      onChanged: onChanged,
+    );
+  }
+}
+
+/// How far up a full screen cover its fade reaches: short, medium or long.
+class _CoverFadeChoice extends StatelessWidget {
+  const _CoverFadeChoice({
+    required this.fade,
+    required this.enabled,
+    required this.onChanged,
+  });
+
+  final String fade;
+  final bool enabled;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = context.l10n;
+    return _SegmentedSettingRow(
+      icon: Icons.blur_linear,
+      title: l10n.playerCoverFade,
+      description: l10n.playerCoverFadeDescription,
+      labels: {
+        'short': l10n.playerCoverFadeShort,
+        'medium': l10n.playerCoverFadeMedium,
+        'long': l10n.playerCoverFadeLong,
+      },
+      selected: fade,
+      enabled: enabled,
+      onChanged: onChanged,
+    );
+  }
+}
+
+/// A setting with a few short choices: its title and description over a
+/// connected choice, keyed by the stored value in [labels].
+class _SegmentedSettingRow extends StatelessWidget {
+  const _SegmentedSettingRow({
+    required this.icon,
+    required this.title,
+    required this.description,
+    required this.labels,
+    required this.selected,
+    required this.enabled,
+    required this.onChanged,
+  });
+
+  final IconData icon;
+  final String title;
+  final String description;
+  final Map<String, String> labels;
+  final String selected;
+  final bool enabled;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
-    final title = l10n.playbackOnHeadphonesConnected;
-    final labels = {
-      'off': l10n.playbackHeadphonesOff,
-      'after_disconnect': l10n.playbackHeadphonesAfterDisconnect,
-      'always': l10n.playbackHeadphonesAlways,
-    };
-    final description = switch (mode) {
-      'after_disconnect' => l10n.playbackResumeOnReconnectDescription,
-      'always' => l10n.playbackOnHeadphonesConnectedDescription,
-      _ => l10n.playbackHeadphonesOffDescription,
-    };
     final showIcon = !context.isMornye;
     final choice = context.isMornye
         ? MornyeSegmentedControl(
             labels: labels.values.toList(),
-            selectedIndex: labels.keys.toList().indexOf(mode),
+            selectedIndex: labels.keys.toList().indexOf(selected),
             onChanged: (index) => onChanged(labels.keys.elementAt(index)),
             samplesBackdrop: false,
           )
         : SettingsSegmentedChoice<String>(
-            selected: mode,
+            selected: selected,
             onChanged: onChanged,
             semanticLabel: title,
             options: [
@@ -894,7 +1113,7 @@ class _HeadphoneResumeChoice extends StatelessWidget {
               children: [
                 if (showIcon) ...[
                   AppIcon(
-                    Icons.headphones_outlined,
+                    icon,
                     color: enabled
                         ? colorScheme.onSurfaceVariant
                         : colorScheme.outline,

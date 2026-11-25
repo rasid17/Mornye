@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart' show visibleForTesting;
@@ -125,6 +126,7 @@ Future<Database> openAppDatabase(
       }
       await db.rawQuery('PRAGMA journal_mode = WAL');
       await db.execute('PRAGMA synchronous = NORMAL');
+      await db.execute('PRAGMA temp_store = MEMORY');
     },
     onCreate: onCreate,
     onUpgrade: onUpgrade,
@@ -136,15 +138,80 @@ String normalizeLookupText(String? value) {
   return (value ?? '').trim().toLowerCase();
 }
 
+/// The writer queue shared by every connection that write-locks history.db.
+const historyWriterQueue = 'history.db';
+
+/// How long a write waits for its turn before it goes to SQLite anyway, so a
+/// stuck holder cannot stop every later write.
+@visibleForTesting
+Duration writerQueueWait = const Duration(minutes: 2);
+
+final _writerQueues = <String, _WriterQueue>{};
+final _writerQueueOf = Expando<_WriterQueue>();
+
+/// Makes [db]'s [transactionWithBusyRetry] calls take turns with every other
+/// connection that joined [name]. BEGIN IMMEDIATE write-locks each attached
+/// database too, and SQLite would settle that race with a timeout only.
+void joinWriterQueue(Database db, String name) {
+  _writerQueueOf[db] = _writerQueues.putIfAbsent(name, _WriterQueue.new);
+}
+
+class _WriterQueue {
+  Future<void> _tail = Future<void>.value();
+  Object? _holder;
+
+  Future<T> run<T>(Future<T> Function() action) async {
+    // A write made inside the holder's own transaction cannot wait for it.
+    final inherited = Zone.current[this];
+    if (inherited != null && identical(inherited, _holder)) return action();
+    final previous = _tail;
+    final done = Completer<void>();
+    _tail = done.future;
+    final turn = Object();
+    try {
+      await previous.timeout(
+        writerQueueWait,
+        onTimeout: () => _log.w('Writer queue still held; trying SQLite'),
+      );
+      _holder = turn;
+      return await runZoned(action, zoneValues: {this: turn});
+    } finally {
+      if (identical(_holder, turn)) _holder = null;
+      done.complete();
+    }
+  }
+}
+
 /// Retry only lock contention while acquiring BEGIN, before the callback runs.
 /// History download writers can also lock transactions on an attached Library
 /// connection. Never replay a body or COMMIT failure: it may have side effects
-/// or an already durable result. Persistent locks still surface after 3 attempts.
+/// or an already durable result. Persistent locks still surface once
+/// [retryDelays] run out (two quick retries by default).
 Future<T> transactionWithBusyRetry<T>(
   Database db,
   Future<T> Function(Transaction txn) action, {
   bool? exclusive,
+  List<Duration>? retryDelays,
+}) {
+  Future<T> run() => _transactionRetryingBegin(
+    db,
+    action,
+    exclusive: exclusive,
+    retryDelays: retryDelays,
+  );
+  final queue = _writerQueueOf[db];
+  return queue == null ? run() : queue.run(run);
+}
+
+Future<T> _transactionRetryingBegin<T>(
+  Database db,
+  Future<T> Function(Transaction txn) action, {
+  bool? exclusive,
+  List<Duration>? retryDelays,
 }) async {
+  final delays =
+      retryDelays ??
+      const [Duration(milliseconds: 100), Duration(milliseconds: 200)];
   for (var attempt = 0; ; attempt++) {
     var entered = false;
     try {
@@ -159,9 +226,11 @@ Future<T> transactionWithBusyRetry<T>(
           ? (code & 0xff) == 5 || (code & 0xff) == 6
           : message.contains('database is locked') ||
                 message.contains('database table is locked');
-      if (entered || !busy || attempt >= 2) rethrow;
-      _log.w('Database busy before transaction; retry ${attempt + 1}/2');
-      await Future<void>.delayed(Duration(milliseconds: 100 << attempt));
+      if (entered || !busy || attempt >= delays.length) rethrow;
+      _log.w(
+        'Database busy before transaction; retry ${attempt + 1}/${delays.length}',
+      );
+      await Future<void>.delayed(delays[attempt]);
     }
   }
 }
@@ -385,7 +454,7 @@ Future<void> createPathKeyTable(DatabaseExecutor db, String table) async {
     )
   ''');
   await db.execute(
-    'CREATE INDEX IF NOT EXISTS idx_${table}_key ON $table(path_key)',
+    'CREATE INDEX IF NOT EXISTS idx_${table}_key ON $table(path_key, item_id)',
   );
 }
 
@@ -721,10 +790,9 @@ class LibraryShadowSnapshot {
                 )
                 ..execute('DROP TABLE IF EXISTS $libraryShadowTable')
                 ..execute(
-                  'CREATE TEMP TABLE library_shadowed AS '
-                  'SELECT * FROM temp.library_shadowed_next',
+                  'ALTER TABLE temp.library_shadowed_next '
+                  'RENAME TO library_shadowed',
                 )
-                ..execute('DROP TABLE temp.library_shadowed_next')
                 ..execute(
                   'CREATE INDEX temp.library_shadowed_item '
                   'ON library_shadowed(item_id)',
@@ -735,7 +803,7 @@ class LibraryShadowSnapshot {
                 )
                 ..rawQuery('SELECT total_changes()'))
               .apply();
-      final built = _writeStamp(results, const [0, 1, 9]);
+      final built = _writeStamp(results, const [0, 1, 8]);
       if (built == null) {
         return _buildFailed(db, stamp, 'no write stamp after the build');
       }

@@ -56,7 +56,8 @@ void main() {
     await tester.pump();
     expect(container.read(settingsProvider).playbackNormalizationPreamp, -7);
 
-    await tester.tap(find.text('Album'));
+    // The expressive segmented group also lays out a measuring copy.
+    await tester.tap(find.text('Album').first);
     await tester.pump();
     expect(container.read(settingsProvider).playbackNormalizationMode, 'album');
   });
@@ -64,5 +65,20 @@ void main() {
   testWidgets('bit-perfect output disables the controls', (tester) async {
     await pump(tester, enabled: false);
     expect(tester.widget<AppSlider>(find.byType(AppSlider)).onChanged, isNull);
+  });
+
+  testWidgets('the never clips promise goes once quiet songs rise', (
+    tester,
+  ) async {
+    final container = await pump(tester);
+    expect(find.textContaining('never clips'), findsOneWidget);
+
+    container
+        .read(settingsProvider.notifier)
+        .setPlaybackNormalizationBoost(true);
+    await tester.pump();
+    expect(container.read(settingsProvider).playbackNormalizationBoost, isTrue);
+    expect(find.textContaining('never clips'), findsNothing);
+    expect(find.text('Lower values play quieter.'), findsOneWidget);
   });
 }

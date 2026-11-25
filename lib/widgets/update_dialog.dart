@@ -7,9 +7,11 @@ import 'package:mornye/services/update_checker.dart';
 import 'package:mornye/services/apk_downloader.dart';
 import 'package:mornye/services/desktop_diagnostics.dart';
 import 'package:mornye/services/desktop_updater.dart';
+import 'package:mornye/services/media_kit_playback_deck.dart';
 import 'package:mornye/services/notification_service.dart';
 import 'package:mornye/services/update_progress_notifications.dart';
 import 'package:mornye/l10n/l10n.dart';
+import 'package:mornye/utils/desktop_platform.dart';
 import 'package:mornye/utils/string_utils.dart';
 import 'package:mornye/widgets/app_alert_dialog.dart';
 import 'package:mornye/widgets/app_action_button.dart';
@@ -42,6 +44,9 @@ class _UpdateDialogState extends State<UpdateDialog> {
   bool _isDownloading = false;
   double _progress = 0;
   String _statusText = '';
+
+  /// Room for a release's written notes; a bare commit list is cut here.
+  static const int _changelogLimit = 8096;
   static final RegExp _whatsNewPattern = RegExp(
     r"###?\s*What'?s\s*New\s*\n",
     caseSensitive: false,
@@ -54,6 +59,10 @@ class _UpdateDialogState extends State<UpdateDialog> {
   static final RegExp _listPattern = RegExp(r'^[-*]\s+(.+)$');
   static final RegExp _subListPattern = RegExp(r'^\s+[-*]\s+(.+)$');
   static final RegExp _boldPattern = RegExp(r'\*\*([^*]+)\*\*');
+  // *Emphasis*, but not a lone asterisk such as in "2 * 3".
+  static final RegExp _emphasisPattern = RegExp(
+    r'(?<![*\w])\*([^*\s][^*]*)\*(?![*\w])',
+  );
   static final RegExp _codePattern = RegExp(r'`([^`]+)`');
 
   /// Set once a desktop update needs one more step from the user: quitting
@@ -200,8 +209,7 @@ class _UpdateDialogState extends State<UpdateDialog> {
           await updater.startWindowsInstaller(file);
           // The installer waits for this process to close its files. A
           // planned quit, so the next launch reports no crash.
-          DesktopDiagnostics.instance?.endSession();
-          exit(0);
+          await _quitForUpdate();
         case UpdateInstallKind.macosDiskImage:
           await updater.openDiskImage(file);
           if (mounted) {
@@ -239,7 +247,15 @@ class _UpdateDialogState extends State<UpdateDialog> {
     if (_desktopFinish == _DesktopFinish.restart) {
       await DesktopUpdater().restartAppImage(widget.updateInfo.appImagePath!);
     }
-    DesktopDiagnostics.instance?.endSession();
+    await _quitForUpdate();
+  }
+
+  /// `exit` asks nobody, so the audio device is given back here.
+  Future<Never> _quitForUpdate() async {
+    if (isDesktopPlatform) {
+      await MediaKitPlaybackDeck.releaseOutputs();
+      DesktopDiagnostics.instance?.endSession();
+    }
     exit(0);
   }
 
@@ -464,9 +480,6 @@ class _UpdateDialogState extends State<UpdateDialog> {
                             onPressed: () => Navigator.pop(context),
                             style: OutlinedButton.styleFrom(
                               padding: const EdgeInsets.symmetric(vertical: 12),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
                             ),
                             child: Text(context.l10n.dialogCancel),
                           ),
@@ -499,9 +512,6 @@ class _UpdateDialogState extends State<UpdateDialog> {
                           }),
                           style: FilledButton.styleFrom(
                             padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
                           ),
                         ),
                       ),
@@ -518,9 +528,6 @@ class _UpdateDialogState extends State<UpdateDialog> {
                                 style: TextButton.styleFrom(
                                   padding: const EdgeInsets.symmetric(
                                     vertical: 12,
-                                  ),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
                                   ),
                                 ),
                                 child: Text(
@@ -542,9 +549,6 @@ class _UpdateDialogState extends State<UpdateDialog> {
                                 style: OutlinedButton.styleFrom(
                                   padding: const EdgeInsets.symmetric(
                                     vertical: 12,
-                                  ),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
                                   ),
                                 ),
                                 child: Text(context.l10n.updateLater),
@@ -600,6 +604,10 @@ class _UpdateDialogState extends State<UpdateDialog> {
           (m) => m.group(1) ?? '',
         );
         itemText = itemText.replaceAllMapped(
+          _emphasisPattern,
+          (m) => m.group(1) ?? '',
+        );
+        itemText = itemText.replaceAllMapped(
           _codePattern,
           (m) => m.group(1) ?? '',
         );
@@ -620,8 +628,8 @@ class _UpdateDialogState extends State<UpdateDialog> {
     }
 
     var formatted = formattedLines.join('\n').trim();
-    if (formatted.length > 2000) {
-      formatted = '${formatted.substring(0, 2000)}...';
+    if (formatted.length > _changelogLimit) {
+      formatted = '${formatted.substring(0, _changelogLimit)}...';
     }
 
     return formatted.isEmpty ? emptyFallback : formatted;

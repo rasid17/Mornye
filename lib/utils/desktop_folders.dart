@@ -1,6 +1,8 @@
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:mornye/utils/desktop_platform.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider_windows/path_provider_windows.dart';
 
@@ -106,6 +108,20 @@ Future<String?> resolveDesktopPickerInitialDirectory(String? preferred) async {
   }
 }
 
+/// Shows the system folder picker on desktop and returns the folder's path,
+/// without the trailing separator of the picker's directory URI.
+Future<String?> pickDesktopDirectoryPath({
+  String? dialogTitle,
+  String? initialDirectory,
+}) async {
+  final uri = await FilePicker.pickDirectory(
+    dialogTitle: dialogTitle,
+    initialDirectory: initialDirectory,
+  );
+  if (uri == null || !uri.isScheme('file')) return null;
+  return p.normalize(uri.toFilePath(windows: Platform.isWindows));
+}
+
 String? _join(p.Context context, String? root, String child) {
   if (root == null || root.isEmpty) return null;
   return context.join(root, child);
@@ -115,5 +131,6 @@ String? _join(p.Context context, String? root, String child) {
 // which does not declare WindowsKnownFolder.Music.
 const _windowsMusicFolderId = '{4BD8D571-6D19-48D3-BE97-422220080E43}';
 
-Future<String?> _windowsKnownMusicFolder() =>
-    PathProviderWindows().getPath(_windowsMusicFolderId);
+Future<String?> _windowsKnownMusicFolder() => kMornyeMobileBuild
+    ? Future<String?>.value()
+    : PathProviderWindows().getPath(_windowsMusicFolderId);

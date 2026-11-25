@@ -6,7 +6,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:intl/intl.dart';
+import 'package:intl/intl.dart' hide TextDirection;
 import 'package:material_3_expressive/material_3_expressive.dart'
     show M3EShapeKind;
 import 'package:share_plus/share_plus.dart' show ShareParams, SharePlus, XFile;
@@ -17,6 +17,7 @@ import 'package:mornye/theme/app_motion.dart';
 import 'package:mornye/theme/app_tokens.dart';
 import 'package:mornye/theme/cover_palette.dart';
 import 'package:mornye/theme/mornye_theme.dart';
+import 'package:mornye/theme/page_transitions.dart';
 import 'package:mornye/utils/widget_capture.dart';
 import 'package:mornye/widgets/app_action_button.dart';
 import 'package:mornye/widgets/app_bottom_sheet.dart';
@@ -88,7 +89,7 @@ Future<void> openListeningRewind(
   BuildContext context,
   ListeningRewindPeriod period,
 ) => Navigator.of(context, rootNavigator: true).push(
-  MaterialPageRoute<void>(
+  SteadyPageRoute<void>(
     fullscreenDialog: true,
     builder: (_) => ListeningRewindScreen(period: period),
   ),

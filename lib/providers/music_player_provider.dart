@@ -12,6 +12,7 @@ import 'package:mornye/services/history_database.dart';
 import 'package:mornye/services/history_row_mapper.dart';
 import 'package:mornye/services/library_database.dart';
 import 'package:mornye/services/library_media_identity.dart';
+import 'package:mornye/services/library_mixes.dart' show LibraryMixKind;
 import 'package:mornye/services/music_player_service.dart';
 import 'package:mornye/services/remote_playback.dart';
 import 'package:mornye/utils/artist_utils.dart';
@@ -395,6 +396,14 @@ final currentQueueIndexProvider = Provider<int>((ref) {
       : queue.indexWhere((item) => item.id == id);
 });
 
+/// The cover of the song after the current one in the queue.
+final nextQueueArtUriProvider = Provider<String?>((ref) {
+  final queue = ref.watch(playQueueProvider).value ?? const <MediaItem>[];
+  final index = ref.watch(currentQueueIndexProvider);
+  if (index < 0 || index + 1 >= queue.length) return null;
+  return queue[index + 1].artUri?.toString();
+});
+
 /// Drives the player the screens show: the local one, or [remote] while
 /// another device plays in its place.
 class MusicPlayerController {
@@ -434,6 +443,30 @@ class MusicPlayerController {
     }
     final handler = await ensureInitialized();
     await handler?.setQueueAndPlay(items, initialIndex: initialIndex);
+  }
+
+  /// Plays [items], a mix of [kind], like [playAll]. While that queue plays
+  /// here, how each of its songs goes counts for the mix.
+  Future<void> playMix(
+    LibraryMixKind kind,
+    List<PlayableMedia> items, {
+    int initialIndex = 0,
+  }) async {
+    if (remote case final remote?) {
+      return remote.playAll(items, initialIndex: initialIndex);
+    }
+    final handler = await ensureInitialized();
+    if (handler == null || items.isEmpty) return;
+    final since = DateTime.now();
+    // The queue is replaced before the first await, so its count is known.
+    final playing = handler.setQueueAndPlay(items, initialIndex: initialIndex);
+    _runtime.suggestionOutcomes.followMix(
+      kind,
+      [for (final item in items) item.source],
+      queue: handler.queueGeneration,
+      since: since,
+    );
+    await playing;
   }
 
   Future<void> playSingle(PlayableMedia item) => playAll([item]);

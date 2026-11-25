@@ -50,7 +50,7 @@ class AboutPage extends StatelessWidget {
                 ),
                 _ContributorItem(
                   name: 'Amonoman',
-                  description: context.l10n.aboutLogoArtist,
+                  description: context.l10n.aboutAppManager,
                   githubUsername: 'Amonoman',
                   showDivider: true,
                 ),
@@ -293,6 +293,10 @@ class _AppHeaderCard extends StatelessWidget {
                 padding: EdgeInsets.all(logoSize * 0.24),
                 child: Image.asset(
                   'assets/images/logo-transparent.png',
+                  cacheWidth:
+                      (logoSize * MediaQuery.devicePixelRatioOf(context))
+                          .ceil()
+                          .clamp(64, 512),
                   color: colorScheme.onPrimary,
                   fit: BoxFit.contain,
                   errorBuilder: (_, _, _) => ClipRRect(
@@ -301,6 +305,10 @@ class _AppHeaderCard extends StatelessWidget {
                       'assets/images/logo.png',
                       width: logoSize,
                       height: logoSize,
+                      cacheWidth:
+                          (logoSize * MediaQuery.devicePixelRatioOf(context))
+                              .ceil()
+                              .clamp(64, 512),
                       fit: BoxFit.cover,
                     ),
                   ),
@@ -578,7 +586,7 @@ class _TranslatorChip extends StatelessWidget {
                       ? translator.name[0].toUpperCase()
                       : '?',
                   style: TextStyle(
-                    fontSize: 10,
+                    fontSize: 11,
                     fontWeight: FontWeight.bold,
                     color: colorScheme.primary,
                   ),

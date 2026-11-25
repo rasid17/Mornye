@@ -13,6 +13,7 @@ import 'package:mornye/models/library_collections.dart';
 import 'package:mornye/models/settings.dart';
 import 'package:mornye/models/unified_library_item.dart';
 import 'package:mornye/providers/music_player_provider.dart';
+import 'package:mornye/providers/settings_provider.dart';
 import 'package:mornye/services/app_state_database.dart';
 import 'package:mornye/services/autoplay_personalization.dart';
 import 'package:mornye/services/autoplay_history.dart';
@@ -24,6 +25,7 @@ import 'package:mornye/services/cast_output.dart';
 import 'package:mornye/services/history_database.dart';
 import 'package:mornye/services/library_collections_database.dart';
 import 'package:mornye/services/library_database.dart';
+import 'package:mornye/services/library_mixes.dart' show LibraryMixKind;
 import 'package:mornye/services/library_search.dart';
 import 'package:mornye/services/listening_statistics.dart';
 import 'package:mornye/services/link/desktop/link_player.dart';
@@ -36,6 +38,8 @@ import 'package:mornye/services/link/features/link_track_refs.dart';
 import 'package:mornye/services/link/features/link_track_resolver.dart';
 import 'package:mornye/services/link/link_protocol.dart';
 import 'package:mornye/services/media_library_browser.dart';
+import 'package:mornye/services/music_playback_deck.dart'
+    show UsbAudioStatus, usbAudioStatus;
 import 'package:mornye/services/music_player_service.dart';
 import 'package:mornye/services/network_metadata_service.dart';
 import 'package:mornye/services/network_playback_cache.dart';
@@ -43,8 +47,10 @@ import 'package:mornye/services/network_storage_service.dart';
 import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/services/playback_deck.dart';
 import 'package:mornye/services/playback_notification.dart';
+import 'package:mornye/services/remote_playback.dart';
 import 'package:mornye/services/source_deletion_events.dart';
 import 'package:mornye/services/source_metadata_events.dart';
+import 'package:mornye/services/suggestion_outcomes.dart';
 import 'package:mornye/utils/android_tv.dart';
 import 'package:mornye/utils/file_access.dart';
 import 'package:mornye/utils/logger.dart';
@@ -53,6 +59,7 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart'
     show databaseFactoryFfi, sqfliteFfiInit;
 
+import 'support/fixed_settings.dart';
 import 'support/link_fakes.dart';
 import 'support/virtual_time.dart';
 
@@ -93,7 +100,7 @@ class _Deck implements PlaybackDeck {
   Future<void> Function()? beforeDispose;
 
   @override
-  bool get isDirect => false;
+  bool isDirect = false;
   @override
   PlaybackTempoSupport get tempoSupport => PlaybackTempoSupport.full;
   @override
@@ -145,6 +152,8 @@ class _Deck implements PlaybackDeck {
     bool requiresDsd = false,
     bool allowFixedVolume = false,
     bool dapExclusive = false,
+    int usbMaxSampleRate = 0,
+    bool usbDitherHighPass = false,
   }) async {
     sources.add(path);
     outputOptions = {
@@ -279,6 +288,20 @@ class _TickingDeck extends _Deck {
   }
 }
 
+/// Reports the durations a test sends.
+class _DurationDeck extends _Deck {
+  final durationEvents = StreamController<Duration>.broadcast();
+
+  @override
+  Stream<Duration> get onDurationChanged => durationEvents.stream;
+
+  @override
+  Future<void> dispose() async {
+    await durationEvents.close();
+    await super.dispose();
+  }
+}
+
 class _HandoffDeck extends _TickingDeck {
   final preparing = Completer<void>();
   final prepared = Completer<void>();
@@ -293,6 +316,8 @@ class _HandoffDeck extends _TickingDeck {
     bool requiresDsd = false,
     bool allowFixedVolume = false,
     bool dapExclusive = false,
+    int usbMaxSampleRate = 0,
+    bool usbDitherHighPass = false,
   }) async {
     await super.setFileSource(path);
     preparing.complete();
@@ -305,6 +330,8 @@ class _HandoffDeck extends _TickingDeck {
     await super.resume();
   }
 }
+
+class _FakeRemote extends Fake implements RemotePlayback {}
 
 class _Session implements AudioSession {
   int configurations = 0;
@@ -699,6 +726,11 @@ class _Loved implements LibraryCollectionsDatabase {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
+/// With Local Library on, the Resume card reads neither History nor Library.
+final _localLibraryOn = settingsProvider.overrideWith(
+  () => FixedSettingsNotifier(const AppSettings(localLibraryEnabled: true)),
+);
+
 MusicPlayerRuntime _runtime({
   AppSettings settings = const AppSettings(pauseOnMute: false),
   Future<MusicPlayerHandler> Function(MusicPlayerHandler Function())?
@@ -715,6 +747,7 @@ MusicPlayerRuntime _runtime({
   AutoplayPersonalization Function()? createPersonalization,
   AutoplayTaste Function()? createTaste,
   AutoplayRanker Function()? createRanker,
+  SuggestionOutcomes Function()? createSuggestionOutcomes,
   bool isIOS = false,
   bool isAndroid = false,
   Future<void> Function()? synchronizePlaybackState,
@@ -731,6 +764,7 @@ MusicPlayerRuntime _runtime({
   NetworkPlaybackCache? networkCache,
   Future<Map<String, dynamic>> Function(String)? readNetworkMetadata,
   CoverStore? coverStore,
+  Future<bool> Function()? callActive,
 }) {
   if (isAndroid) {
     const channel = MethodChannel(
@@ -750,6 +784,8 @@ MusicPlayerRuntime _runtime({
           createPersonalization ?? AutoplayPersonalization.new,
       createTaste: createTaste ?? AutoplayTaste.new,
       createRanker: createRanker ?? AutoplayRanker.new,
+      createSuggestionOutcomes:
+          createSuggestionOutcomes ?? SuggestionOutcomes.new,
       createDeck:
           createDeck ??
           (_) {
@@ -774,6 +810,7 @@ MusicPlayerRuntime _runtime({
       readNetworkMetadata:
           readNetworkMetadata ?? NetworkMetadataService.instance.read,
       coverStore: coverStore,
+      callActive: callActive ?? () async => false,
       sessionDatabase: sessionDatabase ?? _SessionStore(),
       libraryDatabase: libraryDatabase,
       historyDatabase: historyDatabase,
@@ -1232,6 +1269,56 @@ void main() {
     await events.close();
   });
 
+  test('a receiver without a volume level gets no remote volume', () async {
+    const channel = MethodChannel('volume-cast-test');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    final calls = <String>[];
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      calls.add(call.method);
+      return call.method == 'state' ? {'connected': false} : null;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    final events = StreamController<Object?>.broadcast(sync: true);
+    final output = CastOutput(channel: channel, events: events.stream);
+    final runtime = _runtime(createCastDeck: (_, _) => _Deck());
+    final handler = MusicPlayerHandler(runtime: runtime, castOutput: output);
+    await output.initialize();
+    await handler.setQueueAndPlay([_track]);
+    await handler.pause();
+    events.add({
+      'connected': true,
+      'deviceId': 'dlna:uuid-1',
+      'host': '192.0.2.40',
+      'kind': 'dlna',
+    });
+    for (var i = 0; i < 20; i++) {
+      await _settle();
+    }
+    expect(
+      handler.androidPlaybackInfo.value,
+      isNot(isA<RemoteAndroidPlaybackInfo>()),
+    );
+    await handler.androidAdjustRemoteVolume(AndroidVolumeDirection.raise);
+    expect(calls, isNot(contains('volume')));
+
+    events.add({
+      'connected': true,
+      'deviceId': 'dlna:uuid-1',
+      'host': '192.0.2.40',
+      'kind': 'dlna',
+      'volume': 0.3,
+    });
+    final info = handler.androidPlaybackInfo.value;
+    expect(info, isA<RemoteAndroidPlaybackInfo>());
+    expect((info as RemoteAndroidPlaybackInfo).volume, 30);
+    await handler.androidAdjustRemoteVolume(AndroidVolumeDirection.raise);
+    expect(calls, contains('volume'));
+    await runtime.dispose();
+    output.dispose();
+    await events.close();
+  });
+
   test(
     'playback instances survive pause and seek but change for repeated songs',
     () async {
@@ -1649,7 +1736,10 @@ void main() {
       await fresh.restoreSession();
       expect(fresh.handler, isNull);
       final container = ProviderContainer(
-        overrides: [musicPlayerRuntimeProvider.overrideWithValue(fresh)],
+        overrides: [
+          musicPlayerRuntimeProvider.overrideWithValue(fresh),
+          _localLibraryOn,
+        ],
       );
       addTearDown(container.dispose);
       final preview = await container.read(playbackResumeProvider.future);
@@ -1698,6 +1788,28 @@ void main() {
       expect(store.resumeReads, 0);
     },
   );
+
+  for (final dismissed in [false, true]) {
+    test('a ${dismissed ? 'dismissed notification' : 'stop from the system'} '
+        'keeps the queue for Home to resume', () async {
+      final store = _ResumeSessionStore();
+      final decks = <_Deck>[];
+      final runtime = _runtime(sessionDatabase: store, decks: decks);
+      final handler = await runtime.initialize();
+      await handler.setQueueAndPlay([_track]);
+      decks.single.position = const Duration(seconds: 23);
+      await handler.pause();
+
+      // Both arrive from the system session without arguments.
+      await (dismissed ? handler.onNotificationDeleted() : handler.stop());
+
+      expect(decks.single.state, PlaybackDeckState.stopped);
+      expect(handler.mediaItem.value, isNull);
+      expect(store.active, isNull);
+      expect(store.archived?['positionMs'], 23000);
+      expect(store.preview?['media'], containsPair('id', _track.id));
+    });
+  }
 
   test(
     'external startup does not initialize the internal player or restore a session',
@@ -1796,7 +1908,10 @@ void main() {
         sourceDeletionEvents: events,
       );
       final container = ProviderContainer(
-        overrides: [musicPlayerRuntimeProvider.overrideWithValue(runtime)],
+        overrides: [
+          musicPlayerRuntimeProvider.overrideWithValue(runtime),
+          _localLibraryOn,
+        ],
       );
       addTearDown(container.dispose);
       expect(await container.read(playbackResumeProvider.future), isNotNull);
@@ -2182,6 +2297,71 @@ void main() {
     expect(await ranker.readOutcomes(), isEmpty);
   });
 
+  test('a mix counts its songs while the queue it started plays', () async {
+    sqfliteFfiInit();
+    final directory = await Directory.systemTemp.createTemp('suggestions-');
+    addTearDown(() => directory.delete(recursive: true));
+    final db = await SuggestionOutcomes.openWithFactory(
+      databaseFactoryFfi,
+      '${directory.path}/suggestions.db',
+    );
+    addTearDown(db.close);
+    final outcomes = SuggestionOutcomes(open: () async => db);
+    var elapsed = Duration.zero;
+    final learning = AutoplayPersonalization(
+      load: () async => null,
+      save: (_) async {},
+      elapsed: () => elapsed,
+    );
+    final runtime = _runtime(
+      settings: const AppSettings(
+        pauseOnMute: false,
+        autoplayPersonalization: true,
+      ),
+      createPersonalization: () => learning,
+      createSuggestionOutcomes: () => outcomes,
+    );
+    final handler = await runtime.initialize();
+    await learning.ensureLoaded();
+    PlayableMedia song(String id) => PlayableMedia(
+      id: id,
+      source: '/$id.flac',
+      title: id,
+      artist: 'Artist $id',
+      duration: const Duration(seconds: 60),
+    );
+    await MusicPlayerController(
+      runtime: runtime,
+    ).playMix(LibraryMixKind.genre, [_track, song('two'), song('three')]);
+    await _settle();
+    final mixQueue = handler.queueGeneration;
+    // Shuffling reorders the mix's queue; it stays the same queue.
+    await handler.setShuffleMode(AudioServiceShuffleMode.all);
+    await handler.setShuffleMode(AudioServiceShuffleMode.none);
+    expect(handler.queueGeneration, mixQueue);
+    elapsed += const Duration(seconds: 40);
+    await handler.skipToNext();
+    await _settle();
+    elapsed += const Duration(seconds: 5);
+    await handler.skipToNext();
+    await _settle();
+    // The third song plays on, but another queue replaces the mix.
+    elapsed += const Duration(seconds: 40);
+    await handler.setQueueAndPlay([song('four')]);
+    await _settle();
+    expect(handler.queueGeneration, mixQueue + 1);
+    expect(
+      [
+        for (final outcome in await outcomes.readMixOutcomes())
+          (outcome.kind, outcome.played),
+      ],
+      [(LibraryMixKind.genre, true), (LibraryMixKind.genre, false)],
+    );
+
+    await resetAutoplayLearning(runtime: runtime);
+    expect(await outcomes.readMixOutcomes(), isEmpty);
+  });
+
   test(
     'player learns explicit skips, excludes pauses and obeys live opt-out',
     () async {
@@ -2462,6 +2642,187 @@ void main() {
       cache.want([]);
     });
 
+    group('with the USB output on', () {
+      const usb = MethodChannel('com.zarz.mornye/usb_pcm');
+      const settings = AppSettings(pauseOnMute: false, usbBitPerfect: true);
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+
+      void outputPresent(bool present) {
+        messenger.setMockMethodCallHandler(
+          usb,
+          (call) async => call.method == 'outputPresent' ? present : null,
+        );
+        addTearDown(() => messenger.setMockMethodCallHandler(usb, null));
+      }
+
+      test('a song still downloading waits for its whole copy', () async {
+        outputPresent(true);
+        final release = Completer<void>();
+        final cache = await networkCache(release: release.future);
+        final decks = <_Deck>[];
+        final handler = await _runtime(
+          settings: settings,
+          isAndroid: true,
+          decks: decks,
+          networkCache: cache,
+          resolveNetworkSource: (_) async => 'http://127.0.0.1:1/song.flac',
+        ).initialize();
+
+        final playing = handler.setQueueAndPlay([song]);
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        expect(decks.single.sources, isEmpty);
+        release.complete();
+        await playing;
+
+        expect(cache.owns(decks.single.sources.single), isTrue);
+      });
+
+      test('a song whose download fails streams', () async {
+        outputPresent(true);
+        final release = Completer<void>();
+        final cache = await networkCache(release: release.future);
+        final decks = <_Deck>[];
+        final handler = await _runtime(
+          settings: settings,
+          isAndroid: true,
+          decks: decks,
+          networkCache: cache,
+          resolveNetworkSource: (_) async => 'http://127.0.0.1:1/song.flac',
+        ).initialize();
+
+        final playing = handler.setQueueAndPlay([song]);
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        release.completeError(StateError('server gone'));
+        await playing;
+
+        expect(decks.single.sources, ['stream http://127.0.0.1:1/song.flac']);
+      });
+
+      test('a saved copy that is gone plays from a fetched copy', () async {
+        outputPresent(true);
+        final cache = await networkCache();
+        final temp = await Directory.systemTemp.createTemp('player-gone-');
+        addTearDown(() => temp.delete(recursive: true));
+        final decks = <_Deck>[];
+        var remoteRequests = 0;
+        final handler = await _runtime(
+          settings: settings,
+          isAndroid: true,
+          decks: decks,
+          networkCache: cache,
+          resolveNetworkSource: (_) async {
+            remoteRequests++;
+            return 'http://127.0.0.1:1/song.flac';
+          },
+        ).initialize();
+
+        await handler.setQueueAndPlay([
+          PlayableMedia(
+            id: 'saved-song',
+            source: '${temp.path}/gone.flac',
+            originSource: source,
+            title: 'NAS song',
+            artist: 'Artist',
+          ),
+        ]);
+
+        expect(cache.owns(decks.single.sources.single), isTrue);
+        expect(remoteRequests, 0);
+      });
+
+      test('a newer song does not wait for the one before it', () async {
+        outputPresent(true);
+        final cache = await networkCache(release: Completer<void>().future);
+        final temp = await Directory.systemTemp.createTemp('player-local-');
+        addTearDown(() => temp.delete(recursive: true));
+        final local = await File('${temp.path}/local.flac').writeAsBytes([4]);
+        final decks = <_Deck>[];
+        final handler = await _runtime(
+          settings: settings,
+          isAndroid: true,
+          decks: decks,
+          networkCache: cache,
+          resolveNetworkSource: (_) async => 'http://127.0.0.1:1/song.flac',
+        ).initialize();
+
+        unawaited(handler.setQueueAndPlay([song]));
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        await handler
+            .setQueueAndPlay([
+              PlayableMedia(
+                id: 'local-song',
+                source: local.path,
+                title: 'Local song',
+                artist: 'Artist',
+              ),
+            ])
+            .timeout(const Duration(seconds: 5));
+
+        expect(decks.single.sources, [local.path]);
+        cache.want([]);
+      });
+
+      test('without a connected output the song streams at once', () async {
+        outputPresent(false);
+        final cache = await networkCache(release: Completer<void>().future);
+        final decks = <_Deck>[];
+        final handler = await _runtime(
+          settings: settings,
+          isAndroid: true,
+          decks: decks,
+          networkCache: cache,
+          resolveNetworkSource: (_) async => 'http://127.0.0.1:1/song.flac',
+        ).initialize();
+
+        await handler
+            .setQueueAndPlay([song])
+            .timeout(const Duration(seconds: 5));
+
+        expect(decks.single.sources, ['stream http://127.0.0.1:1/song.flac']);
+        cache.want([]);
+      });
+
+      for (final direct in [true, false]) {
+        test('stopping hands a Direct USB DAC back: $direct', () async {
+          final calls = <String>[];
+          messenger.setMockMethodCallHandler(usb, (call) async {
+            calls.add(call.method);
+            return call.method == 'outputPresent' ? false : null;
+          });
+          addTearDown(() => messenger.setMockMethodCallHandler(usb, null));
+          final temp = await Directory.systemTemp.createTemp('player-usb-');
+          addTearDown(() => temp.delete(recursive: true));
+          final local = await File('${temp.path}/local.flac').writeAsBytes([4]);
+          final handler = await _runtime(
+            settings: AppSettings(
+              pauseOnMute: false,
+              usbBitPerfect: true,
+              usbDirect: direct,
+            ),
+            isAndroid: true,
+          ).initialize();
+          await handler.setQueueAndPlay([
+            PlayableMedia(
+              id: 'local-song',
+              source: local.path,
+              title: 'Local song',
+              artist: 'Artist',
+            ),
+          ]);
+          // A song change lets go of the DAC without touching its level.
+          expect(calls, isNot(contains('endSession')));
+
+          await handler.stop();
+
+          expect(
+            calls.where((call) => call == 'endSession'),
+            hasLength(direct ? 1 : 0),
+          );
+        });
+      }
+    });
+
     test('a saved offline copy plays before a prefetched one', () async {
       final cache = await networkCache();
       cache.want([source]);
@@ -2586,6 +2947,57 @@ void main() {
       handler.playbackState.value.errorMessage,
       contains('Audio file is unavailable'),
     );
+  });
+
+  test('learning follows the kind of output music plays on', () async {
+    // ignore: experimental_member_use
+    AudioDevice output(String id, AudioDeviceType type) =>
+        // ignore: experimental_member_use
+        AudioDevice(
+          id: id,
+          name: id,
+          isInput: false,
+          isOutput: true,
+          type: type,
+        );
+    // ignore: experimental_member_use
+    final speaker = output('speaker', AudioDeviceType.builtInSpeaker);
+    // ignore: experimental_member_use
+    final headset = output('headset', AudioDeviceType.bluetoothA2dp);
+    final session = _Session()..devices = {speaker, headset};
+    final learning = AutoplayPersonalization(
+      load: () async => null,
+      save: (_) async {},
+    );
+    final runtime = _runtime(
+      settings: const AppSettings(
+        pauseOnMute: false,
+        autoplayPersonalization: true,
+      ),
+      session: session,
+      createPersonalization: () => learning,
+    );
+    await runtime.initialize();
+    await _settle();
+    expect(learning.output, AutoplayOutput.bluetooth);
+    session.route({speaker});
+    await _settle();
+    await _settle();
+    expect(learning.output, AutoplayOutput.speaker);
+    // A remote device playing in this one's place.
+    await runtime.showRemote(_FakeRemote());
+    expect(learning.output, AutoplayOutput.remote);
+    runtime.soundsBesideRemote = true;
+    expect(learning.output, AutoplayOutput.speaker);
+    runtime.soundsBesideRemote = false;
+    await runtime.showRemote(null);
+    expect(learning.output, AutoplayOutput.speaker);
+    // Learning off: the outputs are no longer read.
+    runtime.configure(
+      const AppSettings(pauseOnMute: false, autoplayPersonalization: false),
+    );
+    await _settle();
+    expect(learning.output, AutoplayOutput.unknown);
   });
 
   group('resume when headphones reconnect', () {
@@ -2803,6 +3215,239 @@ void main() {
       expect(decks.single.state, PlaybackDeckState.playing);
     },
   );
+
+  group('another app taking focus while Direct USB plays', () {
+    const active = UsbAudioStatus(reason: 'active', driver: 'usb_direct');
+    tearDown(() => usbAudioStatus.value = const UsbAudioStatus());
+
+    Future<(MusicPlayerHandler, _Deck)> playing(
+      _Session session,
+      Future<bool> Function() callActive,
+    ) async {
+      final decks = <_Deck>[];
+      final handler = await _runtime(
+        session: session,
+        decks: decks,
+        callActive: callActive,
+      ).initialize();
+      await handler.setQueueAndPlay([_track]);
+      decks.single.isDirect = true;
+      usbAudioStatus.value = active;
+      return (handler, decks.single);
+    }
+
+    test('keeps playing, and a paused song still pauses', () async {
+      final time = VirtualTime();
+      await time.run(() async {
+        final session = _Session();
+        var asked = 0;
+        final (handler, deck) = await playing(session, () async {
+          asked++;
+          return false;
+        });
+        session.interruptions.add(
+          AudioInterruptionEvent(true, AudioInterruptionType.unknown),
+        );
+        await Future<void>.delayed(const Duration(seconds: 2));
+        expect(deck.state, PlaybackDeckState.playing);
+        expect(handler.playbackState.value.playing, isTrue);
+        expect(asked, 2);
+
+        usbAudioStatus.value = const UsbAudioStatus(reason: 'unsupported');
+        session.interruptions.add(
+          AudioInterruptionEvent(true, AudioInterruptionType.pause),
+        );
+        await _settle();
+        expect(deck.state, PlaybackDeckState.paused);
+      });
+    });
+
+    test('a call that starts a second later pauses and resumes', () async {
+      final time = VirtualTime();
+      await time.run(() async {
+        final session = _Session();
+        var asked = 0;
+        final (handler, deck) = await playing(session, () async => ++asked > 1);
+        session.interruptions.add(
+          AudioInterruptionEvent(true, AudioInterruptionType.pause),
+        );
+        await _settle();
+        expect(deck.state, PlaybackDeckState.playing);
+        await Future<void>.delayed(const Duration(seconds: 2));
+        expect(deck.state, PlaybackDeckState.paused);
+        expect(handler.playbackState.value.playing, isFalse);
+
+        session.interruptions.add(
+          AudioInterruptionEvent(false, AudioInterruptionType.pause),
+        );
+        await _settle();
+        expect(deck.state, PlaybackDeckState.playing);
+      });
+    });
+  });
+
+  group('calls on Android', () {
+    Future<(MusicPlayerHandler, List<_Deck>)> playing(
+      _Session session,
+      Future<bool> Function() callActive,
+    ) async {
+      final decks = <_Deck>[];
+      final handler = await _runtime(
+        session: session,
+        decks: decks,
+        isAndroid: true,
+        callActive: callActive,
+      ).initialize();
+      await handler.setQueueAndPlay([_track]);
+      return (handler, decks);
+    }
+
+    test('a call that keeps focus resumes the music once it ends', () async {
+      final time = VirtualTime();
+      await time.run(() async {
+        final session = _Session();
+        var inCall = true;
+        final (handler, decks) = await playing(session, () async => inCall);
+        session.interruptions.add(
+          AudioInterruptionEvent(true, AudioInterruptionType.unknown),
+        );
+        await Future<void>.delayed(const Duration(seconds: 5));
+        expect(decks.single.state, PlaybackDeckState.paused);
+        expect(handler.playbackState.value.playing, isFalse);
+
+        inCall = false;
+        await Future<void>.delayed(const Duration(seconds: 2));
+        expect(decks.single.state, PlaybackDeckState.playing);
+        expect(handler.playbackState.value.playing, isTrue);
+      });
+    });
+
+    test('focus lost for good without a call stays paused', () async {
+      final time = VirtualTime();
+      await time.run(() async {
+        final session = _Session();
+        final (handler, decks) = await playing(session, () async => false);
+        session.interruptions.add(
+          AudioInterruptionEvent(true, AudioInterruptionType.unknown),
+        );
+        await Future<void>.delayed(const Duration(seconds: 5));
+        expect(decks.single.state, PlaybackDeckState.paused);
+        expect(handler.playbackState.value.playing, isFalse);
+      });
+    });
+
+    test('a pause during the call keeps the music paused after it', () async {
+      final time = VirtualTime();
+      await time.run(() async {
+        final session = _Session();
+        var inCall = true;
+        final (handler, decks) = await playing(session, () async => inCall);
+        session.interruptions.add(
+          AudioInterruptionEvent(true, AudioInterruptionType.unknown),
+        );
+        await Future<void>.delayed(const Duration(seconds: 2));
+        await handler.pause();
+        inCall = false;
+        await Future<void>.delayed(const Duration(seconds: 3));
+        expect(decks.single.state, PlaybackDeckState.paused);
+      });
+    });
+
+    test('focus back while still in call mode waits for its end', () async {
+      final time = VirtualTime();
+      await time.run(() async {
+        final session = _Session();
+        var inCall = true;
+        final (handler, decks) = await playing(session, () async => inCall);
+        session.interruptions.add(
+          AudioInterruptionEvent(true, AudioInterruptionType.pause),
+        );
+        await _settle();
+        session.interruptions.add(
+          AudioInterruptionEvent(false, AudioInterruptionType.pause),
+        );
+        await Future<void>.delayed(const Duration(seconds: 3));
+        expect(decks.single.state, PlaybackDeckState.paused);
+
+        inCall = false;
+        await Future<void>.delayed(const Duration(seconds: 2));
+        expect(decks.single.state, PlaybackDeckState.playing);
+        expect(handler.playbackState.value.playing, isTrue);
+      });
+    });
+
+    test('a refused resume drops the request and tries again', () async {
+      final time = VirtualTime();
+      await time.run(() async {
+        final session = _Session();
+        var inCall = true;
+        final (handler, decks) = await playing(session, () async => inCall);
+        session.interruptions.add(
+          AudioInterruptionEvent(true, AudioInterruptionType.unknown),
+        );
+        await Future<void>.delayed(const Duration(seconds: 2));
+        session.activations.clear();
+        session.focusGranted = false;
+        inCall = false;
+        await Future<void>.delayed(const Duration(milliseconds: 1500));
+        // Each refused request is dropped before the next one asks.
+        expect(session.activations.take(2), [true, false]);
+        expect(session.activations.last, isFalse);
+        expect(decks.single.state, PlaybackDeckState.paused);
+
+        session.focusGranted = true;
+        await Future<void>.delayed(const Duration(milliseconds: 1500));
+        expect(session.activations.last, isTrue);
+        expect(decks.single.state, PlaybackDeckState.playing);
+        expect(handler.playbackState.value.playing, isTrue);
+      });
+    });
+
+    test('a resume that does not move reloads the song in place', () async {
+      final time = VirtualTime();
+      await time.run(() async {
+        final session = _Session();
+        final (_, decks) = await playing(session, () async => false);
+        final deck = decks.last;
+        deck.position = const Duration(seconds: 23);
+        final loads = deck.sources.length;
+        session.interruptions.add(
+          AudioInterruptionEvent(true, AudioInterruptionType.pause),
+        );
+        await _settle();
+        session.interruptions.add(
+          AudioInterruptionEvent(false, AudioInterruptionType.pause),
+        );
+        await Future<void>.delayed(const Duration(seconds: 3));
+        expect(decks.expand((deck) => deck.sources), hasLength(loads + 1));
+        expect(decks.last.position, const Duration(seconds: 23));
+        expect(decks.last.state, PlaybackDeckState.playing);
+      });
+    });
+
+    test('a resume that moves is left alone', () async {
+      final time = VirtualTime();
+      await time.run(() async {
+        final session = _Session();
+        final (_, decks) = await playing(session, () async => false);
+        final deck = decks.single;
+        final loads = deck.sources.length;
+        session.interruptions.add(
+          AudioInterruptionEvent(true, AudioInterruptionType.pause),
+        );
+        await _settle();
+        session.interruptions.add(
+          AudioInterruptionEvent(false, AudioInterruptionType.pause),
+        );
+        await _settle();
+        deck.position = const Duration(seconds: 1);
+        await Future<void>.delayed(const Duration(seconds: 3));
+        expect(decks, hasLength(1));
+        expect(deck.sources, hasLength(loads));
+        expect(deck.state, PlaybackDeckState.playing);
+      });
+    });
+  });
 
   test('pause cancels a resume awaiting foreground promotion', () async {
     final session = _Session();
@@ -5189,5 +5834,27 @@ void main() {
         expect(preview.media.toMediaItem(covers: covers).artUri, isNull);
       },
     );
+  });
+
+  test('a duration the song already has publishes nothing again', () async {
+    final deck = _DurationDeck();
+    var created = 0;
+    final handler = await _runtime(
+      createDeck: (_) => created++ == 0 ? deck : _Deck(),
+    ).initialize();
+    await handler.setQueueAndPlay([_track]);
+    await _settle();
+    final published = <Duration?>[];
+    final subscription = handler.mediaItem
+        .skip(1)
+        .listen((item) => published.add(item?.duration));
+    addTearDown(subscription.cancel);
+    deck.durationEvents.add(const Duration(seconds: 60));
+    deck.durationEvents.add(const Duration(seconds: 60));
+    await _settle();
+    expect(published, isEmpty);
+    deck.durationEvents.add(const Duration(seconds: 61));
+    await _settle();
+    expect(published, [const Duration(seconds: 61)]);
   });
 }

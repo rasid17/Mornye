@@ -10,6 +10,7 @@ import 'package:mornye/models/settings.dart';
 import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/services/extension_storage_service.dart';
 import 'package:mornye/utils/desktop_platform.dart';
+import 'package:mornye/utils/file_access.dart';
 import 'package:mornye/utils/logger.dart';
 import 'package:mornye/providers/repo_provider.dart';
 import 'package:mornye/providers/settings_provider.dart';
@@ -73,7 +74,7 @@ class ExtensionNotifier extends Notifier<ExtensionState> {
           final path =
               settings.storageMode == 'app' &&
                   settings.downloadDirectoryBookmark.isEmpty &&
-                  candidate.startsWith('/') &&
+                  isAbsoluteLocalPath(candidate) &&
                   await Directory(candidate).exists()
               ? candidate
               : '';
@@ -126,8 +127,14 @@ class ExtensionNotifier extends Notifier<ExtensionState> {
       await pending;
     } else {
       try {
-        await ref.read(settingsProvider.notifier).ensureLoaded();
-        final storage = await ExtensionStorageService.prepare();
+        final storageFuture = ExtensionStorageService.prepare();
+        try {
+          await ref.read(settingsProvider.notifier).ensureLoaded();
+        } catch (_) {
+          storageFuture.ignore();
+          rethrow;
+        }
+        final storage = await storageFuture;
         await initialize(
           storage.extensionsDir,
           storage.dataDir,
@@ -182,7 +189,7 @@ class ExtensionNotifier extends Notifier<ExtensionState> {
       // output folders are resolved by the queue and must not prevent startup.
       if (snapshot.storageMode == 'app' &&
           snapshot.downloadDirectoryBookmark.isEmpty &&
-          outputDirectory.startsWith('/')) {
+          isAbsoluteLocalPath(outputDirectory)) {
         final directory = Directory(outputDirectory);
         if (await directory.exists()) {
           allowedDirectories.add(directory.path);
@@ -208,8 +215,10 @@ class ExtensionNotifier extends Notifier<ExtensionState> {
       if (!loaded) {
         throw StateError(loadError ?? 'Failed to load installed extensions');
       }
-      await loadProviderPriority();
-      await loadMetadataProviderPriority();
+      await Future.wait([
+        loadProviderPriority(),
+        loadMetadataProviderPriority(),
+      ]);
       if (Platform.isAndroid || isDesktopPlatform) {
         // Exchange a cold-start browser callback before restored downloads can
         // bootstrap a replacement challenge and invalidate its original state.

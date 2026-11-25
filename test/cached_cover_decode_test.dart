@@ -4,12 +4,14 @@ import 'dart:ui' as ui;
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:mornye/utils/desktop_platform.dart';
 import 'package:mornye/utils/image_cache_utils.dart';
 import 'package:mornye/widgets/cached_cover_image.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  _desktopDecodeTests();
   for (final override in [false, true]) {
     testWidgets('local thumbnail fade keeps its size in a row ($override)', (
       tester,
@@ -165,6 +167,51 @@ void main() {
       }
     });
   }
+
+  testWidgets('the backdrop prewarm starts a file cover at the header size', (
+    tester,
+  ) async {
+    final cache = PaintingBinding.instance.imageCache;
+    cache.clear();
+    cache.clearLiveImages();
+    final directory = await tester.runAsync(() async {
+      final directory = await Directory.systemTemp.createTemp('cover-head-');
+      await _writeCover(directory, const Size(64, 64));
+      return directory;
+    });
+    late BuildContext context;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(size: Size(393, 852), devicePixelRatio: 2),
+          child: Builder(
+            builder: (value) {
+              context = value;
+              return const SizedBox();
+            },
+          ),
+        ),
+      ),
+    );
+    final path = '${directory!.path}/cover.png';
+    try {
+      // What the header draws: the file at the viewport's width.
+      final header = ResizeImage(
+        FileImage(File(path)),
+        width: coverCacheWidthForViewport(context),
+      );
+      final key = await header.obtainKey(ImageConfiguration.empty);
+      expect(cache.statusForKey(key).tracked, isFalse);
+      await tester.runAsync(() => precacheMetadataBackdrop(context, path));
+      expect(cache.statusForKey(key).tracked, isTrue);
+      expect(tester.takeException(), isNull);
+    } finally {
+      await tester.pumpWidget(const SizedBox());
+      cache.clear();
+      cache.clearLiveImages();
+      await tester.runAsync(() => directory.delete(recursive: true));
+    }
+  });
 
   for (final explicit in [false, true]) {
     testWidgets(
@@ -758,6 +805,61 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 }
+
+void _desktopDecodeTests() {
+  for (final network in [false, true]) {
+    final kind = network ? 'network' : 'local';
+    testWidgets('a desktop $kind cover decodes once its cell settles', (
+      tester,
+    ) async {
+      debugDesktopPlatformOverride = true;
+      addTearDown(() => debugDesktopPlatformOverride = null);
+      Widget cell(double side) => MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(devicePixelRatio: 2),
+          child: Center(
+            child: SizedBox.square(
+              dimension: side,
+              child: network
+                  ? const CachedCoverImage(
+                      imageUrl: 'https://example.invalid/cell.png',
+                    )
+                  : const LocalOrNetworkCoverImage(
+                      url: '/covers/cell.png',
+                      placeholder: _empty,
+                    ),
+            ),
+          ),
+        ),
+      );
+      Object decode() => network
+          ? tester
+                .widget<CachedNetworkImage>(find.byType(CachedNetworkImage))
+                .memCacheWidth!
+          : tester.widget<Image>(find.byType(Image)).image;
+
+      await tester.pumpWidget(cell(200));
+      final first = decode();
+      // A pane that narrows over several frames keeps the decode.
+      for (var side = 199.0; side >= 180; side -= 1) {
+        await tester.pumpWidget(cell(side));
+        expect(decode(), first, reason: '$side');
+      }
+      await tester.pump(const Duration(milliseconds: 200));
+      final settled = decode();
+      expect(settled, isNot(first));
+      if (network) expect(settled, 360);
+
+      // A cell that grows by more than a quarter decodes at once.
+      await tester.pumpWidget(cell(240));
+      expect(decode(), isNot(settled));
+      if (network) expect(decode(), 480);
+      await tester.pumpWidget(const SizedBox());
+    });
+  }
+}
+
+Widget _empty(BuildContext context) => const SizedBox.expand();
 
 Future<void> _writeCover(Directory directory, Size size) async {
   final recorder = ui.PictureRecorder();

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:material_ui/material_ui.dart';
 import 'package:mornye/widgets/app_snack_bar.dart';
 import 'package:cupertino_ui/cupertino_ui.dart' show CupertinoIcons;
@@ -19,7 +21,6 @@ import 'package:mornye/screens/repo/repositories_screen.dart';
 import 'package:mornye/utils/adaptive_layout.dart';
 import 'package:mornye/utils/desktop_platform.dart';
 import 'package:mornye/utils/nav_bar_inset.dart';
-import 'package:mornye/providers/runtime_profile_provider.dart';
 import 'package:mornye/theme/mornye_theme.dart';
 import 'package:mornye/theme/mornye_icons.dart';
 import 'package:mornye/widgets/mornye_chrome.dart';
@@ -39,7 +40,12 @@ class RepoTab extends ConsumerStatefulWidget {
 class _RepoTabState extends ConsumerState<RepoTab> {
   final _searchController = TextEditingController();
   final _repoUrlController = TextEditingController();
+  Timer? _searchDebounce;
   bool _isInitialized = false;
+  List<RepoExtension>? _cachedRawExtensions;
+  String? _cachedCategory;
+  String? _cachedSearchQuery;
+  List<RepoExtension>? _cachedFilteredExtensions;
 
   /// Why the first repository could not be added.
   String? _setupError;
@@ -69,9 +75,23 @@ class _RepoTabState extends ConsumerState<RepoTab> {
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _searchController.dispose();
     _repoUrlController.dispose();
     super.dispose();
+  }
+
+  void _onSearchChanged(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 150), () {
+      if (!mounted) return;
+      ref.read(repoProvider.notifier).setSearchQuery(value);
+    });
+  }
+
+  void _onSearchCleared() {
+    _searchDebounce?.cancel();
+    ref.read(repoProvider.notifier).setSearchQuery('');
   }
 
   @override
@@ -95,12 +115,25 @@ class _RepoTabState extends ConsumerState<RepoTab> {
     final showRepository = ref.watch(
       repoProvider.select((s) => s.hasMultipleRepositories),
     );
-    final filteredExtensions = RepoState(
-      extensions: extensions,
-      selectedCategory: selectedCategory,
-      searchQuery: searchQuery,
-    ).filteredExtensions;
-    if (_searchController.text != searchQuery) {
+    final List<RepoExtension> filteredExtensions;
+    if (identical(_cachedRawExtensions, extensions) &&
+        _cachedCategory == selectedCategory &&
+        _cachedSearchQuery == searchQuery &&
+        _cachedFilteredExtensions != null) {
+      filteredExtensions = _cachedFilteredExtensions!;
+    } else {
+      filteredExtensions = RepoState(
+        extensions: extensions,
+        selectedCategory: selectedCategory,
+        searchQuery: searchQuery,
+      ).filteredExtensions;
+      _cachedRawExtensions = extensions;
+      _cachedCategory = selectedCategory;
+      _cachedSearchQuery = searchQuery;
+      _cachedFilteredExtensions = filteredExtensions;
+    }
+    if (_searchDebounce?.isActive != true &&
+        _searchController.text != searchQuery) {
       _searchController.value = TextEditingValue(
         text: searchQuery,
         selection: TextSelection.collapsed(offset: searchQuery.length),
@@ -162,10 +195,8 @@ class _RepoTabState extends ConsumerState<RepoTab> {
                     hintText: context.l10n.storeSearch,
                     clearTooltip: context.l10n.dialogClear,
                     samplesBackdrop: false,
-                    onChanged: (value) =>
-                        ref.read(repoProvider.notifier).setSearchQuery(value),
-                    onClear: () =>
-                        ref.read(repoProvider.notifier).setSearchQuery(''),
+                    onChanged: _onSearchChanged,
+                    onClear: _onSearchCleared,
                   ),
                 ),
               ),
@@ -232,50 +263,66 @@ class _RepoTabState extends ConsumerState<RepoTab> {
                     showRepository: showRepository,
                   )
                 else if (context.isMornye)
-                  SliverToBoxAdapter(
-                    child: ExtensionRepoCard(
-                      margin: EdgeInsets.symmetric(
-                        horizontal: edge,
-                        vertical: 4,
-                      ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: filteredExtensions.asMap().entries.map((
-                          entry,
-                        ) {
-                          final index = entry.key;
-                          final ext = entry.value;
-                          return _ExtensionItem(
-                            extension: ext,
-                            showDivider: index < filteredExtensions.length - 1,
-                            showRepository: showRepository,
-                            isDownloading: downloadingId == ext.id,
-                            onInstall: () => _installExtension(ext),
-                            onUpdate: () => _updateExtension(ext),
-                            onTap: () => _showExtensionDetails(ext),
-                          );
-                        }).toList(),
-                      ),
-                    ),
+                  Builder(
+                    builder: (context) {
+                      final buttonWidth = _storeButtonWidth(context);
+                      return SliverToBoxAdapter(
+                        child: ExtensionRepoCard(
+                          margin: EdgeInsets.symmetric(
+                            horizontal: edge,
+                            vertical: 4,
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: filteredExtensions.asMap().entries.map((
+                              entry,
+                            ) {
+                              final index = entry.key;
+                              final ext = entry.value;
+                              return _ExtensionItem(
+                                extension: ext,
+                                showDivider:
+                                    index < filteredExtensions.length - 1,
+                                showRepository: showRepository,
+                                isDownloading: downloadingId == ext.id,
+                                trailingWidth: buttonWidth,
+                                onInstall: () => _installExtension(ext),
+                                onUpdate: () => _updateExtension(ext),
+                                onTap: () => _showExtensionDetails(ext),
+                              );
+                            }).toList(),
+                          ),
+                        ),
+                      );
+                    },
                   )
                 else
-                  SliverToBoxAdapter(
-                    child: SettingsGroup(
-                      connected: true,
-                      children: filteredExtensions.asMap().entries.map((entry) {
-                        final index = entry.key;
-                        final ext = entry.value;
-                        return _ExtensionItem(
-                          extension: ext,
-                          showDivider: index < filteredExtensions.length - 1,
-                          showRepository: showRepository,
-                          isDownloading: downloadingId == ext.id,
-                          onInstall: () => _installExtension(ext),
-                          onUpdate: () => _updateExtension(ext),
-                          onTap: () => _showExtensionDetails(ext),
-                        );
-                      }).toList(),
-                    ),
+                  Builder(
+                    builder: (context) {
+                      final buttonWidth = _storeButtonWidth(context);
+                      return SliverToBoxAdapter(
+                        child: SettingsGroup(
+                          connected: true,
+                          children: filteredExtensions.asMap().entries.map((
+                            entry,
+                          ) {
+                            final index = entry.key;
+                            final ext = entry.value;
+                            return _ExtensionItem(
+                              extension: ext,
+                              showDivider:
+                                  index < filteredExtensions.length - 1,
+                              showRepository: showRepository,
+                              isDownloading: downloadingId == ext.id,
+                              trailingWidth: buttonWidth,
+                              onInstall: () => _installExtension(ext),
+                              onUpdate: () => _updateExtension(ext),
+                              onTap: () => _showExtensionDetails(ext),
+                            );
+                          }).toList(),
+                        ),
+                      );
+                    },
                   ),
 
                 const SliverToBoxAdapter(child: SizedBox(height: 16)),
@@ -641,61 +688,12 @@ class _CategoryChip extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final colorScheme = Theme.of(context).colorScheme;
     if (context.isMornye) {
-      return Semantics(
-        button: true,
-        selected: isSelected,
+      return MornyeFilterChip(
         label: label,
+        selected: isSelected,
+        icon: mornyeIconFor(icon),
         onTap: onTap,
-        excludeSemantics: true,
-        // Scrolls with the list over the plain page: see ExtensionRepoCard.
-        child: MornyeGlass.navigation(
-          radius: 24,
-          blurEnabled: ref.watch(mornyeBlurEnabledProvider),
-          samplesBackdrop: false,
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: onTap,
-              borderRadius: BorderRadius.circular(24),
-              child: Container(
-                constraints: const BoxConstraints(minHeight: 44),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 10,
-                ),
-                color: isSelected
-                    ? colorScheme.primary.withValues(alpha: 0.10)
-                    : Colors.transparent,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      mornyeIconFor(icon),
-                      size: 18,
-                      color: isSelected
-                          ? colorScheme.primary
-                          : colorScheme.onSurfaceVariant,
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      label,
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: isSelected
-                            ? colorScheme.primary
-                            : colorScheme.onSurface,
-                        fontWeight: isSelected
-                            ? FontWeight.w600
-                            : FontWeight.w400,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
       );
     }
     return AppChoiceChip(
@@ -856,6 +854,7 @@ class _ExtensionItem extends StatelessWidget {
   /// Names the row's repository, when more than one is configured.
   final bool showRepository;
   final bool isDownloading;
+  final double? trailingWidth;
   final VoidCallback onInstall;
   final VoidCallback onUpdate;
   final VoidCallback? onTap;
@@ -865,6 +864,7 @@ class _ExtensionItem extends StatelessWidget {
     required this.showDivider,
     this.showRepository = false,
     required this.isDownloading,
+    this.trailingWidth,
     required this.onInstall,
     required this.onUpdate,
     this.onTap,
@@ -974,7 +974,7 @@ class _ExtensionItem extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
               ),
       ),
-      trailingWidth: _storeButtonWidth(context),
+      trailingWidth: trailingWidth ?? _storeButtonWidth(context),
       trailing: isDownloading
           ? const AppLoadingIndicator(size: 24)
           : !context.isMornye

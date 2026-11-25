@@ -26,8 +26,13 @@ import 'package:mornye/widgets/tool_button_group.dart';
 import 'package:mornye/theme/mornye_icons.dart';
 import 'package:mornye/widgets/mornye_chrome.dart';
 import 'package:mornye/widgets/mornye_context_menu.dart';
+import 'package:mornye/widgets/mornye_album_pick.dart';
 import 'package:mornye/widgets/mornye_mix_banner.dart';
+import 'package:mornye/providers/runtime_profile_provider.dart';
 import 'package:mornye/widgets/app_icon.dart';
+import 'package:mornye/widgets/decorative_phase.dart';
+import 'package:mornye/widgets/on_screen_listener.dart';
+import 'package:mornye/widgets/settings_group.dart';
 import 'package:mornye/widgets/library_search_results.dart';
 import 'package:mornye/screens/library_artist_screen.dart';
 import 'package:mornye/widgets/app_bottom_sheet.dart';
@@ -36,7 +41,9 @@ import 'package:mornye/widgets/app_sliver_header.dart';
 import 'package:mornye/widgets/sliver_layout_info_builder.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:liquid_glass_easy/liquid_glass_easy.dart' show LiquidGlassBatch;
+import 'package:flutter_riverpod/misc.dart' show ProviderListenable;
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
+    show GlassBackdropGroup;
 import 'package:mornye/l10n/l10n.dart';
 import 'package:mornye/models/settings.dart';
 import 'package:mornye/models/track.dart';
@@ -46,7 +53,11 @@ import 'package:mornye/providers/settings_provider.dart';
 import 'package:mornye/providers/extension_provider.dart';
 import 'package:mornye/providers/recent_access_provider.dart';
 import 'package:mornye/providers/explore_provider.dart';
+import 'package:mornye/providers/home_context_provider.dart';
+import 'package:mornye/providers/home_recommendations_provider.dart';
+import 'package:mornye/providers/home_status_provider.dart';
 import 'package:mornye/providers/home_top_picks_provider.dart';
+import 'package:mornye/providers/home_unfinished_provider.dart';
 import 'package:mornye/providers/user_profile_provider.dart';
 import 'package:mornye/providers/weekly_releases_provider.dart';
 import 'package:mornye/screens/weekly_releases_screen.dart';
@@ -54,31 +65,43 @@ import 'package:mornye/services/weekly_releases.dart';
 import 'package:mornye/widgets/desktop/desktop_scroll_arrows.dart';
 import 'package:mornye/widgets/desktop/hover_play_button.dart';
 import 'package:mornye/widgets/explore_featured_section.dart';
+import 'package:mornye/providers/library_browse_provider.dart';
 import 'package:mornye/providers/library_counts_provider.dart';
 import 'package:mornye/providers/library_mixes_provider.dart';
 import 'package:mornye/providers/local_library_provider.dart';
 import 'package:mornye/providers/music_player_provider.dart';
+import 'package:mornye/providers/playback_provider.dart';
 import 'package:mornye/models/unified_library_item.dart';
+import 'package:mornye/models/home_layout.dart';
 import 'package:mornye/models/home_shortcut.dart';
 import 'package:mornye/screens/equalizer_screen.dart';
 import 'package:mornye/screens/favorite_artists_screen.dart';
 import 'package:mornye/screens/library_mix_screen.dart';
 import 'package:mornye/screens/library_tracks_folder_screen.dart';
 import 'package:mornye/screens/listening_statistics_screen.dart';
+import 'package:mornye/screens/settings/home_layout_page.dart';
 import 'package:mornye/screens/settings/link_desktop_settings_page.dart';
 import 'package:mornye/screens/settings/link_settings_page.dart';
 import 'package:mornye/screens/music_recognition_screen.dart';
 import 'package:mornye/screens/network_storage_screen.dart';
 import 'package:mornye/screens/now_playing_screen.dart';
+import 'package:mornye/screens/queue_tab.dart';
+import 'package:mornye/services/album_completeness.dart';
+import 'package:mornye/services/home_recommendations.dart'
+    show homeRecommendationShelvesApart;
 import 'package:mornye/services/library_database.dart';
+import 'package:mornye/services/library_mixes.dart'
+    show LibraryMixKind, stableTextHash;
 import 'package:mornye/services/listening_statistics.dart';
 import 'package:mornye/services/music_player_service.dart' show PlayableMedia;
+import 'package:mornye/services/suggestion_outcomes.dart';
 import 'package:mornye/screens/track_metadata_screen.dart';
 import 'package:mornye/screens/album_screen.dart';
 import 'package:mornye/screens/artist_screen.dart';
 import 'package:mornye/screens/extension_collection_screens.dart';
 import 'package:mornye/controllers/clickable_metadata.dart';
 import 'package:mornye/controllers/home_search_logic.dart';
+import 'package:mornye/controllers/local_playback.dart';
 import 'package:mornye/controllers/track_history_snapshot.dart';
 import 'package:mornye/services/csv_import_service.dart';
 import 'package:mornye/services/cover_download_service.dart';
@@ -93,6 +116,7 @@ import 'package:mornye/utils/file_access.dart';
 import 'package:mornye/utils/home_greeting.dart';
 import 'package:mornye/screens/playlist_screen.dart';
 import 'package:mornye/screens/downloaded_album_screen.dart';
+import 'package:mornye/screens/local_album_screen.dart';
 import 'package:mornye/widgets/download_service_picker.dart';
 import 'package:mornye/widgets/track_collection_quick_actions.dart';
 import 'package:mornye/widgets/desktop/context_menu.dart';
@@ -102,6 +126,7 @@ import 'package:mornye/widgets/audio_quality_badges.dart';
 import 'package:mornye/widgets/cached_cover_image.dart';
 import 'package:mornye/widgets/extension_icon_image.dart';
 import 'package:mornye/widgets/library_mix_cover.dart';
+import 'package:mornye/widgets/local_library_artwork_builder.dart';
 import 'package:mornye/widgets/player_artwork.dart';
 import 'package:mornye/widgets/error_card.dart';
 import 'package:mornye/widgets/in_library_badge.dart';
@@ -112,22 +137,40 @@ import 'package:mornye/widgets/view_queue_snackbar_action.dart';
 import 'package:mornye/widgets/profile_avatar.dart';
 import 'package:mornye/widgets/downloadable_cover.dart';
 import 'package:mornye/widgets/app_crash_banner.dart';
+import 'package:mornye/widgets/desktop/desktop_link_devices_sheet.dart'
+    show showDesktopLinkDevicesSheet;
+import 'package:mornye/widgets/link/link_devices_sheet.dart'
+    show showLinkDevicesSheet;
+import 'package:mornye/models/home_pin.dart';
+import 'package:mornye/providers/home_pins_provider.dart';
+import 'package:mornye/providers/library_collections_provider.dart';
+import 'package:mornye/providers/library_genres_provider.dart';
+import 'package:mornye/screens/library_directory_screen.dart';
 
 export 'package:mornye/screens/extension_collection_screens.dart';
 
+part 'home_tab_context.dart';
 part 'home_tab_helpers.dart';
 part 'home_tab_explore.dart';
 part 'home_tab_recent.dart';
 part 'home_tab_import.dart';
 part 'home_tab_intro.dart';
+part 'home_tab_pins.dart';
+part 'home_tab_quick.dart';
 part 'home_tab_search_results.dart';
 part 'home_tab_search_wide.dart';
+part 'home_tab_shelf_pages.dart';
+part 'home_tab_status.dart';
+part 'home_tab_unfinished.dart';
 part 'home_tab_widgets.dart';
 
-enum HomeTabMode { combined, browse, search }
+/// Home is the person's own page ([browse]): the player, shortcuts and
+/// Library shelves. Search ([search]) finds music and, before anything is
+/// typed, shows the chosen extension's feed.
+enum HomeTabMode { browse, search }
 
 class HomeTab extends ConsumerStatefulWidget {
-  const HomeTab({super.key, this.mode = HomeTabMode.combined});
+  const HomeTab({super.key, this.mode = HomeTabMode.browse});
 
   final HomeTabMode mode;
 
@@ -137,8 +180,8 @@ class HomeTab extends ConsumerStatefulWidget {
 
 class _HomeTabState extends ConsumerState<HomeTab>
     with AutomaticKeepAliveClientMixin, SingleTickerProviderStateMixin {
-  bool get _showsSearch => widget.mode != HomeTabMode.browse;
-  bool get _showsHome => widget.mode != HomeTabMode.search;
+  bool get _showsSearch => widget.mode == HomeTabMode.search;
+  bool get _showsHome => widget.mode == HomeTabMode.browse;
   final _historySnapshot = TrackHistorySnapshot();
   final _urlController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
@@ -195,6 +238,9 @@ class _HomeTabState extends ConsumerState<HomeTab>
   HomeSearchSortOption? _sortedTracksMode;
   List<Track>? _sortedTracksCache;
   List<int>? _sortedTrackIndexesCache;
+  HomeSearchSortOption? _sortedCollectionsMode;
+  final Map<List<Track>, List<Track>> _sortedCollectionsCache =
+      Map<List<Track>, List<Track>>.identity();
 
   double _exploreCardSize(BuildContext context) {
     // Six phone-sized cards across an iPad made the feed look like a desktop
@@ -282,7 +328,7 @@ class _HomeTabState extends ConsumerState<HomeTab>
       (previous, next) {
         if (next == true && previous != true) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted && _showsHome) {
+            if (mounted && _showsSearch) {
               ref
                   .read(exploreProvider.notifier)
                   .fetchHomeFeed(forceRefresh: true);
@@ -294,8 +340,8 @@ class _HomeTabState extends ConsumerState<HomeTab>
   }
 
   void _fetchExploreIfNeeded() {
-    // The desktop Mornye Search page browses the feed too.
-    if (!_showsHome && !_offersLibraryScope) return;
+    // Only Search shows the feed; Home never asks for it.
+    if (!_showsSearch) return;
     if (ref.read(settingsProvider).homeFeedProvider ==
         AppSettings.homeFeedProviderOff) {
       ref.read(exploreProvider.notifier).clear();
@@ -420,10 +466,10 @@ class _HomeTabState extends ConsumerState<HomeTab>
   }
 
   void _onSearchFocusChanged() {
-    // The dedicated Search tab already shows recent items independently of
+    // The Mornye desktop Search page shows recent items independently of
     // focus. Let TextField handle its cursor/keyboard without rebuilding the
     // entire results page each time navigation focuses or unfocuses it.
-    if (widget.mode == HomeTabMode.search) return;
+    if (_offersLibraryScope) return;
     if (mounted) {
       setState(() {});
     }
@@ -803,33 +849,38 @@ class _HomeTabState extends ConsumerState<HomeTab>
     final searchError = _showsSearch
         ? ref.watch(trackProvider.select((s) => s.error))
         : null;
-    final explicitSearchProvider = ref.watch(
-      settingsProvider.select((s) => s.searchProvider),
-    );
-    final defaultSearchTab = ref.watch(
-      settingsProvider.select((s) => s.defaultSearchTab),
-    );
-    final extensions = ref.watch(extensionProvider.select((s) => s.extensions));
-    final extensionReadiness = ref.watch(
-      extensionProvider.select(
-        (s) => (isInitialized: s.isInitialized, error: s.error),
-      ),
-    );
+    final explicitSearchProvider = _showsSearch
+        ? ref.watch(settingsProvider.select((s) => s.searchProvider))
+        : null;
+    final defaultSearchTab = _showsSearch
+        ? ref.watch(settingsProvider.select((s) => s.defaultSearchTab))
+        : '';
+    final extensions = _showsSearch
+        ? ref.watch(extensionProvider.select((s) => s.extensions))
+        : const <Extension>[];
+    final extensionReadiness = _showsSearch
+        ? ref.watch(
+            extensionProvider.select(
+              (s) => (isInitialized: s.isInitialized, error: s.error),
+            ),
+          )
+        : (isInitialized: true, error: null);
 
+    // The feed belongs to Search: Home is the person's own page.
     final hasExploreContent =
-        _showsHome &&
+        _showsSearch &&
         ref.watch(exploreProvider.select((s) => s.sections.isNotEmpty));
     final explorePending =
-        _showsHome &&
+        _showsSearch &&
         ref.watch(
           exploreProvider.select(
             (s) => s.isLoading || (s.lastFetched == null && s.error == null),
           ),
         );
     final hasHomeFeedExtension =
-        _showsHome && ref.watch(homeFeedExtensionProvider) != null;
+        _showsSearch && ref.watch(homeFeedExtensionProvider) != null;
     final homeFeedDisabled =
-        _showsHome &&
+        _showsSearch &&
         ref.watch(
           settingsProvider.select(
             (s) => s.homeFeedProvider == AppSettings.homeFeedProviderOff,
@@ -859,10 +910,37 @@ class _HomeTabState extends ConsumerState<HomeTab>
         ref.watch(trackProvider.select((s) => s.isShowingRecentAccess));
     final screenHeight = MediaQuery.heightOf(context);
 
+    final isSearchProviderLoading =
+        !extensionReadiness.isInitialized && extensionReadiness.error == null;
+    final hasSearchProvider = HomeSearchProviderPolicy.hasProvider(
+      explicitSearchProvider,
+      extensions,
+    );
+    final searchToolbar = _offersLibraryScope;
+    // Search opens on the feed when one shows or may still arrive. The
+    // Mornye desktop page turns it into Browse tiles instead.
+    final feedExpected =
+        _showsSearch &&
+        !searchToolbar &&
+        !homeFeedDisabled &&
+        (hasExploreContent ||
+            isSearchProviderLoading ||
+            (hasHomeFeedExtension && explorePending));
+    // Nothing to search with and nothing to browse: the page says so.
+    final nothingToSearch =
+        _showsSearch &&
+        !searchToolbar &&
+        !isSearchProviderLoading &&
+        !hasSearchProvider &&
+        !hasHomeFeedExtension &&
+        !hasExploreContent;
+    // Recent searches wait for the field while a feed fills the page; without
+    // one, and on the Mornye desktop page, they are what Search opens on.
     final recentModeRequested =
-        widget.mode == HomeTabMode.search ||
+        searchToolbar ||
         isShowingRecentAccess ||
-        isSearchFocused;
+        isSearchFocused ||
+        (_showsSearch && !feedExpected && !nothingToSearch);
     final showRecentAccess =
         recentModeRequested &&
         (!hasSearchInput ||
@@ -871,55 +949,27 @@ class _HomeTabState extends ConsumerState<HomeTab>
                 !hasSearchError &&
                 !hasActiveSearchSurface)) &&
         !isLoading;
-    final isSearchProviderLoading =
-        !extensionReadiness.isInitialized && extensionReadiness.error == null;
-    final hasSearchProvider = HomeSearchProviderPolicy.hasProvider(
-      explicitSearchProvider,
-      extensions,
-    );
-    final showSearchBar =
-        _showsSearch &&
-        (widget.mode == HomeTabMode.search ||
-            HomeSearchProviderPolicy.shouldShowSearchBar(
-              hasSearchProvider: hasSearchProvider,
-              isSearchProviderLoading: isSearchProviderLoading,
-              hasHomeFeedExtension: hasHomeFeedExtension,
-              hasExploreContent: hasExploreContent,
-              hasSearchInput: hasSearchInput,
-            ));
     final hasResults =
         hasSearchInput || hasActualResults || isLoading || showRecentAccess;
     final showExplore =
-        _showsHome &&
+        feedExpected &&
         !hasActualResults &&
         !isLoading &&
         !hasActiveSearchSurface &&
         !showRecentAccess &&
-        !homeFeedDisabled &&
-        (hasHomeFeedExtension || hasExploreContent) &&
         hasExploreContent;
     // Unknown extensions and an unresolved first feed are loading states,
-    // not evidence that Home should mount its local-only fallback.
+    // not evidence that Search has nothing to open on.
     final showExploreLoading =
-        _showsHome &&
+        feedExpected &&
         !hasActualResults &&
         !isLoading &&
         !hasActiveSearchSurface &&
         !showRecentAccess &&
-        !homeFeedDisabled &&
-        !hasExploreContent &&
-        (isSearchProviderLoading || (hasHomeFeedExtension && explorePending));
-    final showFeedSurface = showExplore || showExploreLoading;
-    // Only a surface with a search field asks for a search provider. The
-    // Mornye Home browses without one, so it never stops at this prompt.
-    final showEmptyHomeState =
-        _showsSearch &&
-        !isSearchProviderLoading &&
-        !hasSearchProvider &&
-        !hasHomeFeedExtension &&
-        !hasExploreContent &&
-        !hasResults;
-    final searchToolbar = _offersLibraryScope;
+        !hasExploreContent;
+    // Only Search asks for a search provider. Home works without one, so
+    // it never stops at this prompt.
+    final showEmptyHomeState = nothingToSearch && !hasResults;
     final showLibraryResults = _searchingLibrary && hasSearchInput;
     // The library scope waits for input before showing local matches.
     final showLibraryPrompt = _searchingLibrary && !hasSearchInput;
@@ -928,12 +978,9 @@ class _HomeTabState extends ConsumerState<HomeTab>
     // spring, whose overshoot is a thousandth of the travel, and Mornye's
     // spring. Reduced motion resizes at once.
     final sectionMotion = AppMotion.surface(context);
-    // Without a feed, Home gathers the player, shortcuts and Library shelves.
-    final showHomeSections =
-        _showsHome && !showFeedSurface && !showEmptyHomeState;
-    // The Material Home also greets in its header. A feed brings its own
-    // greeting, and the Mornye style keeps its navigation title.
-    final greetsInHeader = showHomeSections && !context.isMornye;
+    // The Material Home greets in its header; the Mornye style keeps its
+    // navigation title.
+    final greetsInHeader = _showsHome && !context.isMornye;
     final greeting = greetsInHeader
         ? homeGreeting(
             context.l10n,
@@ -982,6 +1029,10 @@ class _HomeTabState extends ConsumerState<HomeTab>
         if (_searchFocusNode.hasFocus) {
           _searchFocusNode.unfocus();
         }
+        // A tap beside an empty field leaves recent searches for the feed.
+        if (_showsSearch && _urlController.text.trim().isEmpty) {
+          ref.read(trackProvider.notifier).setShowingRecentAccess(false);
+        }
       },
       behavior: HitTestBehavior.translucent,
       child: Scaffold(
@@ -996,22 +1047,17 @@ class _HomeTabState extends ConsumerState<HomeTab>
                 _buildDesktopSearchToolbarSliver()
               else
                 _buildHeaderSliver(greeting: greeting),
+              if (_showsHome)
+                const SliverToBoxAdapter(child: _HomeStatusLine()),
               AppRefreshIndicator.sliver(enabled: showExplore),
               if (_showsHome) const SliverToBoxAdapter(child: AppCrashBanner()),
+              if (_showsSearch && !searchToolbar) _buildSearchBarSliver(),
               _buildHomeIntroSliver(
                 sectionMotion: sectionMotion,
-                hasResults: hasResults,
-                showExplore: showFeedSurface,
                 colorScheme: colorScheme,
                 screenHeight: screenHeight,
                 showEmptyHomeState: showEmptyHomeState,
               ),
-              if (showSearchBar && !searchToolbar)
-                _buildSearchBarSliver(
-                  hasResults: hasResults,
-                  showExplore: showFeedSurface,
-                  greetsInHeader: greetsInHeader,
-                ),
               if (hasActiveSearchSurface &&
                   !showRecentAccess &&
                   !showLibraryResults)
@@ -1028,13 +1074,7 @@ class _HomeTabState extends ConsumerState<HomeTab>
                   !_searchingLibrary &&
                   !homeFeedDisabled)
                 _buildBrowseSliver(),
-              _buildHomeSectionsSliver(
-                sectionMotion: sectionMotion,
-                hasResults: hasResults,
-                showRecentAccess: showRecentAccess,
-                showExplore: showFeedSurface,
-                showEmptyHomeState: showEmptyHomeState,
-              ),
+              _buildHomeSectionsSliver(sectionMotion),
               if (showExplore) _buildExploreSliver(colorScheme: colorScheme),
               if (showExploreLoading) _buildExploreLoadingSliver(),
               if (_showsSearch && !showLibraryResults)
@@ -1215,8 +1255,6 @@ class _HomeTabState extends ConsumerState<HomeTab>
 
   Widget _buildHomeIntroSliver({
     required AppMotionSpec sectionMotion,
-    required bool hasResults,
-    required bool showExplore,
     required ColorScheme colorScheme,
     required double screenHeight,
     required bool showEmptyHomeState,
@@ -1224,37 +1262,30 @@ class _HomeTabState extends ConsumerState<HomeTab>
     return SliverToBoxAdapter(
       child: _resizeSection(
         // A provider installed offscreen replaces the empty panel without
-        // carrying its height into the compact intro on the first frame.
+        // carrying its height into the first frame after it.
         key: ValueKey(showEmptyHomeState),
         sectionMotion,
-        (hasResults || showExplore || !_showsHome)
+        // The greeting leads straight into Home's sections; only a Search
+        // page with nothing to search explains itself here.
+        !showEmptyHomeState
             ? const SizedBox.shrink()
-            : _buildHomeIntro(
+            : _buildEmptyHomeState(
                 colorScheme: colorScheme,
                 screenHeight: screenHeight,
-                showEmptyHomeState: showEmptyHomeState,
               ),
       ),
     );
   }
 
-  Widget _buildSearchBarSliver({
-    required bool hasResults,
-    required bool showExplore,
-    required bool greetsInHeader,
-  }) {
+  Widget _buildSearchBarSliver() {
     return SliverToBoxAdapter(
       child: Padding(
         // Centered with the search results on tablets.
         padding: EdgeInsets.fromLTRB(
           16 + homeContentInset(context),
-          (hasResults || showExplore)
-              ? 8
-              : greetsInHeader
-              ? 20
-              : 32,
+          8,
           16 + homeContentInset(context),
-          (hasResults || showExplore) ? 8 : 16,
+          8,
         ),
         child: _buildSearchBar(),
       ),
@@ -1343,21 +1374,11 @@ class _HomeTabState extends ConsumerState<HomeTab>
     );
   }
 
-  Widget _buildHomeSectionsSliver({
-    required AppMotionSpec sectionMotion,
-    required bool hasResults,
-    required bool showRecentAccess,
-    required bool showExplore,
-    required bool showEmptyHomeState,
-  }) {
+  Widget _buildHomeSectionsSliver(AppMotionSpec sectionMotion) {
     return SliverToBoxAdapter(
       child: _resizeSection(
         sectionMotion,
-        (!_showsHome ||
-                hasResults ||
-                showRecentAccess ||
-                showExplore ||
-                showEmptyHomeState)
+        !_showsHome
             ? const SizedBox.shrink()
             : _HomeSections(inset: 16 + homeContentInset(context)),
       ),
@@ -1388,33 +1409,9 @@ class _HomeTabState extends ConsumerState<HomeTab>
         final exploreSections = ref.watch(
           exploreProvider.select((s) => s.sections),
         );
-        // The feed decides whether a greeting shows; its words
-        // are localized here and address the profile name.
-        final showGreeting =
-            ref.watch(exploreProvider.select((s) => s.greeting)) != null;
-        final profileName = ref.watch(
-          userProfileProvider.select((p) => p.value?.name ?? ''),
-        );
+        // Home greets; the feed on Search opens with its first section.
         return SliverMainAxisGroup(
-          slivers: [
-            // Mornye opens with Top Picks whether or not the feed follows.
-            if (context.isMornye && _HomeTopPicksSection.hasPicks(ref))
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 8, bottom: 12),
-                  child: _HomeTopPicksSection(
-                    inset: 16 + homeContentInset(context),
-                  ),
-                ),
-              ),
-            ..._buildExploreSections(
-              exploreSections,
-              showGreeting
-                  ? homeGreeting(context.l10n, name: profileName)
-                  : null,
-              colorScheme,
-            ),
-          ],
+          slivers: _buildExploreSections(exploreSections, colorScheme),
         );
       },
     );
@@ -1538,61 +1535,44 @@ class _HomeTabState extends ConsumerState<HomeTab>
     );
   }
 
-  Widget _buildHomeIntro({
+  Widget _buildEmptyHomeState({
     required ColorScheme colorScheme,
     required double screenHeight,
-    required bool showEmptyHomeState,
   }) {
-    if (showEmptyHomeState) {
-      final emptyHeight = (screenHeight - 220).clamp(280.0, 520.0).toDouble();
-      return SizedBox(
-        height: emptyHeight,
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.extension_outlined,
-                  size: 56,
+    final emptyHeight = (screenHeight - 220).clamp(280.0, 520.0).toDouble();
+    return SizedBox(
+      height: emptyHeight,
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.extension_outlined,
+                size: 56,
+                color: colorScheme.onSurfaceVariant,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                context.l10n.homeEmptyTitle,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                context.l10n.homeEmptySubtitle,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   color: colorScheme.onSurfaceVariant,
                 ),
-                const SizedBox(height: 16),
-                Text(
-                  context.l10n.homeEmptyTitle,
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    color: colorScheme.onSurfaceVariant,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  context.l10n.homeEmptySubtitle,
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
-      );
-    }
-
-    // The Mornye style uses the navigation title as the page identity. Keep
-    // the search surface directly beneath it instead of repeating app branding
-    // in the content area.
-    if (context.isMornye) return const SizedBox.shrink();
-
-    // The header carries the greeting; prompts take turns beneath it.
-    return Padding(
-      padding: EdgeInsets.symmetric(horizontal: 24 + homeContentInset(context)),
-      child: const Align(
-        alignment: AlignmentDirectional.centerStart,
-        child: _HomeTagline(),
       ),
     );
   }

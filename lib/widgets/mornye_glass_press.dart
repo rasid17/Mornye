@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/physics.dart';
+import 'package:mornye/theme/app_motion.dart';
 
 /// How far the press value rests while a mouse is over the control.
 const double _hoverLevel = 0.3;
@@ -34,13 +35,6 @@ class MornyeGlassPress extends StatefulWidget {
 
 class _MornyeGlassPressState extends State<MornyeGlassPress>
     with SingleTickerProviderStateMixin {
-  // Underdamped, so a release overshoots a little and settles.
-  static const _spring = SpringDescription(
-    mass: 1,
-    stiffness: 420,
-    damping: 24,
-  );
-
   late final AnimationController _press = AnimationController.unbounded(
     vsync: this,
   );
@@ -79,7 +73,7 @@ class _MornyeGlassPressState extends State<MornyeGlassPress>
     }
     _press.animateWith(
       SpringSimulation(
-        _spring,
+        MornyeMotion.glassPressSpring,
         _press.value,
         target,
         _press.velocity,
@@ -133,7 +127,15 @@ class _MornyeGlassPressState extends State<MornyeGlassPress>
         },
         child: AnimatedBuilder(
           animation: _motion,
-          child: widget.child,
+          child: CustomPaint(
+            foregroundPainter: _GlassLightPainter(
+              repaint: _motion,
+              readCenter: () => _pointer,
+              readStrength: () => _press.value.clamp(0.0, 1.0),
+              radius: radius,
+            ),
+            child: RepaintBoundary(child: widget.child),
+          ),
           builder: (context, child) {
             final press = _press.value;
             // These stay in the tree at rest: inserting one mid-press would
@@ -145,14 +147,7 @@ class _MornyeGlassPressState extends State<MornyeGlassPress>
                   : _deformation(press),
               // The control answers at its resting bounds.
               transformHitTests: false,
-              child: CustomPaint(
-                foregroundPainter: _GlassLightPainter(
-                  center: _pointer,
-                  strength: press.clamp(0.0, 1.0),
-                  radius: radius,
-                ),
-                child: child,
-              ),
+              child: child,
             );
           },
         ),
@@ -183,25 +178,25 @@ class _MornyeGlassPressState extends State<MornyeGlassPress>
 /// backdrop read, so it costs the same over any page.
 class _GlassLightPainter extends CustomPainter {
   const _GlassLightPainter({
-    required this.center,
-    required this.strength,
+    required Listenable repaint,
+    required this.readCenter,
+    required this.readStrength,
     required this.radius,
-  });
+  }) : super(repaint: repaint);
 
-  final Offset? center;
-  final double strength;
+  final Offset? Function() readCenter;
+  final double Function() readStrength;
   final double radius;
 
   @override
   void paint(Canvas canvas, Size size) {
+    final strength = readStrength();
     if (strength <= 0) return;
     final bounds = Offset.zero & size;
-    final focus = center ?? bounds.center;
+    final focus = readCenter() ?? bounds.center;
     final reach = size.longestSide.clamp(40.0, 180.0);
-    canvas.save();
-    canvas.clipRRect(RRect.fromRectAndRadius(bounds, Radius.circular(radius)));
-    canvas.drawRect(
-      bounds,
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(bounds, Radius.circular(radius)),
       Paint()
         ..shader = RadialGradient(
           colors: [
@@ -210,12 +205,9 @@ class _GlassLightPainter extends CustomPainter {
           ],
         ).createShader(Rect.fromCircle(center: focus, radius: reach)),
     );
-    canvas.restore();
   }
 
   @override
   bool shouldRepaint(covariant _GlassLightPainter oldDelegate) =>
-      center != oldDelegate.center ||
-      strength != oldDelegate.strength ||
       radius != oldDelegate.radius;
 }

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_3_expressive/material_3_expressive.dart' show M3ETheme;
 import 'package:mornye/controllers/player_metadata_controller.dart';
 import 'package:mornye/l10n/l10n.dart';
+import 'package:mornye/models/settings.dart';
 import 'package:mornye/providers/music_player_provider.dart';
 import 'package:mornye/providers/settings_provider.dart';
 import 'package:mornye/services/link/link_source_names.dart';
@@ -93,8 +94,13 @@ class PlayerPlaybackControls extends ConsumerWidget {
               valueListenable: seekPreview,
               builder: (context, preview, _) => Consumer(
                 builder: (context, ref, quality) {
-                  final position = ref.watch(playbackPositionProvider);
-                  final playback = ref.watch(playbackStateProvider).value;
+                  final visible = TickerMode.valuesOf(context).enabled;
+                  final position = visible
+                      ? ref.watch(playbackPositionProvider)
+                      : ref.read(playbackPositionProvider);
+                  final playback = visible
+                      ? ref.watch(playbackStateProvider).value
+                      : ref.read(playbackStateProvider).value;
                   return Padding(
                     padding: EdgeInsets.symmetric(
                       horizontal: edgeAligned
@@ -416,19 +422,28 @@ class PlayerPlaybackModeButton extends ConsumerWidget {
     required this.mode,
     required this.colorScheme,
     this.secondary = false,
+    this.size = 48,
+    this.iconSize = 24,
+    this.enabled = true,
   });
 
   final PlayerPlaybackMode mode;
   final ColorScheme colorScheme;
   final bool secondary;
 
+  /// Material only: the button's height and width.
+  final double size;
+  final double iconSize;
+  final bool enabled;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final (:selected, :icon, :tooltip, :onPressed) = _watchPlaybackMode(
+    final (:selected, :icon, :tooltip, onPressed: toggle) = _watchPlaybackMode(
       context,
       ref,
       mode,
     );
+    final onPressed = enabled ? toggle : null;
     if (context.isMornye) {
       // Plain over the player's backdrop; a fill marks the active mode, as
       // on the capsule.
@@ -452,7 +467,8 @@ class PlayerPlaybackModeButton extends ConsumerWidget {
       );
     }
     return ExpressiveIconButton(
-      iconSize: 24,
+      size: size,
+      iconSize: iconSize,
       selected: selected,
       tooltip: tooltip,
       icon: Icon(icon),
@@ -507,12 +523,13 @@ class _PlayerPlaybackModeToolbarState extends State<PlayerPlaybackModeToolbar>
           ? _segmentWidth
           : _segmentWidth *
                 (pressed == index ? 1 + squishRatio : 1 - squishRatio);
+      final motion = pressMotion;
       return pressSlot(
         index,
         TweenAnimationBuilder<double>(
           tween: Tween(end: width),
-          duration: pressSpring.duration,
-          curve: pressSpring,
+          duration: motion.duration,
+          curve: motion.curve,
           builder: (context, width, segment) =>
               SizedBox(width: width, height: height, child: segment),
           child: _PlaybackModeSegment(
@@ -613,20 +630,29 @@ class _PlaybackModeSegment extends ConsumerWidget {
   }
 }
 
-class _QualityBadge extends StatelessWidget {
+class _QualityBadge extends ConsumerWidget {
   final PlayerMetadataController metadata;
   final ColorScheme colorScheme;
 
   const _QualityBadge({required this.metadata, required this.colorScheme});
 
   @override
-  Widget build(BuildContext context) => ListenableBuilder(
-    listenable: metadata,
-    builder: (context, _) => _buildBadge(context),
-  );
+  Widget build(BuildContext context, WidgetRef ref) {
+    // The Library's Simple label mode shortens this line as well.
+    final simple = ref.watch(
+      settingsProvider.select(
+        (s) =>
+            s.libraryQualityLabelMode == AppSettings.libraryQualityLabelSimple,
+      ),
+    );
+    return ListenableBuilder(
+      listenable: metadata,
+      builder: (context, _) => _buildBadge(context, simple: simple),
+    );
+  }
 
-  Widget _buildBadge(BuildContext context) {
-    final text = metadata.qualityLabel;
+  Widget _buildBadge(BuildContext context, {required bool simple}) {
+    final text = simple ? metadata.simpleQualityLabel : metadata.qualityLabel;
     if (text == null || text.isEmpty) return const SizedBox.shrink();
     final mornye = context.isMornye;
     final radius = BorderRadius.circular(20);
@@ -638,15 +664,15 @@ class _QualityBadge extends StatelessWidget {
       decoration: mornye
           ? null
           : BoxDecoration(
-              color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+              color: colorScheme.surfaceContainerHigh,
               borderRadius: radius,
             ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          AppIcon(
+          AppIcon.adaptive(
             Icons.graphic_eq,
-            size: mornye ? 11 : 14,
+            size: mornye ? 12 : 14,
             color: colorScheme.onSurfaceVariant,
           ),
           SizedBox(width: mornye ? 5 : 6),
@@ -656,7 +682,7 @@ class _QualityBadge extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                fontSize: mornye ? 10.5 : 12,
+                fontSize: mornye ? 11 : 12,
                 color: colorScheme.onSurfaceVariant,
                 letterSpacing: 0.2,
               ),
@@ -684,7 +710,13 @@ class _QualityBadge extends StatelessWidget {
                 listen: false,
               ).read(linkSourceNamesProvider),
             ),
-            child: badge,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                minHeight: mornye ? 44 : 48,
+                minWidth: mornye ? 44 : 48,
+              ),
+              child: Center(widthFactor: 1, child: badge),
+            ),
           ),
         ),
       ),

@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart' show LogicalKeyboardKey;
@@ -477,7 +476,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen>
   /// Desktop folders are plain paths: no SAF tree and no iOS bookmark.
   Future<void> _pickDesktopDirectory() async {
     final title = context.l10n.setupDownloadLocationTitle;
-    final picked = await FilePicker.getDirectoryPath(
+    final picked = await pickDesktopDirectoryPath(
       dialogTitle: title,
       initialDirectory: await resolveDesktopPickerInitialDirectory(
         _selectedDirectory,
@@ -518,86 +517,102 @@ class _SetupScreenState extends ConsumerState<SetupScreen>
                 ),
               ),
             ),
-            ListTile(
-              leading: Icon(Icons.folder_special, color: colorScheme.primary),
-              title: Text(context.l10n.setupAppDocumentsFolder),
-              onTap: () async {
-                final dir = await _getDefaultDirectory();
-                if (!mounted) return;
-                setState(() {
-                  _selectedDirectory = dir;
-                  _selectedDirectoryBookmark = null;
-                });
-                if (ctx.mounted) Navigator.pop(ctx);
-                await _saveProgress();
-              },
-            ),
-            ListTile(
-              leading: Icon(Icons.cloud, color: colorScheme.onSurfaceVariant),
-              title: Text(context.l10n.setupChooseFromFiles),
-              onTap: () async {
-                Navigator.pop(ctx);
-                await Future<void>.delayed(const Duration(milliseconds: 250));
+            AppSheetOptions(
+              children: [
+                ListTile(
+                  leading: Icon(
+                    Icons.folder_special,
+                    color: colorScheme.primary,
+                  ),
+                  title: Text(context.l10n.setupAppDocumentsFolder),
+                  onTap: () async {
+                    final dir = await _getDefaultDirectory();
+                    if (!mounted) return;
+                    setState(() {
+                      _selectedDirectory = dir;
+                      _selectedDirectoryBookmark = null;
+                    });
+                    if (ctx.mounted) Navigator.pop(ctx);
+                    await _saveProgress();
+                  },
+                ),
+                ListTile(
+                  leading: Icon(
+                    Icons.cloud,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                  title: Text(context.l10n.setupChooseFromFiles),
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    await Future<void>.delayed(
+                      const Duration(milliseconds: 250),
+                    );
 
-                IosPickedDirectory? picked;
-                try {
-                  picked = await PlatformBridge.pickIosDirectory();
-                } catch (e) {
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          context.l10n.snackbarFolderPickerFailed(
-                            context.friendlyError(e),
+                    IosPickedDirectory? picked;
+                    try {
+                      picked = await PlatformBridge.pickIosDirectory();
+                    } catch (e) {
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              context.l10n.snackbarFolderPickerFailed(
+                                context.friendlyError(e),
+                              ),
+                            ),
+                            backgroundColor: Theme.of(
+                              context,
+                            ).colorScheme.error,
+                            duration: const Duration(seconds: 4),
                           ),
-                        ),
-                        backgroundColor: Theme.of(context).colorScheme.error,
-                        duration: const Duration(seconds: 4),
-                      ),
-                    );
-                  }
-                  return;
-                }
+                        );
+                      }
+                      return;
+                    }
 
-                if (picked == null) {
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(context.l10n.setupNoFolderSelected),
-                      ),
-                    );
-                  }
-                  return;
-                }
+                    if (picked == null) {
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(context.l10n.setupNoFolderSelected),
+                          ),
+                        );
+                      }
+                      return;
+                    }
 
-                final validation = validateIosPath(
-                  picked.path,
-                  bookmark: picked.bookmark,
-                );
-                if (!validation.isValid) {
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          validation.errorReason ??
-                              context.l10n.errorInvalidFolderSelected,
-                        ),
-                        backgroundColor: Theme.of(context).colorScheme.error,
-                        duration: const Duration(seconds: 4),
-                      ),
+                    final validation = validateIosPath(
+                      picked.path,
+                      bookmark: picked.bookmark,
                     );
-                  }
-                  return;
-                }
+                    if (!validation.isValid) {
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              validation.errorReason ??
+                                  context.l10n.errorInvalidFolderSelected,
+                            ),
+                            backgroundColor: Theme.of(
+                              context,
+                            ).colorScheme.error,
+                            duration: const Duration(seconds: 4),
+                          ),
+                        );
+                      }
+                      return;
+                    }
 
-                final pickedDir = picked;
-                if (!mounted) return;
-                setState(() {
-                  _selectedDirectory = pickedDir.path;
-                  _selectedDirectoryBookmark = pickedDir.bookmark;
-                });
-                await _saveProgress();
-              },
+                    final pickedDir = picked;
+                    if (!mounted) return;
+                    setState(() {
+                      _selectedDirectory = pickedDir.path;
+                      _selectedDirectoryBookmark = pickedDir.bookmark;
+                    });
+                    await _saveProgress();
+                  },
+                ),
+              ],
             ),
             const SizedBox(height: 16),
           ],

@@ -40,12 +40,29 @@ class PlayerWidgetProvider : AppWidgetProvider() {
     }
 
     override fun onUpdate(context: Context, manager: AppWidgetManager, ids: IntArray) {
-        update(context, ids)
+        val pending = goAsync()
+        val appContext = context.applicationContext
+        val copy = ids.copyOf()
+        widgetExecutor.execute {
+            try {
+                update(appContext, copy)
+            } finally {
+                pending.finish()
+            }
+        }
         PlayerWidgetBridge.installedWidgetsChanged(context)
     }
 
     override fun onAppWidgetOptionsChanged(context: Context, manager: AppWidgetManager, id: Int, options: Bundle) {
-        update(context, intArrayOf(id))
+        val pending = goAsync()
+        val appContext = context.applicationContext
+        widgetExecutor.execute {
+            try {
+                update(appContext, intArrayOf(id))
+            } finally {
+                pending.finish()
+            }
+        }
     }
 
     override fun onDeleted(context: Context, ids: IntArray) {
@@ -89,6 +106,11 @@ class PlayerWidgetProvider : AppWidgetProvider() {
     companion object {
         const val ACTION = "com.zarz.mornye.PLAYER_WIDGET_ACTION"
         const val COMMAND = "player_widget_command"
+        private const val DISABLED_ALPHA = 0.38f
+        // One thread renders every widget update, so an older frame never lands last.
+        internal val widgetExecutor = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "MornyePlayerWidget").apply { isDaemon = true }
+        }
         fun preferences(context: Context) = context.getSharedPreferences("player_widget", Context.MODE_PRIVATE)
 
         fun installedCount(context: Context): Int = AppWidgetManager.getInstance(context)
@@ -174,7 +196,16 @@ class PlayerWidgetProvider : AppWidgetProvider() {
                 views.setInt(shape, "setColorFilter", fill)
                 views.setImageViewResource(icon, iconRes)
                 views.setInt(icon, "setColorFilter", tint)
-                views.setFloat(root, "setAlpha", if (enabled) 1f else 0.38f)
+                // A widget may set a view's alpha only from Android 12; before
+                // it the call fails the whole widget, so the two images of
+                // the button dim instead.
+                if (Build.VERSION.SDK_INT >= 31) {
+                    views.setFloat(root, "setAlpha", if (enabled) 1f else DISABLED_ALPHA)
+                } else {
+                    val alpha = if (enabled) 255 else (DISABLED_ALPHA * 255).toInt()
+                    views.setInt(shape, "setImageAlpha", alpha)
+                    views.setInt(icon, "setImageAlpha", alpha)
+                }
                 views.setBoolean(root, "setEnabled", enabled)
                 views.setOnClickPendingIntent(root, PendingIntent.getBroadcast(
                     context, 8200 + command.hashCode(),
@@ -326,7 +357,7 @@ object PlayerWidgetBridge : FlutterEngine.EngineLifecycleListener {
     private var channel: MethodChannel? = null
     private var ready = false
     private var pendingCommand: String? = null
-    private val worker = Executors.newSingleThreadExecutor()
+    private val worker = PlayerWidgetProvider.widgetExecutor
     private val main = Handler(Looper.getMainLooper())
 
     fun attach(context: Context, flutterEngine: FlutterEngine) {

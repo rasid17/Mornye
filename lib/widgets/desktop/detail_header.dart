@@ -6,6 +6,7 @@ import 'package:mornye/theme/cover_palette.dart';
 import 'package:mornye/theme/mornye_theme.dart';
 import 'package:mornye/theme/player_artwork_theme.dart';
 import 'package:mornye/utils/adaptive_layout.dart';
+import 'package:mornye/utils/image_cache_utils.dart';
 import 'package:mornye/widgets/album_detail_header.dart';
 import 'package:mornye/widgets/app_icon.dart';
 import 'package:mornye/widgets/app_icon_button.dart';
@@ -21,7 +22,7 @@ const double _toolbarHeight = 52;
 /// The header artwork side for a content column: about a third of it, from
 /// 200 to 300.
 double desktopDetailArtworkSize(double contentWidth) =>
-    (contentWidth * 0.32).clamp(200.0, 300.0);
+    (contentWidth * 0.32).clamp(200.0, desktopDetailArtworkMaxSize);
 
 /// The artist line under a desktop detail title, large and in the accent color.
 ///
@@ -29,14 +30,15 @@ double desktopDetailArtworkSize(double contentWidth) =>
 /// a Material header takes the accent of its artwork scheme.
 TextStyle desktopDetailSubtitleStyle(BuildContext context) {
   final scheme = Theme.of(context).colorScheme;
+  final textTheme = Theme.of(context).textTheme;
   return context.isMornye
-      ? TextStyle(
+      ? (textTheme.headlineSmall ?? const TextStyle()).copyWith(
           color: scheme.primary,
           fontSize: 24,
           fontWeight: FontWeight.w400,
           height: 1.2,
         )
-      : (Theme.of(context).textTheme.titleLarge ?? const TextStyle()).copyWith(
+      : (textTheme.titleLarge ?? const TextStyle()).copyWith(
           color: scheme.primary,
           fontWeight: FontWeight.w500,
         );
@@ -103,7 +105,7 @@ List<Widget> desktopDetailHeaderSlivers(
           maxLines: 3,
           overflow: TextOverflow.ellipsis,
           style: mornye
-              ? const TextStyle(
+              ? Theme.of(context).textTheme.headlineMedium?.copyWith(
                   fontSize: 28,
                   fontWeight: FontWeight.w700,
                   height: 1.15,

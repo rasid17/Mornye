@@ -101,6 +101,9 @@ Future<(ScrollController, StreamController<MediaItem?>)> _pump(
 
 Finder _row(int index) => find.widgetWithText(ListTile, 'Song $index');
 
+/// The gap between two rows of the connected group.
+const _rowGap = 2.0;
+
 double _listTop(WidgetTester tester) =>
     tester.getTopLeft(find.byType(ReorderableListView)).dy;
 
@@ -112,7 +115,7 @@ void main() {
 
     expect(_row(0), findsNothing);
     expect(_row(20), findsOneWidget);
-    final rowHeight = tester.getSize(_row(20)).height;
+    final rowHeight = tester.getSize(_row(20)).height + _rowGap;
     expect(scroll.offset, moreOrLessEquals(19 * rowHeight));
     expect(tester.getTopLeft(_row(19)).dy, moreOrLessEquals(_listTop(tester)));
   });
@@ -154,7 +157,7 @@ void main() {
     final queue = [for (var i = 0; i < 3000; i++) _CountedItem(i, builds)];
     final (scroll, _) = await _pump(tester, playing: 2500, queue: queue);
 
-    final rowHeight = tester.getSize(_row(2500)).height;
+    final rowHeight = tester.getSize(_row(2500)).height + _rowGap;
     expect(scroll.offset, moreOrLessEquals(2499 * rowHeight));
     expect(
       tester.getTopLeft(_row(2499)).dy,
@@ -178,6 +181,50 @@ void main() {
     await tester.pumpAndSettle();
     expect(_row(2494), findsOneWidget);
     expect(_row(2496), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a short queue gets a sheet that ends at its last song', (
+    tester,
+  ) async {
+    await _pump(
+      tester,
+      playing: 0,
+      sheet: true,
+      queue: _defaultQueue.sublist(0, 2),
+    );
+    final list = find.byType(ReorderableListView);
+    // The list's own padding is all that follows the last song.
+    expect(
+      tester.getBottomLeft(list).dy - tester.getBottomLeft(_row(1)).dy,
+      moreOrLessEquals(24),
+    );
+    expect(
+      tester.getSize(list).height,
+      moreOrLessEquals(2 * tester.getSize(_row(0)).height + _rowGap + 24),
+    );
+  });
+
+  testWidgets('the songs are one connected group of rows', (tester) async {
+    await _pump(tester, playing: 0, queue: _defaultQueue.sublist(0, 3));
+    Finder surface(int index) =>
+        find.ancestor(of: _row(index), matching: find.byType(Material)).first;
+    BorderRadius corners(int index) =>
+        ((tester.widget<Material>(surface(index)).shape!
+                    as RoundedRectangleBorder)
+                .borderRadius
+            as BorderRadius);
+
+    // Each row is its own surface, a small gap from the next.
+    expect(
+      tester.getTopLeft(surface(1)).dy - tester.getBottomLeft(surface(0)).dy,
+      moreOrLessEquals(_rowGap),
+    );
+    // Large corners close the group, small ones join the rows inside it.
+    expect(corners(0).topLeft.x, greaterThan(corners(0).bottomLeft.x));
+    expect(corners(1).topLeft, corners(1).bottomLeft);
+    expect(corners(2).bottomLeft.x, greaterThan(corners(2).topLeft.x));
+    expect(tester.takeException(), isNull);
     expect(tester.takeException(), isNull);
   });
 

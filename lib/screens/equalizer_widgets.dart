@@ -48,7 +48,7 @@ class _DetailValue extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 6),
-        AppIcon(Icons.chevron_right, size: 20, color: secondary),
+        AppIcon.adaptive(Icons.chevron_right, size: 20, color: secondary),
       ],
     );
   }
@@ -181,7 +181,7 @@ class _EqualizerOverview extends ConsumerWidget {
                         const SizedBox(width: 8),
                         Flexible(
                           child: Text(
-                            '${settings.gains.length} ${l10n.equalizerBands.toLowerCase()} · ${l10n.equalizerPreamp} ${_signed(settings.inputGain)} dB',
+                            '${settings.parametric ? l10n.equalizerFilterCount(settings.filters.length) : '${settings.gains.length} ${l10n.equalizerBands.toLowerCase()}'} · ${l10n.equalizerPreamp} ${_signed(settings.inputGain)} dB',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: theme.textTheme.bodyMedium?.copyWith(
@@ -212,21 +212,37 @@ class _EqualizerOverview extends ConsumerWidget {
             label: l10n.equalizerCurveDescription,
             child: SizedBox(
               height: 152,
-              child: TweenAnimationBuilder<Color?>(
-                tween: ColorTween(end: curveColor),
-                duration: recolor.duration,
-                curve: recolor.curve,
-                builder: (context, color, _) => CustomPaint(
-                  size: Size.infinite,
-                  painter: _EqualizerCurve(
-                    settings: settings,
-                    color: color ?? curveColor,
-                    grid: colors.outlineVariant,
-                    label: colors.onSurfaceVariant,
-                    labelStyle: theme.textTheme.labelSmall!,
-                    textScaler: MediaQuery.textScalerOf(context),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  RepaintBoundary(
+                    child: CustomPaint(
+                      size: Size.infinite,
+                      painter: _EqualizerGridPainter(
+                        grid: colors.outlineVariant,
+                        label: colors.onSurfaceVariant,
+                        labelStyle: theme.textTheme.labelSmall!,
+                        textScaler: MediaQuery.textScalerOf(context),
+                      ),
+                    ),
                   ),
-                ),
+                  TweenAnimationBuilder<Color?>(
+                    tween: ColorTween(end: curveColor),
+                    duration: recolor.duration,
+                    curve: recolor.curve,
+                    builder: (context, color, _) => RepaintBoundary(
+                      child: CustomPaint(
+                        size: Size.infinite,
+                        painter: _EqualizerCurve(
+                          settings: settings,
+                          color: color ?? curveColor,
+                          labelStyle: theme.textTheme.labelSmall!,
+                          textScaler: MediaQuery.textScalerOf(context),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -265,6 +281,9 @@ class _PresetBar extends ConsumerWidget {
     );
     final presets = [...EqualizerPreset.builtIn, ...custom];
     final selected = ref.watch(_selectedEqualizerPresetProvider);
+    final parametric = ref.watch(
+      equalizerProvider.select((state) => state.settings.parametric),
+    );
     final l10n = context.l10n;
     final tokens = context.tokens;
     return LayoutBuilder(
@@ -304,19 +323,26 @@ class _PresetBar extends ConsumerWidget {
               padding: EdgeInsets.symmetric(horizontal: inset),
               child: Row(
                 children: [
-                  Flexible(
-                    child: ExpressiveButton(
-                      onPressed: onSave,
-                      tonal: true,
-                      icon: const AppIcon(Icons.bookmark_add_outlined),
-                      child: Text(
-                        l10n.equalizerSavePreset,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                  // The button takes the room up to the icons and keeps its
+                  // own width at the start, so the icons end the row. A
+                  // Flexible beside a Spacer left them mid-row: the two
+                  // halved the free width and the button used little of its
+                  // half.
+                  Expanded(
+                    child: Align(
+                      alignment: AlignmentDirectional.centerStart,
+                      child: ExpressiveButton(
+                        onPressed: onSave,
+                        tonal: true,
+                        icon: const AppIcon(Icons.bookmark_add_outlined),
+                        child: Text(
+                          l10n.equalizerSavePreset,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
                     ),
                   ),
-                  const Spacer(),
                   ExpressiveIconButton(
                     tooltip: l10n.libraryFilterReset,
                     icon: const AppIcon(Icons.restart_alt),
@@ -343,6 +369,12 @@ class _PresetBar extends ConsumerWidget {
                         label: l10n.equalizerExport,
                         leading: const AppIcon(Icons.ios_share),
                       ),
+                      if (parametric)
+                        AppMenuItem(
+                          value: _PresetAction.exportFilters,
+                          label: l10n.equalizerExportFilters,
+                          leading: const AppIcon(Icons.description_outlined),
+                        ),
                     ],
                   ),
                 ],
@@ -491,12 +523,16 @@ class _BandEditor extends ConsumerWidget {
                     ),
                   ),
                   scrolls
-                      ? SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          padding: EdgeInsets.symmetric(
-                            horizontal: tokens.gapSm,
-                          ),
-                          child: faders,
+                      ? DesktopScrollArrows(
+                          builder: (context, controller) =>
+                              SingleChildScrollView(
+                                controller: controller,
+                                scrollDirection: Axis.horizontal,
+                                padding: EdgeInsets.symmetric(
+                                  horizontal: tokens.gapSm,
+                                ),
+                                child: faders,
+                              ),
                         )
                       : Padding(
                           padding: EdgeInsets.symmetric(

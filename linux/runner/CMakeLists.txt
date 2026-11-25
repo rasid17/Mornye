@@ -11,6 +11,7 @@ add_executable(${BINARY_NAME}
   "my_application.cc"
   "niri_workspace_follower.cc"
   "nvidia_graphics_workaround.cc"
+  "system_unwinder.cc"
   "wayland_subsurface_workaround.cc"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
 )
@@ -19,11 +20,12 @@ apply_standard_settings(${BINARY_NAME})
 
 add_definitions(-DAPPLICATION_ID="${APPLICATION_ID}")
 
-# libflutter_linux_gtk.so exports its own unwinder (_Unwind_RaiseException
-# and friends). Linked ahead of it, libgcc_s comes first in the symbol lookup
-# order, so a C++ exception or a LuaJIT error in libmpv unwinds with libgcc's
-# unwinder; libflutter's cannot walk LuaJIT's frames and crashed the app.
-target_link_libraries(${BINARY_NAME} PRIVATE "-Wl,--no-as-needed" gcc_s)
+# libgcc_s goes ahead of every other library the executable needs, so it is
+# found before the Flutter engine's own unwinder by the libraries loaded
+# later. See system_unwinder.h.
+target_link_options(${BINARY_NAME} PRIVATE
+  "LINKER:--push-state,--no-as-needed,-lgcc_s,--pop-state")
+
 target_link_libraries(${BINARY_NAME} PRIVATE flutter)
 target_link_libraries(${BINARY_NAME} PRIVATE PkgConfig::GTK)
 pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client)

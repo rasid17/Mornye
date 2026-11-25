@@ -10,11 +10,23 @@ extension _QueueTabItemWidgets on _QueueTabState {
     final selectedCount = _selectedIds.length;
     final allSelected =
         selectedCount == unifiedItems.length && unifiedItems.isNotEmpty;
-    final localOnlySelection = _isLocalOnlySelection(unifiedItems);
+    final selectedItems = _selectedItemsFromAll(unifiedItems);
+    final localOnlySelection =
+        selectedItems.isNotEmpty &&
+        selectedItems.every((item) => item.localItem != null);
+    final flacEligibleCount = localOnlySelection
+        ? selectedItems
+              .where(
+                (item) => LocalTrackRedownloadService.isFlacUpgradeEligible(
+                  item.localItem!,
+                ),
+              )
+              .length
+        : 0;
 
     return LibraryTrackSelectionBar(
       playbackActions: LibrarySelectionPlaybackActions(
-        items: _selectedItemsFromAll(unifiedItems),
+        items: selectedItems,
         onClose: _exitSelectionMode,
       ),
       selectedCount: selectedCount,
@@ -28,9 +40,7 @@ extension _QueueTabItemWidgets on _QueueTabState {
         }
       },
       bottomPadding: bottomPadding,
-      flacEligibleCount: localOnlySelection
-          ? _selectedFlacEligibleLocalItems(unifiedItems).length
-          : 0,
+      flacEligibleCount: flacEligibleCount,
       onQueueFlac: () => _queueSelectedLocalAsFlac(unifiedItems),
       onReEnrich: () => _reEnrichSelectedFromQueue(unifiedItems),
       onConvert: () => _showBatchConvertSheet(context, unifiedItems),
@@ -95,13 +105,9 @@ extension _QueueTabItemWidgets on _QueueTabState {
                     item.status == DownloadStatus.skipped
               ? () => _showDownloadErrorDialog(context, item)
               : null,
-          onLongPress: item.status == DownloadStatus.queued
-              ? () => _showQueuedItemMenu(context, item)
-              : null,
-          onContextMenu: item.status == DownloadStatus.queued
-              ? (position) =>
-                    _showQueuedItemMenu(context, item, position: position)
-              : null,
+          onLongPress: () => _showDownloadItemMenu(context, item),
+          onContextMenu: (position) =>
+              _showDownloadItemMenu(context, item, position: position),
           background: item.status == DownloadStatus.downloading
               ? SmoothedProgressBuilder(
                   builder: (context, progress, child) => Align(
@@ -128,6 +134,7 @@ extension _QueueTabItemWidgets on _QueueTabState {
           leading: isCompleted
               ? Hero(
                   tag: 'cover_${item.id}',
+                  transitionOnUserGestures: heroFollowsBackSwipe(context),
                   child: _buildCoverArt(item, colorScheme),
                 )
               : _buildCoverArt(item, colorScheme),
@@ -206,6 +213,7 @@ extension _QueueTabItemWidgets on _QueueTabState {
   bool _requiresFolderReselection(DownloadItem item) =>
       item.status == DownloadStatus.failed &&
       item.networkDownloadFolder.isEmpty &&
+      !isExtensionSandboxPathError(item.error) &&
       (item.errorType == DownloadErrorType.permission ||
           item.error == safPermissionLostErrorMessage ||
           item.error == downloadFolderAccessLostErrorMessage);
@@ -307,8 +315,6 @@ extension _QueueTabItemWidgets on _QueueTabState {
             width: coverSize,
             height: coverSize,
             borderRadius: radius,
-            fadeInDuration: const Duration(milliseconds: 180),
-            fadeOutDuration: const Duration(milliseconds: 90),
           )
         : Container(
             width: coverSize,
@@ -390,44 +396,61 @@ extension _QueueTabItemWidgets on _QueueTabState {
     );
   }
 
-  /// The queued download's actions: a menu at [position] on desktop, a
-  /// sheet elsewhere.
-  Future<void> _showQueuedItemMenu(
+  /// A download's actions: a menu at [position] on desktop, a sheet
+  /// elsewhere. Only a queued download is reordered or cancelled here.
+  Future<void> _showDownloadItemMenu(
     BuildContext context,
     DownloadItem item, {
     Offset? position,
   }) {
     final notifier = ref.read(downloadQueueProvider.notifier);
+    final track = item.track;
+    final root = Navigator.of(context, rootNavigator: true).context;
+    final isQueued = item.status == DownloadStatus.queued;
     if (position != null && isDesktopPlatform) {
       return showContextMenu(
         context,
         position: position,
         groups: [
+          if (isQueued)
+            [
+              ContextMenuAction(
+                icon: Icons.skip_next,
+                label: context.l10n.queueDownloadNext,
+                onSelected: () => notifier.downloadNext(item.id),
+              ),
+              ContextMenuAction(
+                icon: Icons.arrow_upward,
+                label: context.l10n.queueMoveUp,
+                onSelected: () => notifier.moveQueuedItem(item.id, -1),
+              ),
+              ContextMenuAction(
+                icon: Icons.arrow_downward,
+                label: context.l10n.queueMoveDown,
+                onSelected: () => notifier.moveQueuedItem(item.id, 1),
+              ),
+            ],
           [
             ContextMenuAction(
-              icon: Icons.skip_next,
-              label: context.l10n.queueDownloadNext,
-              onSelected: () => notifier.downloadNext(item.id),
+              icon: Icons.album_outlined,
+              label: context.l10n.homeGoToAlbum,
+              onSelected: () => navigateToTrackAlbum(root, track),
             ),
             ContextMenuAction(
-              icon: Icons.arrow_upward,
-              label: context.l10n.queueMoveUp,
-              onSelected: () => notifier.moveQueuedItem(item.id, -1),
-            ),
-            ContextMenuAction(
-              icon: Icons.arrow_downward,
-              label: context.l10n.queueMoveDown,
-              onSelected: () => notifier.moveQueuedItem(item.id, 1),
+              icon: Icons.copy_all_rounded,
+              label: context.l10n.trackOptionCopyTrackAndArtist,
+              onSelected: () => copyTrackText(root, trackAndArtistText(track)),
             ),
           ],
-          [
-            ContextMenuAction(
-              icon: Icons.close,
-              label: context.l10n.dialogCancel,
-              destructive: true,
-              onSelected: () => notifier.cancelItem(item.id),
-            ),
-          ],
+          if (isQueued)
+            [
+              ContextMenuAction(
+                icon: Icons.close,
+                label: context.l10n.dialogCancel,
+                destructive: true,
+                onSelected: () => notifier.cancelItem(item.id),
+              ),
+            ],
         ],
       );
     }
@@ -438,32 +461,52 @@ extension _QueueTabItemWidgets on _QueueTabState {
         padding: EdgeInsets.only(bottom: ctx.tokens.gapLg),
         child: SettingsGroup(
           children: [
+            if (isQueued) ...[
+              SettingsItem(
+                icon: Icons.skip_next,
+                showIconInMornye: true,
+                title: context.l10n.queueDownloadNext,
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  notifier.downloadNext(item.id);
+                },
+              ),
+              SettingsItem(
+                icon: Icons.arrow_upward,
+                showIconInMornye: true,
+                title: context.l10n.queueMoveUp,
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  notifier.moveQueuedItem(item.id, -1);
+                },
+              ),
+              SettingsItem(
+                icon: Icons.arrow_downward,
+                showIconInMornye: true,
+                title: context.l10n.queueMoveDown,
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  notifier.moveQueuedItem(item.id, 1);
+                },
+              ),
+            ],
             SettingsItem(
-              icon: Icons.skip_next,
+              icon: Icons.album_outlined,
               showIconInMornye: true,
-              title: context.l10n.queueDownloadNext,
+              title: context.l10n.homeGoToAlbum,
               onTap: () {
                 Navigator.of(ctx).pop();
-                notifier.downloadNext(item.id);
+                navigateToTrackAlbum(root, track);
               },
             ),
             SettingsItem(
-              icon: Icons.arrow_upward,
+              icon: Icons.copy_all_rounded,
               showIconInMornye: true,
-              title: context.l10n.queueMoveUp,
-              onTap: () {
-                Navigator.of(ctx).pop();
-                notifier.moveQueuedItem(item.id, -1);
-              },
-            ),
-            SettingsItem(
-              icon: Icons.arrow_downward,
-              showIconInMornye: true,
-              title: context.l10n.queueMoveDown,
+              title: context.l10n.trackOptionCopyTrackAndArtist,
               showDivider: false,
               onTap: () {
                 Navigator.of(ctx).pop();
-                notifier.moveQueuedItem(item.id, 1);
+                copyTrackText(root, trackAndArtistText(track));
               },
             ),
           ],
@@ -508,24 +551,23 @@ extension _QueueTabItemWidgets on _QueueTabState {
               onPressed: () => ref
                   .read(downloadQueueProvider.notifier)
                   .downloadNext(item.id),
-              icon: Icon(Icons.skip_next, color: colorScheme.primary),
+              icon: Icon(
+                Icons.skip_next,
+                color: colorScheme.onPrimaryContainer,
+              ),
               tooltip: context.l10n.queueDownloadNext,
               style: IconButton.styleFrom(
-                backgroundColor: colorScheme.primaryContainer.withValues(
-                  alpha: 0.3,
-                ),
+                backgroundColor: colorScheme.primaryContainer,
               ),
             ),
             const SizedBox(width: 4),
             AppIconButton(
               onPressed: () =>
                   ref.read(downloadQueueProvider.notifier).cancelItem(item.id),
-              icon: Icon(Icons.close, color: colorScheme.error),
+              icon: Icon(Icons.close, color: colorScheme.onErrorContainer),
               tooltip: context.l10n.dialogCancel,
               style: IconButton.styleFrom(
-                backgroundColor: colorScheme.errorContainer.withValues(
-                  alpha: 0.3,
-                ),
+                backgroundColor: colorScheme.errorContainer,
               ),
             ),
           ],
@@ -534,10 +576,10 @@ extension _QueueTabItemWidgets on _QueueTabState {
         return AppIconButton(
           onPressed: () =>
               ref.read(downloadQueueProvider.notifier).cancelItem(item.id),
-          icon: Icon(Icons.stop, color: colorScheme.error),
+          icon: Icon(Icons.stop, color: colorScheme.onErrorContainer),
           tooltip: context.l10n.actionStop,
           style: IconButton.styleFrom(
-            backgroundColor: colorScheme.errorContainer.withValues(alpha: 0.3),
+            backgroundColor: colorScheme.errorContainer,
           ),
         );
       case DownloadStatus.finalizing:
@@ -633,15 +675,13 @@ extension _QueueTabItemWidgets on _QueueTabState {
                         .retryItem(item.id),
               icon: Icon(
                 requiresFolderReselection ? Icons.folder_open : Icons.refresh,
-                color: colorScheme.primary,
+                color: colorScheme.onPrimaryContainer,
               ),
               tooltip: requiresFolderReselection
                   ? context.l10n.downloadFolderReselect
                   : context.l10n.dialogRetry,
               style: IconButton.styleFrom(
-                backgroundColor: colorScheme.primaryContainer.withValues(
-                  alpha: 0.3,
-                ),
+                backgroundColor: colorScheme.primaryContainer,
               ),
             ),
             const SizedBox(width: 4),
@@ -651,15 +691,13 @@ extension _QueueTabItemWidgets on _QueueTabState {
               icon: Icon(
                 Icons.close,
                 color: item.status == DownloadStatus.failed
-                    ? colorScheme.error
+                    ? colorScheme.onErrorContainer
                     : colorScheme.onSurfaceVariant,
               ),
               tooltip: context.l10n.dialogRemove,
               style: item.status == DownloadStatus.failed
                   ? IconButton.styleFrom(
-                      backgroundColor: colorScheme.errorContainer.withValues(
-                        alpha: 0.3,
-                      ),
+                      backgroundColor: colorScheme.errorContainer,
                     )
                   : null,
             ),
@@ -702,7 +740,7 @@ extension _QueueTabItemWidgets on _QueueTabState {
         item: item,
         inset: badgeInset,
         child: ValueListenableBuilder<int>(
-          valueListenable: _embeddedCoverVersion,
+          valueListenable: _embeddedCoverListenable(item.filePath),
           builder: (context, _, child) => _buildUnifiedCoverImageInner(
             item,
             colorScheme,
@@ -796,17 +834,10 @@ extension _QueueTabItemWidgets on _QueueTabState {
           recoverDocument: false,
         );
       }
-      final animated = Stack(
-        fit: StackFit.expand,
-        children: [
-          backdrop,
-          AnimatedOpacity(
-            opacity: frame == null ? 0.0 : 1.0,
-            duration: const Duration(milliseconds: 180),
-            curve: Curves.easeOutCubic,
-            child: child,
-          ),
-        ],
+      final animated = _LocalCoverFade(
+        loaded: frame != null,
+        backdrop: backdrop,
+        child: child,
       );
       if (size == null) return animated;
       return SizedBox(width: size, height: size, child: animated);
@@ -828,7 +859,16 @@ extension _QueueTabItemWidgets on _QueueTabState {
             gaplessPlayback: true,
             frameBuilder: (context, child, frame, wasSynchronouslyLoaded) =>
                 fadeInFileImage(child, frame, wasSynchronouslyLoaded),
-            errorBuilder: (context, error, stackTrace) => buildPlaceholder(),
+            errorBuilder: (context, error, stackTrace) => item.coverUrl != null
+                ? CachedCoverImage(
+                    imageUrl: item.coverUrl!,
+                    width: size,
+                    height: size,
+                    memCacheWidth: cacheSize,
+                    placeholder: (context, url) => buildPlaceholder(),
+                    errorWidget: (context, url, error) => buildPlaceholder(),
+                  )
+                : buildPlaceholder(),
           ),
         );
       }
@@ -843,8 +883,6 @@ extension _QueueTabItemWidgets on _QueueTabState {
         borderRadius: BorderRadius.circular(8),
         placeholder: (context, url) => buildPlaceholder(),
         errorWidget: (context, url, error) => buildPlaceholder(),
-        fadeInDuration: const Duration(milliseconds: 180),
-        fadeOutDuration: const Duration(milliseconds: 90),
       );
     }
 
@@ -1117,7 +1155,8 @@ extension _QueueTabItemWidgets on _QueueTabState {
     required List<LocalLibraryItem> localNavigationItems,
     required int? localNavigationIndex,
     required List<UnifiedLibraryItem> libraryItems,
-    bool playlistDragEnabled = false,
+    // Null where the playlist drag around the song takes the long press.
+    required VoidCallback? onLongPress,
   }) {
     final fileExistsListenable = _fileExistsListenable(item.filePath);
     final isSelected = _selectedIds.contains(item.id);
@@ -1145,6 +1184,7 @@ extension _QueueTabItemWidgets on _QueueTabState {
     final playbackKey = _libraryPlaybackKey(item);
     final leading = Hero(
       tag: 'cover_lib_${item.id}',
+      transitionOnUserGestures: heroFollowsBackSwipe(context),
       child: _buildUnifiedCoverImage(
         item,
         colorScheme,
@@ -1262,8 +1302,11 @@ extension _QueueTabItemWidgets on _QueueTabState {
         );
       },
     );
-    final swipe = libraryItemQueueSwipe(ref, item);
-    Widget card({bool current = false, bool playing = false}) => TrackCard(
+    Widget card({
+      bool current = false,
+      bool playing = false,
+      QueueSwipeActions? swipe,
+    }) => TrackCard(
       isSelectionMode: _isSelectionMode,
       isSelected: isSelected,
       isCurrent: current,
@@ -1281,11 +1324,7 @@ extension _QueueTabItemWidgets on _QueueTabState {
         position,
         onOpenDetails: open,
       ),
-      onLongPress: playlistDragEnabled
-          ? null
-          : _isSelectionMode
-          ? () => _selectRangeTo(item.id, libraryItems)
-          : () => _enterSelectionMode(item.id),
+      onLongPress: onLongPress,
       leading: leading,
       title: item.trackName,
       subtitle: subtitle,
@@ -1297,11 +1336,15 @@ extension _QueueTabItemWidgets on _QueueTabState {
       label: context.l10n.a11yTrackByArtist(item.trackName, item.artistName),
       selected: isSelected,
       // Rows follow their own file, so a track change rebuilds only the rows
-      // involved.
+      // involved, and queueSwipe subscribes on this leaf Consumer's ref.
       child: Consumer(
         builder: (context, ref, _) {
           final playback = ref.watch(mediaItemPlaybackUiProvider(playbackKey));
-          return card(current: playback.isCurrent, playing: playback.isPlaying);
+          return card(
+            current: playback.isCurrent,
+            playing: playback.isPlaying,
+            swipe: libraryItemQueueSwipe(ref, item),
+          );
         },
       ),
     );
@@ -1316,7 +1359,8 @@ extension _QueueTabItemWidgets on _QueueTabState {
     required List<LocalLibraryItem> localNavigationItems,
     required int? localNavigationIndex,
     required List<UnifiedLibraryItem> libraryItems,
-    bool playlistDragEnabled = false,
+    // Null where the playlist drag around the song takes the long press.
+    required VoidCallback? onLongPress,
   }) {
     final fileExistsListenable = _fileExistsListenable(item.filePath);
     final isSelected = _selectedIds.contains(item.id);
@@ -1360,13 +1404,10 @@ extension _QueueTabItemWidgets on _QueueTabState {
         position,
         onOpenDetails: open,
       ),
-      onLongPress: playlistDragEnabled
-          ? null
-          : _isSelectionMode
-          ? () => _selectRangeTo(item.id, libraryItems)
-          : () => _enterSelectionMode(item.id),
+      onLongPress: onLongPress,
       cover: Hero(
         tag: 'cover_lib_${item.id}',
+        transitionOnUserGestures: heroFollowsBackSwipe(context),
         child: _buildUnifiedCoverImage(item, colorScheme),
       ),
       overlays: [
@@ -1582,7 +1623,7 @@ class _LibraryPlaybackButton extends ConsumerWidget {
         minimumSize: Size.square(context.tokens.minTouchTarget),
         backgroundColor: material
             ? colorScheme.secondaryContainer
-            : colorScheme.primaryContainer.withValues(alpha: 0.3),
+            : colorScheme.primaryContainer,
       ),
     );
   }
@@ -1611,4 +1652,67 @@ class _LibrarySongTableRows {
   /// Opens a song's details with the latest build's navigation lists, for
   /// the details buttons of rows kept from an earlier build.
   VoidCallback Function(UnifiedLibraryItem item) openAction;
+}
+
+/// Fades a decoded local cover in over [backdrop], then drops the backdrop
+/// and the stack, so a settled row paints the cover alone.
+class _LocalCoverFade extends StatefulWidget {
+  const _LocalCoverFade({
+    required this.loaded,
+    required this.backdrop,
+    required this.child,
+  });
+
+  final bool loaded;
+  final Widget backdrop;
+  final Widget child;
+
+  @override
+  State<_LocalCoverFade> createState() => _LocalCoverFadeState();
+}
+
+class _LocalCoverFadeState extends State<_LocalCoverFade> {
+  final GlobalKey _childKey = GlobalKey();
+  late bool _settled = widget.loaded;
+
+  @override
+  void didUpdateWidget(_LocalCoverFade oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.loaded) {
+      _settled = false;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final keyedChild = KeyedSubtree(key: _childKey, child: widget.child);
+    if (widget.loaded &&
+        (_settled ||
+            MediaQuery.disableAnimationsOf(context) ||
+            Scrollable.recommendDeferredLoadingForContext(context))) {
+      _settled = true;
+      return keyedChild;
+    }
+    final motion = AppMotion.effectsFast(
+      context,
+      const AppMotionSpec(Duration(milliseconds: 180), Curves.easeOutCubic),
+    );
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        widget.backdrop,
+        AnimatedOpacity(
+          opacity: widget.loaded ? 1.0 : 0.0,
+          duration: motion.duration,
+          curve: motion.curve,
+          onEnd: () {
+            if (mounted && widget.loaded && !_settled) {
+              setState(() => _settled = true);
+            }
+          },
+          child: keyedChild,
+        ),
+      ],
+    );
+  }
 }

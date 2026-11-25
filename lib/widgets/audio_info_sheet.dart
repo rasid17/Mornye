@@ -175,16 +175,30 @@ class _AudioInfoSheetState extends State<_AudioInfoSheet>
     }
   }
 
+  late Listenable _factsListenable = _buildFactsListenable();
+
+  Listenable _buildFactsListenable() => Listenable.merge([
+    widget.metadata,
+    usbAudioStatus,
+    playbackEqualizer,
+    playbackExclusiveStatus,
+    playbackExclusiveOutput,
+    playbackOutputVolume,
+  ]);
+
+  @override
+  void didUpdateWidget(covariant _AudioInfoSheet oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.metadata, widget.metadata)) {
+      oldWidget.metadata.removeListener(_load);
+      widget.metadata.addListener(_load);
+      _factsListenable = _buildFactsListenable();
+    }
+  }
+
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-    listenable: Listenable.merge([
-      widget.metadata,
-      usbAudioStatus,
-      playbackEqualizer,
-      playbackExclusiveStatus,
-      playbackExclusiveOutput,
-      playbackOutputVolume,
-    ]),
+    listenable: _factsListenable,
     builder: (context, _) {
       final facts = _AudioFacts(
         l10n: context.l10n,
@@ -613,7 +627,9 @@ class _AudioFacts {
         ? l10n.audioInfoBypassed
         : [
             l10n.audioInfoOn,
-            l10n.audioInfoBands(equalizer.gains.length),
+            equalizer.parametric
+                ? l10n.equalizerFilterCount(equalizer.filters.length)
+                : l10n.audioInfoBands(equalizer.gains.length),
             if (equalizer.inputGain != 0)
               '${l10n.equalizerPreamp} ${_db(equalizer.inputGain)}',
             if (equalizer.compressor) l10n.equalizerCompressor,
@@ -657,6 +673,7 @@ class _AudioFacts {
         AudioBitPerfectStatus.processed => l10n.audioInfoBitPerfectProcessed,
         AudioBitPerfectStatus.unverified => l10n.audioInfoBitPerfectUnverified,
         AudioBitPerfectStatus.lossySource => l10n.audioInfoBitPerfectLossy,
+        AudioBitPerfectStatus.resampled => l10n.audioInfoBitPerfectResampled,
       }, emphasis: _bitPerfect == AudioBitPerfectStatus.verified),
     ];
   }
@@ -669,6 +686,7 @@ class _AudioFacts {
     tempo: processing?.autoMixRate ?? 1,
     softwareVolume: softwareVolume,
     lossySource: usb.lossy,
+    resampled: usb.outputSampleRate != null,
   );
 
   bool get _bluetoothFormatUnreported =>
@@ -677,7 +695,7 @@ class _AudioFacts {
   bool get _androidOutputUnreported => !direct && route?.platform == 'android';
 
   int? get _outputRate {
-    if (direct) return usb.sampleRate;
+    if (direct) return usb.outputSampleRate ?? usb.sampleRate;
     // Shared mixer properties cannot describe an exclusive engine's output.
     if (exclusive || _androidOutputUnreported) return null;
     return route?.device?.mixerSampleRate ?? route?.mixerSampleRate;

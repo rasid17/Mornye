@@ -3,6 +3,24 @@ project(mornye_audio LANGUAGES C CXX)
 
 include(FetchContent)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+set(CMAKE_C_VISIBILITY_PRESET hidden)
+set(CMAKE_CXX_VISIBILITY_PRESET hidden)
+set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
+if(ANDROID)
+    # Optimize WavPack and Oboe for size and strip unused C++
+    # exception/RTTI/section overhead; JNI entry points remain visible via
+    # native_audio.map.
+    add_compile_options(
+        -Os
+        -ffunction-sections
+        -fdata-sections
+        $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
+        $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
+    )
+    if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+        add_compile_options(-flto=thin)
+    endif()
+endif()
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(BUILD_CXXLIBS OFF CACHE BOOL "" FORCE)
@@ -29,9 +47,16 @@ function(mornye_add_flac)
     FetchContent_MakeAvailable(flac)
 endfunction()
 mornye_add_flac()
+if(ANDROID)
+    # FLAC decoding and our sample loops keep the speed level: at -Os the
+    # decoder is 4 percent slower and the conversion loops are not vectorized.
+    set(MORNYE_AUDIO_SPEED -O2)
+    target_compile_options(FLAC PRIVATE ${MORNYE_AUDIO_SPEED})
+endif()
 add_library(mornye_flac STATIC flac_pcm_source.cpp)
 target_compile_features(mornye_flac PRIVATE cxx_std_17)
-target_compile_options(mornye_flac PRIVATE -Wall -Wextra -Werror -fvisibility=hidden)
+target_compile_options(mornye_flac PRIVATE
+    -Wall -Wextra -Werror -fvisibility=hidden ${MORNYE_AUDIO_SPEED})
 target_link_libraries(mornye_flac PUBLIC FLAC::FLAC)
 
 option(MORNYE_AUDIO_HOST_TESTS "Test the lossless decoder without Android" OFF)
@@ -62,14 +87,17 @@ FetchContent_MakeAvailable(oboe wavpack)
 
 add_library(mornye_audio SHARED native_audio.cpp)
 target_compile_features(mornye_audio PRIVATE cxx_std_17)
-target_compile_options(mornye_audio PRIVATE -Wall -Wextra -Werror -fvisibility=hidden)
+target_compile_options(mornye_audio PRIVATE
+    -Wall -Wextra -Werror -fvisibility=hidden ${MORNYE_AUDIO_SPEED})
 target_link_libraries(mornye_audio PRIVATE oboe WavPack::WavPack mornye_flac log)
 # Only JNI is public; static Oboe/WavPack/C++ implementation symbols must not
 # keep otherwise unused code alive. APS2 is supported by our minimum API 24.
 target_link_options(mornye_audio PRIVATE
+    "-Wl,--gc-sections"
     "-Wl,-z,max-page-size=16384"
     "-Wl,--version-script,${CMAKE_CURRENT_SOURCE_DIR}/native_audio.map"
     "-Wl,--icf=safe"
-    "-Wl,--pack-dyn-relocs=android")
+    "-Wl,--pack-dyn-relocs=android"
+    $<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>>:-flto=thin>)
 set_property(TARGET mornye_audio APPEND PROPERTY LINK_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/native_audio.map")

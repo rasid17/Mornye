@@ -3,13 +3,16 @@ import 'dart:math' as math;
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/physics.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:liquid_glass_easy/liquid_glass_easy.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
+    show GlassBackdropGroup;
 import 'package:mornye/l10n/l10n.dart';
 import 'package:mornye/providers/music_player_provider.dart';
 import 'package:mornye/providers/runtime_profile_provider.dart';
+import 'package:mornye/theme/app_motion.dart';
 import 'package:mornye/theme/mornye_theme.dart';
 import 'package:mornye/widgets/mini_player.dart';
 import 'package:mornye/widgets/mornye_chrome.dart';
+import 'package:mornye/widgets/mornye_glass_press.dart';
 
 /// Deliberate vertical drags minimize the chrome until the page returns to its
 /// top. Horizontal rows, programmatic scrolling and bounce must not minimize it.
@@ -36,6 +39,10 @@ class MornyeChromeController extends ValueNotifier<bool> {
     if (notification is! ScrollUpdateNotification) return false;
     final metrics = notification.metrics;
     if (metrics.pixels <= metrics.minScrollExtent + 12) {
+      if (!value) {
+        _distance = 0;
+        return false;
+      }
       // The Library list can reach its start while its outer header is still
       // collapsed. Restore the tabs only when both scroll positions return.
       final outer = notification.context
@@ -98,24 +105,52 @@ class MornyeBottomBar extends ConsumerStatefulWidget {
 
 class _MornyeBottomBarState extends ConsumerState<MornyeBottomBar>
     with SingleTickerProviderStateMixin {
-  // A spring keeps its velocity when a scroll reverses the fold mid-flight, and
-  // being slightly underdamped lets the glass run past its size and settle.
-  static const _foldSpring = SpringDescription(
-    mass: 1,
-    stiffness: 170,
-    damping: 20,
-  );
-
-  /// Runs past 0 and 1 by the spring's overshoot.
+  /// Runs past 0 and 1 by the Liquid Glass morph spring's subtle overshoot.
   late final _controller = AnimationController.unbounded(
     vsync: this,
     value: widget.collapsed ? 1 : 0,
   );
   late double _target = widget.collapsed ? 1 : 0;
   late final _tabOpacity = _controller.drive(const _TabOpacity());
+  static const double _compactSize = 52;
   // Side capsules move between backdrop batches; keep their lenses mounted.
   final _leadingSurfaceKey = GlobalKey();
   final _searchSurfaceKey = GlobalKey();
+  Widget? _player;
+  bool? _playerCompact;
+  String? _cachedLabelText;
+  TextStyle? _cachedLabelStyle;
+  TextDirection? _cachedLabelDirection;
+  TextScaler? _cachedLabelScaler;
+  double _cachedLabelHeight = 0;
+
+  double _measureLabelHeight(
+    String text,
+    TextStyle style,
+    TextDirection direction,
+    TextScaler scaler,
+  ) {
+    if (_cachedLabelText == text &&
+        _cachedLabelStyle == style &&
+        _cachedLabelDirection == direction &&
+        _cachedLabelScaler == scaler) {
+      return _cachedLabelHeight;
+    }
+    final labelPainter = TextPainter(
+      text: TextSpan(text: text, style: style),
+      textDirection: direction,
+      textScaler: scaler,
+      maxLines: 1,
+    )..layout();
+    final height = labelPainter.height;
+    labelPainter.dispose();
+    _cachedLabelText = text;
+    _cachedLabelStyle = style;
+    _cachedLabelDirection = direction;
+    _cachedLabelScaler = scaler;
+    _cachedLabelHeight = height;
+    return height;
+  }
 
   void _updateCollapse() {
     final target = widget.collapsed ? 1.0 : 0.0;
@@ -128,7 +163,7 @@ class _MornyeBottomBarState extends ConsumerState<MornyeBottomBar>
     _target = target;
     _controller.animateWith(
       SpringSimulation(
-        _foldSpring,
+        MornyeMotion.glassMorphSpring,
         _controller.value,
         target,
         _controller.velocity,
@@ -147,6 +182,12 @@ class _MornyeBottomBarState extends ConsumerState<MornyeBottomBar>
   void didUpdateWidget(MornyeBottomBar oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.collapsed != widget.collapsed) _updateCollapse();
+  }
+
+  @override
+  void reassemble() {
+    super.reassemble();
+    _player = null;
   }
 
   @override
@@ -187,7 +228,6 @@ class _MornyeBottomBarState extends ConsumerState<MornyeBottomBar>
       key: key,
       child: MornyeGlass.navigation(
         blurEnabled: blurEnabled,
-        strongTint: true,
         tintOpacity: MornyeTheme.navigationOpacity(context),
         radius: 26,
         child: const SizedBox.expand(),
@@ -199,7 +239,14 @@ class _MornyeBottomBarState extends ConsumerState<MornyeBottomBar>
     final leadingIndex = searchSelected ? 0 : selectedIndex;
     final scheme = Theme.of(context).colorScheme;
     final inactiveIconColor = scheme.onSurface;
-    final player = MiniPlayer(compact: collapsed, bottomPadding: 0);
+    // Only the fold changes the player; a tab switch keeps it as made.
+    if (_player == null || _playerCompact != collapsed) {
+      _playerCompact = collapsed;
+      _player = RepaintBoundary(
+        child: MiniPlayer(compact: collapsed, bottomPadding: 0),
+      );
+    }
+    final player = _player!;
     Widget tabs({required bool hideMovingIcons}) => TickerMode(
       enabled: !collapsed,
       child: RepaintBoundary(
@@ -223,6 +270,39 @@ class _MornyeBottomBarState extends ConsumerState<MornyeBottomBar>
     // to the moving overlays only while folding, at the same coordinates.
     final fullTabs = tabs(hideMovingIcons: false);
     final foldingTabs = tabs(hideMovingIcons: true);
+    // The compact buttons stay the same through a fold; only their place,
+    // size and glass follow it, so each frame keeps the made button.
+    final compactButtons = <(bool, bool), Widget>{};
+    Widget compactButton({required bool leading, required bool shown}) {
+      final index = leading ? leadingIndex : destinations.length - 1;
+      return Material(
+        color: Colors.transparent,
+        child: IconButton(
+          key: ValueKey(
+            leading ? 'mornye-compact-leading' : 'mornye-compact-search',
+          ),
+          tooltip: leading
+              ? destinations[leadingIndex].label
+              : context.l10n.mornyeSearch,
+          iconSize: 25,
+          constraints: const BoxConstraints.tightFor(
+            width: _compactSize,
+            height: _compactSize,
+          ),
+          color: index == selectedIndex ? scheme.primary : inactiveIconColor,
+          icon: Opacity(
+            opacity: shown ? 1 : 0,
+            child: destinations[index].icon,
+          ),
+          onPressed: leading
+              ? leadingIndex == 0
+                    ? onHome
+                    : () => onSelected(leadingIndex)
+              : onSearch,
+        ),
+      );
+    }
+
     return LayoutBuilder(
       builder: (context, constraints) {
         // Match the tab's actual label height, including accessibility scaling.
@@ -231,14 +311,12 @@ class _MornyeBottomBarState extends ConsumerState<MornyeBottomBar>
           fontSize: glassTabs ? 11 : null,
           fontWeight: FontWeight.w600,
         );
-        final labelPainter = TextPainter(
-          text: TextSpan(text: destinations.first.label, style: labelStyle),
-          textDirection: Directionality.of(context),
-          textScaler: MediaQuery.textScalerOf(context),
-          maxLines: 1,
-        )..layout();
-        final labelHeight = labelPainter.height;
-        labelPainter.dispose();
+        final labelHeight = _measureLabelHeight(
+          destinations.first.label,
+          labelStyle,
+          Directionality.of(context),
+          MediaQuery.textScalerOf(context),
+        );
         final fullIconBottom = glassTabs
             ? 8 + math.max(64, 37 + labelHeight) / 2 + (labelHeight + 2) / 2
             : math.max(64.0, 49 + labelHeight) - 23.5;
@@ -282,7 +360,8 @@ class _MornyeBottomBarState extends ConsumerState<MornyeBottomBar>
               final offset =
                   ((leading ? origin : constraints.maxWidth - origin) - 26) *
                   (1 - amount);
-              const size = 52.0;
+              const size = _compactSize;
+              final shown = amount != 0;
               return PositionedDirectional(
                 start: leading ? offset : null,
                 end: leading ? null : offset,
@@ -293,57 +372,34 @@ class _MornyeBottomBarState extends ConsumerState<MornyeBottomBar>
                   ignoring: amount < 0.5,
                   child: ExcludeSemantics(
                     excluding: amount < 0.5,
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        Positioned.fill(
-                          child: Offstage(
-                            // The tab bar's own glass becomes the leading
-                            // circle and hands over only once it is one.
-                            offstage: leading ? amount < 1 : amount == 0,
-                            child: Transform(
-                              alignment: Alignment.center,
-                              transform: drop,
-                              transformHitTests: false,
-                              // While folding, a capsule crosses the tab bar
-                              // and needs a backdrop sample of its own.
-                              child: amount == 1
-                                  ? surface
-                                  : LiquidGlassBatch(child: surface),
+                    child: MornyeGlassPress(
+                      radius: size / 2,
+                      child: Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          Positioned.fill(
+                            child: Offstage(
+                              // The tab bar's own glass becomes the leading
+                              // circle and hands over only once it is one.
+                              offstage: leading ? amount < 1 : amount == 0,
+                              child: Transform(
+                                alignment: Alignment.center,
+                                transform: drop,
+                                transformHitTests: false,
+                                // While folding, a capsule crosses the tab bar
+                                // and needs a backdrop sample of its own.
+                                child: amount == 1
+                                    ? surface
+                                    : GlassBackdropGroup(child: surface),
+                              ),
                             ),
                           ),
-                        ),
-                        Material(
-                          color: Colors.transparent,
-                          child: IconButton(
-                            key: ValueKey(
-                              leading
-                                  ? 'mornye-compact-leading'
-                                  : 'mornye-compact-search',
-                            ),
-                            tooltip: leading
-                                ? destinations[leadingIndex].label
-                                : context.l10n.mornyeSearch,
-                            iconSize: 25,
-                            constraints: BoxConstraints.tightFor(
-                              width: size,
-                              height: size,
-                            ),
-                            color: index == selectedIndex
-                                ? scheme.primary
-                                : inactiveIconColor,
-                            icon: Opacity(
-                              opacity: amount == 0 ? 0 : 1,
-                              child: destinations[index].icon,
-                            ),
-                            onPressed: leading
-                                ? leadingIndex == 0
-                                      ? onHome
-                                      : () => onSelected(leadingIndex)
-                                : onSearch,
+                          compactButtons[(leading, shown)] ??= compactButton(
+                            leading: leading,
+                            shown: shown,
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -353,7 +409,7 @@ class _MornyeBottomBarState extends ConsumerState<MornyeBottomBar>
             // Only non-overlapping surfaces share a backdrop: the player, the
             // tabs and, at rest, the side capsules. Frosted capsules stay out
             // of the blur group, since they cross the tab bar while folding.
-            return LiquidGlassBatch(
+            return GlassBackdropGroup(
               child: Stack(
                 clipBehavior: Clip.none,
                 children: [

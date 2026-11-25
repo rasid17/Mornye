@@ -201,10 +201,34 @@ class _LyricPreviewLineState extends ConsumerState<_LyricPreviewLine> {
     );
   }
 
+  /// Steady position reports are already followed by [_nextLine]; only
+  /// transport changes, seeks and clock jumps rebuild the line.
+  static bool _shouldRebuildForPlayback(
+    PlaybackState? previous,
+    PlaybackState? next,
+  ) {
+    if (previous == null || next == null) return previous != next;
+    if (previous.playing != next.playing ||
+        previous.processingState != next.processingState ||
+        previous.speed != next.speed ||
+        previous.queueIndex != next.queueIndex) {
+      return true;
+    }
+    if (!next.playing) {
+      return previous.updatePosition != next.updatePosition;
+    }
+    return (next.position - previous.position).abs() >
+        const Duration(milliseconds: 350);
+  }
+
   @override
   Widget build(BuildContext context) {
+    // The line reads as sung unless its own setting asks for the
+    // translation; the full lyrics' translation switch does not apply here.
     final showTranslation = ref.watch(
-      settingsProvider.select((settings) => settings.playerShowTranslation),
+      settingsProvider.select(
+        (settings) => settings.playerLyricSnippetTranslation,
+      ),
     );
     final appOffsetMs = ref.watch(
       themeProvider.select((theme) => theme.lyricsOffsetMs),
@@ -223,10 +247,22 @@ class _LyricPreviewLineState extends ConsumerState<_LyricPreviewLine> {
         ),
       ),
     );
-    final state = ref.watch(playbackStateProvider).value;
-    final translation = ref.read(lyricsTranslationProvider.notifier);
-    // An offstage or covered player keeps no line timer running.
+    // An offstage or covered player keeps no line timer running and avoids
+    // 2 Hz position-tick rebuilds while hidden. Even while visible, listen
+    // selectively so steady 2 Hz position reports do not rebuild the row.
     final visible = TickerMode.valuesOf(context).enabled;
+    if (visible) {
+      ref.listen<AsyncValue<PlaybackState>>(playbackStateProvider, (
+        previous,
+        next,
+      ) {
+        if (_shouldRebuildForPlayback(previous?.value, next.value)) {
+          _refresh();
+        }
+      });
+    }
+    final state = ref.read(playbackStateProvider).value;
+    final translation = ref.read(lyricsTranslationProvider.notifier);
     return ListenableBuilder(
       listenable: widget.metadata,
       builder: (context, _) {
@@ -342,17 +378,23 @@ class _LyricPreviewLineState extends ConsumerState<_LyricPreviewLine> {
       color: textColor,
     );
     final translated = line?.translation?.trim() ?? '';
-    final text = line == null
-        ? ''
-        : showTranslation && translated.isNotEmpty
-        ? translated
-        : line.text.trim();
+    // A shown translation is the line, with its own word timing if it has
+    // some, so it sweeps as it does in the full lyrics.
+    final shown = line == null || !showTranslation || translated.isEmpty
+        ? line
+        : LyricLine(
+            time: line.time,
+            end: line.end,
+            text: translated,
+            words: line.translationWords,
+          );
+    final text = shown?.text.trim() ?? '';
 
     final Widget child;
     if (blank) {
       // An empty line is as tall as a written one.
       child = Text('', key: const ValueKey('blank'), maxLines: 1, style: style);
-    } else if (line == null) {
+    } else if (shown == null) {
       child = Text(
         _placeholder,
         key: const ValueKey(_placeholder),
@@ -362,28 +404,31 @@ class _LyricPreviewLineState extends ConsumerState<_LyricPreviewLine> {
           color: textColor.withValues(alpha: 0.55),
         ),
       );
-    } else if (text == line.text.trim() && line.hasWordTiming) {
+    } else if (shown.hasWordTiming) {
       // A long line slides to keep the sung words in view.
-      child = Directionality(
-        key: ValueKey('word-${line.time.inMilliseconds}'),
-        textDirection: strongTextDirection(text) ?? Directionality.of(context),
-        child: ClipRect(
-          child: LyricLineScroller(
-            text: line.words.map((word) => word.text).join(),
-            words: line.words,
-            style: style,
-            start: line.time,
-            end: line.end,
-            nextStart: nextStart,
-            position: position,
-            advancing: advancing,
-            speed: speed,
-            child: WordTimedLyricLine(
-              line: line,
-              initialPosition: position,
-              seekPreview: widget.seekPreview,
+      child = RepaintBoundary(
+        key: ValueKey('word-${shown.time.inMilliseconds}-$text'),
+        child: Directionality(
+          textDirection:
+              strongTextDirection(text) ?? Directionality.of(context),
+          child: ClipRect(
+            child: LyricLineScroller(
+              text: shown.words.map((word) => word.text).join(),
+              words: shown.words,
               style: style,
-              maxLines: 1,
+              start: shown.time,
+              end: shown.end,
+              nextStart: nextStart,
+              position: position,
+              advancing: advancing,
+              speed: speed,
+              child: WordTimedLyricLine(
+                line: shown,
+                initialPosition: position,
+                seekPreview: widget.seekPreview,
+                style: style,
+                maxLines: 1,
+              ),
             ),
           ),
         ),
@@ -391,24 +436,27 @@ class _LyricPreviewLineState extends ConsumerState<_LyricPreviewLine> {
     } else {
       // The line reads, and a long one slides, in its own direction: a
       // right-to-left line starts at its right edge and moves rightwards.
-      child = Directionality(
-        key: ValueKey('line-${line.time.inMilliseconds}-$text'),
-        textDirection: strongTextDirection(text) ?? Directionality.of(context),
-        child: LyricLineScroller(
-          text: text,
-          style: style,
-          start: line.time,
-          end: line.end,
-          nextStart: nextStart,
-          position: position,
-          advancing: advancing,
-          speed: speed,
-          child: Text(
-            text,
-            maxLines: 1,
-            softWrap: false,
-            overflow: TextOverflow.ellipsis,
+      child = RepaintBoundary(
+        key: ValueKey('line-${shown.time.inMilliseconds}-$text'),
+        child: Directionality(
+          textDirection:
+              strongTextDirection(text) ?? Directionality.of(context),
+          child: LyricLineScroller(
+            text: text,
             style: style,
+            start: shown.time,
+            end: shown.end,
+            nextStart: nextStart,
+            position: position,
+            advancing: advancing,
+            speed: speed,
+            child: Text(
+              text,
+              maxLines: 1,
+              softWrap: false,
+              overflow: TextOverflow.ellipsis,
+              style: style,
+            ),
           ),
         ),
       );

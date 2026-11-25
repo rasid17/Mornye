@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mornye/models/track.dart';
 import 'package:mornye/providers/music_player_provider.dart';
 import 'package:mornye/providers/preview_player_provider.dart';
 import 'package:mornye/services/music_player_service.dart';
@@ -159,14 +160,243 @@ void main() {
       );
       expect(decks, isEmpty);
       expect(container.read(previewPlayerProvider).isActive, isFalse);
+      // The extension has no preview for it: the button is not offered again.
+      expect(container.read(previewUnavailableLinksProvider), {link});
 
       container.dispose();
       await runtime.dispose();
     });
   });
+
+  group('a link that expired', () {
+    const old = 'https://example.com/old.mp3';
+    const current = 'https://example.com/current.mp3';
+
+    (ProviderContainer, List<_PreviewDeck>, MusicPlayerRuntime) expired() {
+      final decks = <_PreviewDeck>[];
+      final runtime = MusicPlayerRuntime(
+        dependencies: PlaybackDependencies(
+          createPreviewDeck: (_) {
+            final deck = _PreviewDeck(dead: {old});
+            decks.add(deck);
+            return deck;
+          },
+        ),
+      );
+      return (previews(runtime), decks, runtime);
+    }
+
+    test('plays the link its extension has now', () async {
+      final (container, decks, runtime) = expired();
+      final controller = container.read(previewPlayerProvider.notifier);
+      var reads = 0;
+      Future<String?> refresh() async {
+        reads++;
+        return current;
+      }
+
+      await controller.play(old, refresh: refresh);
+      expect(reads, 1);
+      expect(decks, hasLength(2));
+      expect(decks.last.calls, contains('network $current'));
+      // The button of the song still owns the preview.
+      expect(container.read(previewPlayerProvider).isActiveUrl(old), isTrue);
+      expect(container.read(previewUnavailableLinksProvider), isEmpty);
+
+      // The next play starts from the link that works.
+      await controller.stop();
+      await controller.play(old, refresh: refresh);
+      expect(reads, 1);
+      expect(decks, hasLength(2));
+      expect(decks.last.calls.where((call) => call == 'network $old'), isEmpty);
+
+      container.dispose();
+      await Future<void>.delayed(Duration.zero);
+      await runtime.dispose();
+    });
+
+    test('is not offered again when nothing newer plays', () async {
+      final (container, decks, runtime) = expired();
+
+      await expectLater(
+        container
+            .read(previewPlayerProvider.notifier)
+            .play(old, refresh: () async => old),
+        throwsStateError,
+      );
+      expect(decks, hasLength(2));
+      expect(container.read(previewPlayerProvider).isActive, isFalse);
+      expect(container.read(previewUnavailableLinksProvider), {old});
+
+      container.dispose();
+      await Future<void>.delayed(Duration.zero);
+      await runtime.dispose();
+    });
+
+    test('stays offered when its extension could not be asked', () async {
+      final (container, _, runtime) = expired();
+
+      await expectLater(
+        container
+            .read(previewPlayerProvider.notifier)
+            .play(old, refresh: () async => throw Exception('offline')),
+        throwsStateError,
+      );
+      expect(container.read(previewUnavailableLinksProvider), isEmpty);
+
+      container.dispose();
+      await Future<void>.delayed(Duration.zero);
+      await runtime.dispose();
+    });
+  });
+
+  group('reading a preview link again', () {
+    const backend = MethodChannel('com.zarz.mornye/backend');
+    const old = 'https://e.test/old.mp3';
+    const song = Track(
+      id: 'song-1',
+      name: 'Song',
+      artistName: 'Artist',
+      albumName: 'Album',
+      duration: 180,
+      isrc: 'AA0000000001',
+      source: 'example-provider',
+      previewUrl: old,
+    );
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    late List<MethodCall> searches;
+
+    /// Answers the song's own extension with [own] and a search of every
+    /// extension with [others]; null fails that search.
+    Future<String?> Function(Track track) refresher({
+      List<Map<String, Object?>>? own = const [],
+      List<Map<String, Object?>>? others = const [],
+    }) {
+      searches = [];
+      messenger.setMockMethodCallHandler(backend, (call) async {
+        final results = switch (call.method) {
+          'searchTracksWithMetadataProvider' => own,
+          'searchTracksWithMetadataProviders' => others,
+          _ => const <Map<String, Object?>>[],
+        };
+        searches.add(call);
+        if (results == null) throw PlatformException(code: 'offline');
+        return jsonEncode(results);
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(backend, null));
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      return container.read(previewLinkRefreshProvider);
+    }
+
+    test('asks the song\'s own extension first', () async {
+      final refresh = refresher(
+        own: [
+          {'id': 'other', 'name': 'Song', 'preview_url': 'https://e.test/a'},
+          {'id': 'song-1', 'name': 'Song', 'preview_url': 'https://e.test/b'},
+        ],
+      );
+
+      expect(await refresh(song), 'https://e.test/b');
+      final arguments = searches.single.arguments as Map;
+      expect(arguments['extension_id'], 'example-provider');
+      expect(arguments['query'], 'Song Artist');
+    });
+
+    test('takes the same song from any other extension', () async {
+      // Its own extension has no preview of its own, or the dead one again.
+      for (final own in [
+        <Map<String, Object?>>[
+          {'id': 'song-1', 'name': 'Song'},
+        ],
+        <Map<String, Object?>>[
+          {'id': 'song-1', 'name': 'Song', 'preview_url': old},
+        ],
+      ]) {
+        final refresh = refresher(
+          own: own,
+          others: [
+            {
+              'id': 'x1',
+              'name': 'Song',
+              'artists': 'Artist',
+              'isrc': 'AA0000000002',
+              'provider_id': 'second-provider',
+              'preview_url': 'https://e.test/another-recording',
+            },
+            {
+              'id': 'x2',
+              'name': 'Song (Remastered)',
+              'artists': 'Artist',
+              'isrc': 'aa0000000001',
+              'provider_id': 'second-provider',
+              'preview_url': 'https://e.test/same-recording',
+            },
+          ],
+        );
+
+        expect(await refresh(song), 'https://e.test/same-recording');
+        expect(searches.map((call) => call.method), [
+          'searchTracksWithMetadataProvider',
+          'searchTracksWithMetadataProviders',
+        ]);
+      }
+    });
+
+    test('matches by title and first artist without an ISRC', () async {
+      final refresh = refresher(
+        others: [
+          {
+            'id': 'x1',
+            'name': 'Song',
+            'artists': 'Someone Else',
+            'preview_url': 'https://e.test/wrong-artist',
+          },
+          {
+            'id': 'x2',
+            'name': ' song ',
+            'artists': 'Artist, Guest',
+            'preview_url': 'https://e.test/right',
+          },
+        ],
+      );
+
+      // A song that came from no extension is still looked up.
+      expect(await refresh(song.copyWith(source: '')), 'https://e.test/right');
+      expect(searches.single.method, 'searchTracksWithMetadataProviders');
+    });
+
+    test('has nothing when no extension knows the song', () async {
+      final refresh = refresher(
+        others: [
+          {
+            'id': 'x1',
+            'name': 'Another Song',
+            'artists': 'Artist',
+            'preview_url': 'https://e.test/other',
+          },
+        ],
+      );
+
+      expect(await refresh(song), isNull);
+    });
+
+    test('fails only when no extension could be asked', () async {
+      expect(await refresher(own: null)(song), isNull);
+      await expectLater(
+        refresher(own: null, others: null)(song),
+        throwsA(isA<PlatformException>()),
+      );
+    });
+  });
 }
 
 class _PreviewDeck implements PlaybackDeck {
+  _PreviewDeck({this.dead = const {}});
+
+  /// Links whose server no longer serves them.
+  final Set<String> dead;
   final calls = <String>[];
   final states = StreamController<PlaybackDeckState>.broadcast();
   final durations = StreamController<Duration>.broadcast();
@@ -199,8 +429,11 @@ class _PreviewDeck implements PlaybackDeck {
   @override
   Future<void> setPlaybackRate(double rate) async => calls.add('rate $rate');
   @override
-  Future<void> setNetworkSource(String url, {bool arriving = false}) async =>
-      calls.add('network $url');
+  Future<void> setNetworkSource(String url, {bool arriving = false}) async {
+    calls.add('network $url');
+    if (dead.contains(url)) throw StateError('HTTP 403');
+  }
+
   @override
   Future<void> setFileSource(
     String path, {
@@ -210,6 +443,8 @@ class _PreviewDeck implements PlaybackDeck {
     bool requiresDsd = false,
     bool allowFixedVolume = false,
     bool dapExclusive = false,
+    int usbMaxSampleRate = 0,
+    bool usbDitherHighPass = false,
   }) async => calls.add('file $path');
   @override
   Future<void> cancelPreparation() async {}

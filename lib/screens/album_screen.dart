@@ -21,6 +21,8 @@ import 'package:mornye/controllers/selection_mode_mixin.dart';
 import 'package:mornye/controllers/track_history_snapshot.dart';
 import 'package:mornye/widgets/error_card.dart';
 import 'package:mornye/widgets/album_detail_header.dart';
+import 'package:mornye/widgets/desktop/context_menu.dart';
+import 'package:mornye/widgets/header_toolbar_actions.dart';
 import 'package:mornye/widgets/collection_header_actions.dart';
 import 'package:mornye/widgets/album_description.dart';
 import 'package:mornye/utils/editorial_notes.dart';
@@ -32,12 +34,14 @@ import 'package:mornye/widgets/loaded_sliver_fade_in.dart';
 import 'package:mornye/widgets/playlist_picker_sheet.dart';
 import 'package:mornye/widgets/cross_extension_share_sheet.dart';
 import 'package:mornye/widgets/link/link_actions.dart';
+import 'package:mornye/widgets/track_card.dart';
 import 'package:mornye/widgets/track_list_tile.dart';
 import 'package:mornye/utils/desktop_platform.dart';
 import 'package:mornye/widgets/desktop/detail_header.dart';
 import 'package:mornye/widgets/desktop/desktop_selection.dart';
 import 'package:mornye/widgets/desktop/track_list_table.dart';
 import 'package:mornye/widgets/audio_quality_badges.dart';
+import 'package:mornye/widgets/cached_cover_image.dart';
 import 'package:mornye/widgets/motion_header_banner.dart';
 import 'package:mornye/widgets/track_detail_actions.dart';
 import 'package:mornye/widgets/selection_action_button.dart';
@@ -106,6 +110,8 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen>
   String? _headerImageUrl;
   List<String> _audioTraits = const [];
   String? _description;
+  List<Track>? _commonQualitySource;
+  Track? _commonQualityCache;
 
   /// Double click and Enter actions of the desktop table rows, by row id.
   final Map<String, VoidCallback> _desktopActivations = {};
@@ -296,6 +302,9 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen>
   );
 
   Track? _commonQualityTrack(List<Track> tracks) {
+    if (identical(_commonQualitySource, tracks)) {
+      return _commonQualityCache;
+    }
     final counts = <(String, bool?), int>{};
     for (final track in tracks) {
       final signature = _qualitySignature(track);
@@ -304,12 +313,16 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen>
     }
     // A strict majority avoids choosing an arbitrary baseline for mixed albums.
     // Unknown metadata counts towards the total, but never implies a quality.
+    Track? result;
     for (final track in tracks) {
       if ((counts[_qualitySignature(track)] ?? 0) > tracks.length / 2) {
-        return track;
+        result = track;
+        break;
       }
     }
-    return null;
+    _commonQualitySource = tracks;
+    _commonQualityCache = result;
+    return result;
   }
 
   List<Widget> _audioTraitInline({Track? commonQualityTrack}) {
@@ -457,6 +470,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen>
       for (var index = 0; index < tracks.length; index++)
         _trackSelectionId(tracks[index], index),
     ];
+    slideSelectIds = ids;
     pruneSelection(ids.toSet());
 
     final scaffold = CollectionScaffold(
@@ -483,6 +497,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen>
             child: AlbumDescription(
               title: widget.albumName,
               description: _description!,
+              underSheetEdge: !context.isMornye && !isDesktopPlatform,
             ),
           ),
         if (_isLoading || (_error == null && tracks.isNotEmpty))
@@ -555,14 +570,17 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen>
     final coverThumbUrl = widget.coverUrl ?? _headerImageUrl;
     final showSquareCover = context.isMornye || !hasMotion;
     final expandedHeight = calculateExpandedHeight(context);
-    final cacheWidth = coverCacheWidthForViewport(context);
+    final cacheWidth = detailHeaderCoverCacheWidth(context);
+    final bgCacheWidth = !context.isMornye && showSquareCover
+        ? metadataBackdropCacheExtent(context)
+        : cacheWidth;
     final headerBgUrl =
         _headerImageUrl ?? widget.headerImageUrl ?? widget.coverUrl;
     Widget headerBgImage() => headerBgUrl != null
         ? CachedNetworkImage(
             imageUrl: highResCoverUrl(headerBgUrl) ?? headerBgUrl,
             fit: BoxFit.cover,
-            memCacheWidth: cacheWidth,
+            memCacheWidth: bgCacheWidth,
             cacheManager: CoverCacheManager.instance,
             placeholder: (_, _) => Container(color: colorScheme.surface),
             errorWidget: (_, _, _) => Container(color: colorScheme.surface),
@@ -641,7 +659,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen>
                 style: isDesktopPlatform
                     ? desktopDetailSubtitleStyle(header)
                     : TextStyle(
-                        color: colorScheme.primary,
+                        color: HeaderPalette.of(header).primary,
                         fontSize: context.tokens.headerSubtitleSize,
                         fontWeight: context.isMornye
                             ? FontWeight.w400
@@ -676,15 +694,21 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen>
       appBarActions: isSelectionMode
           ? const []
           : [
-              if (ref.watch(linkPhoneClientProvider) != null)
-                LinkDownloadOnDesktopButton(
-                  tracks: tracks,
-                  service: _recommendedDownloadService(),
-                ),
-              HeaderCircleButton(
-                icon: Icons.open_in_new_rounded,
-                tooltip: context.l10n.openInOtherServices,
-                onPressed: () => _showShareSheet(context, tracks, artistName),
+              HeaderToolbarActions(
+                actions: (toolbar, ref) => [
+                  ?linkDownloadOnDesktopAction(
+                    toolbar,
+                    ref,
+                    tracks,
+                    service: _recommendedDownloadService(),
+                  ),
+                  ContextMenuAction(
+                    icon: Icons.open_in_new_rounded,
+                    label: context.l10n.openInOtherServices,
+                    onSelected: () =>
+                        _showShareSheet(context, tracks, artistName),
+                  ),
+                ],
               ),
             ],
     );
@@ -727,6 +751,8 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen>
         ref,
         tracks[index],
         isInHistory: inHistory[index],
+        queue: tracks,
+        queueIndex: index,
         onDownload: ({bool forceQualityPicker = false}) => _downloadTrack(
           context,
           tracks[index],
@@ -753,46 +779,66 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen>
                 : (tracks.first.albumArtist ?? tracks.first.artistName)),
       );
     }
+    final hasLosslessTrait = _audioTraits.any(
+      (trait) => trait.toLowerCase().contains('lossless'),
+    );
     return SliverPadding(
-      padding: EdgeInsets.symmetric(horizontal: wideListInset(context)),
+      // A disc label brings its own space above the first run.
+      padding: EdgeInsets.symmetric(
+        horizontal: wideListInset(context),
+      ).copyWith(top: hasMultipleDiscs ? 0 : collectionRunTopGap(context)),
       sliver: SliverList(
         delegate: SliverChildBuilderDelegate((context, index) {
           final track = tracks[index];
           final selectionId = _trackSelectionId(track, index);
           final isInHistory = existingHistoryKeys.contains(historyKeys[index]);
-          final row = KeyedSubtree(
+          final disc = discNumber(track);
+          final startsDisc =
+              hasMultipleDiscs &&
+              (index == 0 || discNumber(tracks[index - 1]) != disc);
+          final endsDisc =
+              hasMultipleDiscs &&
+              index < tracks.length - 1 &&
+              discNumber(tracks[index + 1]) != disc;
+          // Material joins the rows of a disc into one connected list.
+          final row = TrackCardSegment(
             key: ValueKey(selectionId),
-            child: StaggeredListItem(
-              index: index,
-              child: TrackListTile(
-                track: track,
-                isInHistory: isInHistory,
-                onDownload: ({bool forceQualityPicker = false}) =>
-                    _downloadTrack(
-                      context,
-                      track,
-                      forceQualityPicker: forceQualityPicker,
-                    ),
-                clickableArtist: true,
-                showQualityBadges: context.isMornye
-                    ? !_audioTraits.any(
-                        (trait) => trait.toLowerCase().contains('lossless'),
-                      )
-                    : commonQualityTrack == null ||
-                          _qualitySignature(track) !=
-                              _qualitySignature(commonQualityTrack),
-                isSelectionMode: isSelectionMode,
-                isSelected: selectedIds.contains(selectionId),
-                onToggleSelection: () => toggleSelection(selectionId),
-                onEnterSelectionMode: () => enterSelectionMode(selectionId),
-                leading: SizedBox(
-                  width: 32,
-                  child: Center(
-                    child: Text(
-                      '${track.trackNumber ?? 0}',
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        fontWeight: FontWeight.w500,
+            first: index == 0 || startsDisc,
+            last: index == tracks.length - 1 || endsDisc,
+            child: slideSelectRow(
+              selectionId,
+              StaggeredListItem(
+                index: index,
+                child: TrackListTile(
+                  track: track,
+                  isInHistory: isInHistory,
+                  queue: tracks,
+                  queueIndex: index,
+                  onDownload: ({bool forceQualityPicker = false}) =>
+                      _downloadTrack(
+                        context,
+                        track,
+                        forceQualityPicker: forceQualityPicker,
+                      ),
+                  clickableArtist: true,
+                  showQualityBadges: context.isMornye
+                      ? !hasLosslessTrait
+                      : commonQualityTrack == null ||
+                            _qualitySignature(track) !=
+                                _qualitySignature(commonQualityTrack),
+                  isSelectionMode: isSelectionMode,
+                  isSelected: selectedIds.contains(selectionId),
+                  onToggleSelection: () => toggleSelection(selectionId),
+                  onEnterSelectionMode: () => holdToSelect(selectionId),
+                  leading: SizedBox(
+                    width: 32,
+                    child: Center(
+                      child: Text(
+                        '${track.trackNumber ?? 0}',
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
                     ),
                   ),
@@ -800,9 +846,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen>
               ),
             ),
           );
-          final disc = discNumber(track);
-          if (hasMultipleDiscs &&
-              (index == 0 || discNumber(tracks[index - 1]) != disc)) {
+          if (startsDisc) {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [

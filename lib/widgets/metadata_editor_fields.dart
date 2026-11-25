@@ -17,7 +17,10 @@ class MetadataEditorOptions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (!context.isMornye) return SettingsGroup(children: children);
+    if (!context.isMornye) {
+      // Every option is one row of the connected group.
+      return SettingsGroup(connected: children.isNotEmpty, children: children);
+    }
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Material(

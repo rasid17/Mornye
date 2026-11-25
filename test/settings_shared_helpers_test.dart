@@ -164,17 +164,23 @@ void _legacySheet(
             ? CrossAxisAlignment.start
             : CrossAxisAlignment.center,
         children: [
-          for (final choice in _choices)
-            AppSheetOption.choice(
-              leading: AppIcon(choice.icon),
-              title: Text(choice.title),
-              subtitle: choice.subtitle == null ? null : Text(choice.subtitle!),
-              selected: selected == choice.value,
-              onTap: () {
-                onSelected(choice.value);
-                Navigator.pop(sheetContext);
-              },
-            ),
+          AppSheetOptions(
+            children: [
+              for (final choice in _choices)
+                AppSheetOption.choice(
+                  leading: AppIcon(choice.icon),
+                  title: Text(choice.title),
+                  subtitle: choice.subtitle == null
+                      ? null
+                      : Text(choice.subtitle!),
+                  selected: selected == choice.value,
+                  onTap: () {
+                    onSelected(choice.value);
+                    Navigator.pop(sheetContext);
+                  },
+                ),
+            ],
+          ),
           if (shape.bottomSpacing > 0) SizedBox(height: shape.bottomSpacing),
         ],
       ),
@@ -645,6 +651,6 @@ void main() {
     expect(group.children, same(rows));
     final plain = settingsSectionSlivers(title: 'Section', children: const []);
     final plainGroup = (plain[1] as SliverToBoxAdapter).child! as SettingsGroup;
-    expect((plainGroup.connected, plainGroup.glass), (false, false));
+    expect((plainGroup.connected, plainGroup.glass), (null, false));
   });
 }

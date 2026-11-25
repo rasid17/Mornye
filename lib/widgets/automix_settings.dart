@@ -36,36 +36,71 @@ class _AutoMixSettingsState extends ConsumerState<AutoMixSettings> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            for (final effect in AutoMixEffect.values)
-              Semantics(
-                selected: effect == current,
-                child: AppSheetOption(
-                  leading: Icon(switch (effect) {
-                    AutoMixEffect.auto => Icons.auto_awesome,
-                    AutoMixEffect.crossfade => Icons.compare_arrows,
-                    AutoMixEffect.muffled => Icons.graphic_eq,
-                    AutoMixEffect.echo => Icons.surround_sound,
-                    AutoMixEffect.pitch => Icons.music_note,
-                    AutoMixEffect.custom => Icons.tune,
-                  }),
-                  title: Text(names[effect]!),
-                  selected: effect == current,
-                  trailing: effect == current
-                      ? Icon(
-                          Icons.check,
-                          color: Theme.of(sheetContext).colorScheme.primary,
-                        )
-                      : null,
-                  onTap: () {
-                    notifier.setAutoMixEffect(effect);
-                    Navigator.pop(sheetContext);
-                  },
-                ),
-              ),
+            AppSheetOptions(
+              children: [
+                for (final effect in AutoMixEffect.values)
+                  Semantics(
+                    selected: effect == current,
+                    child: AppSheetOption(
+                      leading: Icon(switch (effect) {
+                        AutoMixEffect.auto => Icons.auto_awesome,
+                        AutoMixEffect.crossfade => Icons.compare_arrows,
+                        AutoMixEffect.muffled => Icons.graphic_eq,
+                        AutoMixEffect.echo => Icons.surround_sound,
+                        AutoMixEffect.pitch => Icons.music_note,
+                        AutoMixEffect.custom => Icons.tune,
+                      }),
+                      title: Text(names[effect]!),
+                      selected: effect == current,
+                      trailing: effect == current
+                          ? Icon(
+                              Icons.check,
+                              color: Theme.of(sheetContext).colorScheme.primary,
+                            )
+                          : null,
+                      onTap: () {
+                        notifier.setAutoMixEffect(effect);
+                        Navigator.pop(sheetContext);
+                      },
+                    ),
+                  ),
+              ],
+            ),
             const SizedBox(height: 8),
           ],
         ),
       ),
+    );
+  }
+
+  void _showMatchingPicker(
+    BuildContext context,
+    AutoMixMatching current,
+    Map<AutoMixMatching, String> names,
+  ) {
+    final l10n = context.l10n;
+    showAppChoiceSheet<AutoMixMatching>(
+      context: context,
+      title: l10n.autoMixMatching,
+      selected: current,
+      choices: [
+        for (final matching in AutoMixMatching.values)
+          AppChoice(
+            matching,
+            switch (matching) {
+              AutoMixMatching.standard => Icons.looks_one_outlined,
+              AutoMixMatching.more => Icons.looks_two_outlined,
+              AutoMixMatching.most => Icons.looks_3_outlined,
+            },
+            names[matching]!,
+            subtitle: switch (matching) {
+              AutoMixMatching.standard => l10n.autoMixMatchingStandardHint,
+              AutoMixMatching.more => l10n.autoMixMatchingMoreHint,
+              AutoMixMatching.most => l10n.autoMixMatchingMostHint,
+            },
+          ),
+      ],
+      onSelected: ref.read(settingsProvider.notifier).setAutoMixMatching,
     );
   }
 
@@ -83,13 +118,18 @@ class _AutoMixSettingsState extends ConsumerState<AutoMixSettings> {
       AutoMixEffect.pitch: l10n.autoMixEffectPitch,
       AutoMixEffect.custom: l10n.autoMixEffectCustom,
     };
+    final matchingNames = {
+      AutoMixMatching.standard: l10n.autoMixMatchingStandard,
+      AutoMixMatching.more: l10n.autoMixMatchingMore,
+      AutoMixMatching.most: l10n.autoMixMatchingMost,
+    };
     Widget slider(
       String label,
       String valueLabel,
       double value,
       double min,
       double max,
-      int divisions,
+      int? divisions,
       ValueChanged<double> draft,
       ValueChanged<double> save,
     ) {
@@ -111,7 +151,7 @@ class _AutoMixSettingsState extends ConsumerState<AutoMixSettings> {
               min: min,
               max: max,
               divisions: divisions,
-              label: value.toStringAsFixed(2),
+              label: valueLabel,
               semanticLabel: '$label: $valueLabel',
               onChanged: enabled ? draft : null,
               onChangeEnd: enabled ? save : null,
@@ -139,13 +179,26 @@ class _AutoMixSettingsState extends ConsumerState<AutoMixSettings> {
             _duration ?? settings.autoMixDuration.toDouble(),
             3,
             60,
-            57,
-            (value) => setState(() => _duration = value),
+            null,
+            (value) => setState(() => _duration = value.roundToDouble()),
             (value) {
               notifier.setAutoMixDuration(value.round());
               setState(() => _duration = null);
             },
           ),
+        // A Crossfade transition never mixes on the beat.
+        SettingsItem(
+          icon: Icons.join_inner,
+          title: l10n.autoMixMatching,
+          subtitle: matchingNames[settings.autoMixMatching],
+          onTap: enabled && settings.autoMixEffect != AutoMixEffect.crossfade
+              ? () => _showMatchingPicker(
+                  context,
+                  settings.autoMixMatching,
+                  matchingNames,
+                )
+              : null,
+        ),
         SettingsItem(
           icon: Icons.tune,
           title: l10n.autoMixEffect,
@@ -176,10 +229,10 @@ class _AutoMixSettingsState extends ConsumerState<AutoMixSettings> {
             _speed ?? settings.autoMixSpeed,
             0.8,
             1.2,
-            40,
-            (value) => setState(() => _speed = value),
+            null,
+            (value) => setState(() => _speed = (value * 100).round() / 100),
             (value) {
-              notifier.setAutoMixSpeed(value);
+              notifier.setAutoMixSpeed((value * 100).round() / 100);
               setState(() => _speed = null);
             },
           ),

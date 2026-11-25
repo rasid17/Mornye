@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:mornye/theme/mornye_theme.dart';
 import 'package:mornye/utils/desktop_platform.dart';
 import 'package:mornye/utils/android_tv.dart';
+import 'package:mornye/widgets/scaled_drag_proxy.dart';
 
 /// Keeps touch-first tablets on the bottom navigation used by phones. A rail
 /// is reserved for genuinely desktop-width windows; the old 600dp threshold
@@ -90,11 +91,18 @@ class _AdaptiveUiScalerState extends State<AdaptiveUiScaler> {
   final _contentKey = GlobalKey();
 
   @override
+  void initState() {
+    super.initState();
+    ScaledDragProxy.trackPointers();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final mediaQuery = MediaQuery.of(context);
+    // Check size alone before subscribing to the full MediaQueryData so the
+    // default unscaled root does not rebuild on every keyboard inset frame.
+    final size = MediaQuery.sizeOf(context);
     final scale =
-        (isAndroidTv ? 1.15 : adaptiveUiScaleForSize(mediaQuery.size)) *
-        widget.userScale;
+        (isAndroidTv ? 1.15 : adaptiveUiScaleForSize(size)) * widget.userScale;
     final content = AdaptiveUiScale(
       key: _contentKey,
       scale: scale,
@@ -102,6 +110,7 @@ class _AdaptiveUiScalerState extends State<AdaptiveUiScaler> {
     );
     if (scale == 1) return content;
 
+    final mediaQuery = MediaQuery.of(context);
     final scaledSize = Size(
       mediaQuery.size.width / scale,
       mediaQuery.size.height / scale,

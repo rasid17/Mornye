@@ -87,6 +87,8 @@ class _LibrarySearchResultsState extends ConsumerState<LibrarySearchResults> {
   // Hidden while a right-click selection exists only for its open menu.
   bool _menuSelection = false;
   List<LibrarySearchHit> _visibleSongs = const [];
+  Widget? _chips;
+  (LibrarySearchKind?, bool, bool)? _chipsFor;
 
   bool get _selecting => _selected.isNotEmpty;
 
@@ -100,6 +102,12 @@ class _LibrarySearchResultsState extends ConsumerState<LibrarySearchResults> {
       _suppressSelectionBar = false;
       _selectionOverlay.hide();
     }
+  }
+
+  @override
+  void reassemble() {
+    super.reassemble();
+    _chips = null;
   }
 
   @override
@@ -321,12 +329,25 @@ class _LibrarySearchResultsState extends ConsumerState<LibrarySearchResults> {
     if (!chosen) _exitSelection();
   }
 
-  String _label(LibrarySearchKind kind) => switch (kind) {
-    LibrarySearchKind.songs => context.l10n.searchSongs,
-    LibrarySearchKind.albums => context.l10n.searchAlbums,
-    LibrarySearchKind.artists => context.l10n.searchArtists,
-    LibrarySearchKind.playlists => context.l10n.searchPlaylists,
-  };
+  String _label(LibrarySearchKind kind) => _kindLabel(context, kind);
+
+  /// The filter chips, made again only when the chosen filter changes: each
+  /// kind's results arrive on their own and rebuild the slivers around them.
+  Widget _kindChips() {
+    final showKinds = !widget.shelves || _kind != null;
+    final shown = (_kind, _lyricsSearch, showKinds);
+    if (_chips == null || shown != _chipsFor) {
+      _chipsFor = shown;
+      _chips = _LibrarySearchChips(
+        kind: _kind,
+        lyrics: _lyricsSearch,
+        showKinds: showKinds,
+        onSelect: _select,
+        onSelectLyrics: _selectLyrics,
+      );
+    }
+    return _chips!;
+  }
 
   void _select(LibrarySearchKind? kind) => setState(() {
     _lyricsSearch = false;
@@ -464,72 +485,76 @@ class _LibrarySearchResultsState extends ConsumerState<LibrarySearchResults> {
     );
     final song = hit.kind == LibrarySearchKind.songs;
     final key = ValueKey('${hit.kind.name}:${hit.source}:${hit.id}');
-    final swipe = song
-        ? resolvedLibraryItemQueueSwipe(ref, () => _resolve(hit))
-        : null;
     VoidCallback play(MediaPlaybackUi? playback) => playback?.isCurrent ?? false
         ? () => ref
               .read(musicPlayerControllerProvider)
               .togglePlayPause(playback!.isPlaying)
         : () => _open(hit, play: true);
-    Widget card({MediaPlaybackUi? playback}) => TrackCard(
-      key: playback == null ? key : null,
-      style: hit.kind == LibrarySearchKind.songs && !context.isMornye
-          ? TrackCardStyle.filled
-          : TrackCardStyle.flat,
-      leading: ClipRRect(
-        borderRadius: BorderRadius.circular(
-          hit.kind == LibrarySearchKind.artists ? 28 : 8,
-        ),
-        child: SizedBox.square(
-          dimension: 52,
-          child: hit.cover?.isNotEmpty == true
-              ? LocalOrNetworkCoverImage(url: hit.cover!, placeholder: fallback)
-              : fallback(context),
-        ),
-      ),
-      title: hit.title,
-      subtitle: Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
-      isCurrent: playback?.isCurrent ?? false,
-      isPlaying: playback?.isPlaying ?? false,
-      leadingArtwork: song,
-      trailing: song
-          ? SongRowButton(
-              playButton: AppIconButton(
-                tooltip: playback?.isPlaying ?? false
-                    ? context.l10n.actionPause
-                    : context.l10n.tooltipPlay,
-                icon: Icon(
-                  playback?.isPlaying ?? false
-                      ? Icons.pause_rounded
-                      : Icons.play_arrow_rounded,
-                ),
-                onPressed: play(playback),
-              ),
-              onOpenDetails: () => _open(hit),
-              path: hit.samplePath,
-            )
-          : const Icon(Icons.chevron_right),
-      // Long-press selects songs for the Library batch actions; while
-      // selecting, song taps toggle and other results stay inert.
-      isSelectionMode: song && _selecting,
-      isSelected: song && _selected.containsKey(_itemId(hit)),
-      onTap: !_selecting
-          ? song
-                ? songRowTap(
-                    ref,
-                    path: hit.samplePath,
-                    openDetails: () => _open(hit),
-                    play: play(playback),
-                  )
-                : () => _open(hit)
-          : song
-          ? () => _toggleSelection(hit)
-          : null,
-      onLongPress: song ? () => _toggleSelection(hit) : null,
-      onContextMenu: (position) => _showHitMenu(hit, position),
-      queueSwipe: swipe,
-    );
+    Widget card({MediaPlaybackUi? playback, QueueSwipeActions? swipe}) =>
+        TrackCard(
+          key: playback == null ? key : null,
+          style: collectionTrackCardStyle(context),
+          leading: ClipRRect(
+            borderRadius: BorderRadius.circular(
+              hit.kind == LibrarySearchKind.artists ? 28 : 8,
+            ),
+            child: SizedBox.square(
+              dimension: 52,
+              child: hit.cover?.isNotEmpty == true
+                  ? LocalOrNetworkCoverImage(
+                      url: hit.cover!,
+                      placeholder: fallback,
+                      songFile: hit.samplePath,
+                    )
+                  : fallback(context),
+            ),
+          ),
+          title: hit.title,
+          subtitle: Text(
+            subtitle,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+          isCurrent: playback?.isCurrent ?? false,
+          isPlaying: playback?.isPlaying ?? false,
+          leadingArtwork: song,
+          trailing: song
+              ? SongRowButton(
+                  playButton: AppIconButton(
+                    tooltip: playback?.isPlaying ?? false
+                        ? context.l10n.actionPause
+                        : context.l10n.tooltipPlay,
+                    icon: Icon(
+                      playback?.isPlaying ?? false
+                          ? Icons.pause_rounded
+                          : Icons.play_arrow_rounded,
+                    ),
+                    onPressed: play(playback),
+                  ),
+                  onOpenDetails: () => _open(hit),
+                  path: hit.samplePath,
+                )
+              : const Icon(Icons.chevron_right),
+          // Long-press selects songs for the Library batch actions; while
+          // selecting, song taps toggle and other results stay inert.
+          isSelectionMode: song && _selecting,
+          isSelected: song && _selected.containsKey(_itemId(hit)),
+          onTap: !_selecting
+              ? song
+                    ? songRowTap(
+                        ref,
+                        path: hit.samplePath,
+                        openDetails: () => _open(hit),
+                        play: play(playback),
+                      )
+                    : () => _open(hit)
+              : song
+              ? () => _toggleSelection(hit)
+              : null,
+          onLongPress: song ? () => _toggleSelection(hit) : null,
+          onContextMenu: (position) => _showHitMenu(hit, position),
+          queueSwipe: swipe,
+        );
     if (!song) return card();
     // Song rows follow the file they play, so a track change rebuilds only
     // the rows involved.
@@ -539,6 +564,7 @@ class _LibrarySearchResultsState extends ConsumerState<LibrarySearchResults> {
         playback: ref.watch(
           mediaItemPlaybackUiProvider((id: hit.id, path: hit.samplePath)),
         ),
+        swipe: resolvedLibraryItemQueueSwipe(ref, () => _resolve(hit)),
       ),
     );
   }
@@ -674,6 +700,7 @@ class _LibrarySearchResultsState extends ConsumerState<LibrarySearchResults> {
                           ? LocalOrNetworkCoverImage(
                               url: hit.cover!,
                               placeholder: fallback,
+                              songFile: hit.samplePath,
                             )
                           : fallback(context),
                     ),
@@ -825,37 +852,7 @@ class _LibrarySearchResultsState extends ConsumerState<LibrarySearchResults> {
       return taken;
     }
 
-    final slivers = <Widget>[
-      SliverToBoxAdapter(
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-          child: Row(
-            spacing: 8,
-            children: [
-              if (!widget.shelves || _kind != null)
-                for (final kind in [null, ...LibrarySearchKind.values])
-                  AppChoiceChip(
-                    label: Text(
-                      kind == null
-                          ? context.l10n.historyFilterAll
-                          : _label(kind),
-                    ),
-                    selected: !_lyricsSearch && _kind == kind,
-                    singleChoice: true,
-                    onSelected: (_) => _select(kind),
-                  ),
-              AppChoiceChip(
-                label: Text(context.l10n.trackLyrics),
-                selected: _lyricsSearch,
-                singleChoice: true,
-                onSelected: (_) => _selectLyrics(),
-              ),
-            ],
-          ),
-        ),
-      ),
-    ];
+    final slivers = <Widget>[SliverToBoxAdapter(child: _kindChips())];
     var hasResults = false;
     var loading = false;
     var failed = false;
@@ -977,6 +974,12 @@ class _LibrarySearchResultsState extends ConsumerState<LibrarySearchResults> {
             slivers.add(
               SliverToBoxAdapter(
                 child: ListTile(
+                  contentPadding: context.isMornye
+                      ? null
+                      : const EdgeInsetsDirectional.only(
+                          start: connectedRunTitleInset,
+                          end: connectedRunTrailingInset,
+                        ),
                   title: Text(
                     _label(kind),
                     style: Theme.of(context).textTheme.titleLarge,
@@ -1005,7 +1008,18 @@ class _LibrarySearchResultsState extends ConsumerState<LibrarySearchResults> {
                     )
                   : SliverList.builder(
                       itemCount: hits.length.clamp(0, pageSize),
-                      itemBuilder: (context, index) => _row(hits[index]),
+                      // Material joins a kind's filled rows into one
+                      // connected list, which runs on across pages and ends
+                      // at the last row shown.
+                      itemBuilder: (context, index) => TrackCardSegment(
+                        first: page == 0 && index == 0,
+                        last:
+                            index == hits.length.clamp(0, pageSize) - 1 &&
+                            (_kind == null ||
+                                page == _pages - 1 ||
+                                hits.length <= pageSize),
+                        child: _row(hits[index]),
+                      ),
                     ),
             );
           }
@@ -1081,4 +1095,59 @@ class _LibrarySearchResultsState extends ConsumerState<LibrarySearchResults> {
     }
     return slivers;
   }
+}
+
+String _kindLabel(BuildContext context, LibrarySearchKind kind) =>
+    switch (kind) {
+      LibrarySearchKind.songs => context.l10n.searchSongs,
+      LibrarySearchKind.albums => context.l10n.searchAlbums,
+      LibrarySearchKind.artists => context.l10n.searchArtists,
+      LibrarySearchKind.playlists => context.l10n.searchPlaylists,
+    };
+
+/// The row of search filters: every kind unless [showKinds] is false, then
+/// Lyrics.
+class _LibrarySearchChips extends StatelessWidget {
+  const _LibrarySearchChips({
+    required this.kind,
+    required this.lyrics,
+    required this.showKinds,
+    required this.onSelect,
+    required this.onSelectLyrics,
+  });
+
+  final LibrarySearchKind? kind;
+  final bool lyrics;
+  final bool showKinds;
+  final ValueChanged<LibrarySearchKind?> onSelect;
+  final VoidCallback onSelectLyrics;
+
+  @override
+  Widget build(BuildContext context) => SingleChildScrollView(
+    scrollDirection: Axis.horizontal,
+    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+    child: Row(
+      spacing: 8,
+      children: [
+        if (showKinds)
+          for (final kind in [null, ...LibrarySearchKind.values])
+            AppChoiceChip(
+              label: Text(
+                kind == null
+                    ? context.l10n.historyFilterAll
+                    : _kindLabel(context, kind),
+              ),
+              selected: !lyrics && this.kind == kind,
+              singleChoice: true,
+              onSelected: (_) => onSelect(kind),
+            ),
+        AppChoiceChip(
+          label: Text(context.l10n.trackLyrics),
+          selected: lyrics,
+          singleChoice: true,
+          onSelected: (_) => onSelectLyrics(),
+        ),
+      ],
+    ),
+  );
 }

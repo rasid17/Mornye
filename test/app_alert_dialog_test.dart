@@ -156,7 +156,7 @@ void main() {
             DefaultTextStyle.of(
               tester.element(find.text('Remove')),
             ).style.color,
-            MornyeTheme.build(Brightness.dark).colorScheme.primary,
+            CupertinoColors.systemRed.darkColor,
           );
           expect(find.byType(CupertinoAlertDialog), findsNothing);
           expect(find.byType(FilledButton), findsNothing);
@@ -270,6 +270,52 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+
+  testWidgets(
+    'Material dialog opens and closes immediately under Reduce Motion',
+    (tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(
+            theme: ThemeData(),
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(context).copyWith(disableAnimations: true),
+              child: child!,
+            ),
+            home: Builder(
+              builder: (context) => Scaffold(
+                body: TextButton(
+                  child: const Text('Open'),
+                  onPressed: () => showAppDialog<void>(
+                    context: context,
+                    builder: (context) => AppAlertDialog(
+                      title: const Text('Reduced'),
+                      actions: [
+                        AppDialogAction(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Close'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Open'));
+      await tester.pump();
+      final close = find.text('Close');
+      expect(close, findsOneWidget);
+      expect(opacityAbove(tester, close), 1);
+      expect(scaleAbove(tester, close), 1);
+      await tester.tap(close);
+      await tester.pump();
+      expect(close, findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('glass confirmation keeps actions reachable with long text', (
     tester,

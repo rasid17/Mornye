@@ -355,9 +355,9 @@ class _TrackItemWithStatus extends ConsumerWidget {
     );
   }
 
-  /// A tap on a search song: skip a queued song, refuse a duplicate unless
-  /// variants are allowed, otherwise download it. The desktop song table
-  /// runs the same on a click, reading the queue and library itself.
+  /// A tap on a search song: skip a queued song, play a copy the person
+  /// already has unless duplicates or variants are allowed, otherwise
+  /// download it. The desktop song table runs the same on a click.
   static Future<void> activate(
     BuildContext context,
     WidgetRef ref,
@@ -372,6 +372,10 @@ class _TrackItemWithStatus extends ConsumerWidget {
     final settings = ref.read(settingsProvider);
     final allowExistingDownload =
         settings.allowQualityVariants || !settings.deduplicateDownloads;
+
+    if (!allowExistingDownload && (isInHistory || isInLocalLibrary)) {
+      if (await playLocalIfAvailable(context, ref, track)) return;
+    }
 
     if (!allowExistingDownload && isInLocalLibrary) {
       if (context.mounted) {
@@ -546,33 +550,27 @@ class _CollectionItemWidget extends StatelessWidget {
   }
 }
 
-class _DownloadedOrRemoteCover extends StatefulWidget {
-  final String? downloadedFilePath;
-  final String? imageUrl;
-  final double width;
-  final double height;
-  final BorderRadius borderRadius;
-  final IconData fallbackIcon;
-  final double fallbackIconSize;
-  final ColorScheme colorScheme;
-
-  const _DownloadedOrRemoteCover({
+/// The cover a downloaded file carries, for whatever draws it: its path once
+/// the resolver has it, null while the file has none or is not read yet.
+class _DownloadedCoverSource extends StatefulWidget {
+  const _DownloadedCoverSource({
     required this.downloadedFilePath,
-    required this.imageUrl,
-    required this.width,
-    required this.height,
-    required this.borderRadius,
-    required this.fallbackIcon,
-    required this.colorScheme,
-    this.fallbackIconSize = 24,
+    required this.builder,
+    this.remoteUrl,
   });
 
+  final String? downloadedFilePath;
+
+  /// The cover's online address; a change of it asks the resolver again.
+  final String? remoteUrl;
+  final Widget Function(BuildContext context, String? embeddedCoverPath)
+  builder;
+
   @override
-  State<_DownloadedOrRemoteCover> createState() =>
-      _DownloadedOrRemoteCoverState();
+  State<_DownloadedCoverSource> createState() => _DownloadedCoverSourceState();
 }
 
-class _DownloadedOrRemoteCoverState extends State<_DownloadedOrRemoteCover> {
+class _DownloadedCoverSourceState extends State<_DownloadedCoverSource> {
   String? _embeddedCoverPath;
   bool _refreshScheduled = false;
 
@@ -594,10 +592,10 @@ class _DownloadedOrRemoteCoverState extends State<_DownloadedOrRemoteCover> {
   }
 
   @override
-  void didUpdateWidget(covariant _DownloadedOrRemoteCover oldWidget) {
+  void didUpdateWidget(covariant _DownloadedCoverSource oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.downloadedFilePath != widget.downloadedFilePath ||
-        oldWidget.imageUrl != widget.imageUrl) {
+        oldWidget.remoteUrl != widget.remoteUrl) {
       final nextPath = _resolveEmbeddedCoverPath();
       if (nextPath != _embeddedCoverPath) {
         setState(() => _embeddedCoverPath = nextPath);
@@ -627,52 +625,85 @@ class _DownloadedOrRemoteCoverState extends State<_DownloadedOrRemoteCover> {
     });
   }
 
+  @override
+  Widget build(BuildContext context) =>
+      widget.builder(context, _embeddedCoverPath);
+}
+
+class _DownloadedOrRemoteCover extends StatelessWidget {
+  final String? downloadedFilePath;
+  final String? imageUrl;
+  final double width;
+  final double height;
+  final BorderRadius borderRadius;
+  final IconData fallbackIcon;
+  final double fallbackIconSize;
+  final ColorScheme colorScheme;
+
+  const _DownloadedOrRemoteCover({
+    required this.downloadedFilePath,
+    required this.imageUrl,
+    required this.width,
+    required this.height,
+    required this.borderRadius,
+    required this.fallbackIcon,
+    required this.colorScheme,
+    this.fallbackIconSize = 24,
+  });
+
   Widget _fallback() {
     return Container(
-      width: widget.width,
-      height: widget.height,
-      color: widget.colorScheme.surfaceContainerHighest,
+      width: width,
+      height: height,
+      color: colorScheme.surfaceContainerHighest,
       child: Icon(
-        widget.fallbackIcon,
-        color: widget.colorScheme.onSurfaceVariant,
-        size: widget.fallbackIconSize,
+        fallbackIcon,
+        color: colorScheme.onSurfaceVariant,
+        size: fallbackIconSize,
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final cacheWidth = (widget.width * 2).round();
-    final cacheHeight = (widget.height * 2).round();
+    final cacheWidth = (width * 2).round();
+    final cacheHeight = (height * 2).round();
+    final remote = imageUrl;
 
-    Widget child;
-    if (_embeddedCoverPath != null) {
-      child = Image.file(
-        File(_embeddedCoverPath!),
-        width: widget.width,
-        height: widget.height,
-        fit: BoxFit.cover,
-        cacheWidth: cacheWidth,
-        cacheHeight: cacheHeight,
-        gaplessPlayback: true,
-        filterQuality: FilterQuality.low,
-        errorBuilder: (_, _, _) => _fallback(),
-      );
-    } else if (widget.imageUrl != null && widget.imageUrl!.isNotEmpty) {
-      child = CachedCoverImage(
-        imageUrl: widget.imageUrl!,
-        width: widget.width,
-        height: widget.height,
-        fit: BoxFit.cover,
-        memCacheWidth: cacheWidth,
-        memCacheHeight: cacheHeight,
-        errorWidget: (_, _, _) => _fallback(),
-      );
-    } else {
-      child = _fallback();
-    }
+    return _DownloadedCoverSource(
+      downloadedFilePath: downloadedFilePath,
+      remoteUrl: remote,
+      builder: (context, embeddedCoverPath) {
+        Widget child;
+        if (embeddedCoverPath != null) {
+          child = Image.file(
+            File(embeddedCoverPath),
+            width: width,
+            height: height,
+            fit: BoxFit.cover,
+            cacheWidth: cacheWidth,
+            cacheHeight: cacheHeight,
+            gaplessPlayback: true,
+            filterQuality: FilterQuality.low,
+            errorBuilder: (_, _, _) => _fallback(),
+          );
+        } else if (remote != null && remote.isNotEmpty) {
+          child = CachedCoverImage(
+            imageUrl: remote,
+            width: width,
+            height: height,
+            fit: BoxFit.cover,
+            memCacheWidth: cacheWidth,
+            memCacheHeight: cacheHeight,
+            errorWidget: (_, _, _) => _fallback(),
+          );
+        } else {
+          child = _fallback();
+        }
 
-    return ClipRRect(borderRadius: widget.borderRadius, child: child);
+        return ClipRRect(borderRadius: borderRadius, child: child);
+      },
+    );
   }
 }
 
@@ -715,20 +746,75 @@ class _QuickPicksPageViewState extends State<_QuickPicksPageView> {
 
   @override
   Widget build(BuildContext context) {
+    final rowHeight = MediaQuery.textScalerOf(context).scale(64.0);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-          child: Text(
-            widget.section.title,
-            style: Theme.of(
-              context,
-            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  widget.section.title,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              if (isDesktopPlatform && widget.totalPages > 1) ...[
+                AppIconButton(
+                  tooltip: MaterialLocalizations.of(
+                    context,
+                  ).previousPageTooltip,
+                  icon: const AppIcon.adaptive(Icons.chevron_left),
+                  onPressed: _currentPage > 0
+                      ? () => _pageController.previousPage(
+                          duration: AppMotion.spatial(
+                            context,
+                            const AppMotionSpec(
+                              Duration(milliseconds: 250),
+                              Curves.easeOut,
+                            ),
+                          ).duration,
+                          curve: AppMotion.spatial(
+                            context,
+                            const AppMotionSpec(
+                              Duration(milliseconds: 250),
+                              Curves.easeOut,
+                            ),
+                          ).curve,
+                        )
+                      : null,
+                ),
+                AppIconButton(
+                  tooltip: MaterialLocalizations.of(context).nextPageTooltip,
+                  icon: const AppIcon.adaptive(Icons.chevron_right),
+                  onPressed: _currentPage < widget.totalPages - 1
+                      ? () => _pageController.nextPage(
+                          duration: AppMotion.spatial(
+                            context,
+                            const AppMotionSpec(
+                              Duration(milliseconds: 250),
+                              Curves.easeOut,
+                            ),
+                          ).duration,
+                          curve: AppMotion.spatial(
+                            context,
+                            const AppMotionSpec(
+                              Duration(milliseconds: 250),
+                              Curves.easeOut,
+                            ),
+                          ).curve,
+                        )
+                      : null,
+                ),
+              ],
+            ],
           ),
         ),
         SizedBox(
-          height: widget.itemsPerPage * 64.0,
+          height: widget.itemsPerPage * rowHeight,
           child: PageView.builder(
             controller: _pageController,
             itemCount: widget.totalPages,

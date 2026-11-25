@@ -23,6 +23,26 @@ DownloadStatus downloadQueuePersistenceStatus(
   _ => status,
 };
 
+/// True when [a] and [b] serialize to the exact same durable queue row,
+/// ignoring volatile transfer metrics (progress, speed, byte counts, stage).
+bool samePersistedDownloadItem(DownloadItem a, DownloadItem b) =>
+    identical(a, b) ||
+    (a.id == b.id &&
+        identical(a.track, b.track) &&
+        a.service == b.service &&
+        downloadQueuePersistenceStatus(a.status, errorType: a.errorType) ==
+            downloadQueuePersistenceStatus(b.status, errorType: b.errorType) &&
+        a.filePath == b.filePath &&
+        a.error == b.error &&
+        a.errorType == b.errorType &&
+        a.createdAt == b.createdAt &&
+        a.qualityOverride == b.qualityOverride &&
+        a.playlistName == b.playlistName &&
+        a.playlistPosition == b.playlistPosition &&
+        a.fromBatch == b.fromBatch &&
+        a.preserveQualityVariant == b.preserveQualityVariant &&
+        a.networkDownloadFolder == b.networkDownloadFolder);
+
 /// Transfer samples are transient; only restart-relevant state reaches SQLite.
 String encodeDownloadQueueItemForPersistence(DownloadItem item) => jsonEncode(
   item.toJson()
@@ -72,7 +92,10 @@ RestoredDownloadQueue _decodeRows(List<Map<String, dynamic>> rows) {
       if (item.status != status) {
         item = item.copyWith(status: status, progress: 0);
       }
-      if (status == DownloadStatus.queued || status == DownloadStatus.skipped) {
+      // Failed and cancelled songs come back shown, not restarted.
+      if (status == DownloadStatus.queued ||
+          status == DownloadStatus.skipped ||
+          status == DownloadStatus.failed) {
         pending.add(item);
       }
     } catch (_) {

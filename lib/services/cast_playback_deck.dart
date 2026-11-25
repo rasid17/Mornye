@@ -26,6 +26,8 @@ class CastPlaybackDeck implements PlaybackDeck {
   static int _nextToken = 0;
   int _token = 0;
   bool _ready = false;
+  // The receiver played the loaded song to its end.
+  bool _finished = false;
   Duration _position = Duration.zero, _duration = Duration.zero;
   PlaybackDeckState _state = PlaybackDeckState.stopped;
 
@@ -65,7 +67,9 @@ class CastPlaybackDeck implements PlaybackDeck {
     if (event['failed'] == true || event['error'] != null) {
       _ready = false;
       _setState(PlaybackDeckState.paused);
-      _states.addError(StateError('TV could not play this audio file'));
+      _states.addError(
+        StateError('The cast device could not play this audio file'),
+      );
       return;
     }
     _position = Duration(
@@ -79,7 +83,9 @@ class CastPlaybackDeck implements PlaybackDeck {
       _duration = duration;
       _durations.add(duration);
     }
-    if (event['finished'] == true && _state != PlaybackDeckState.completed) {
+    if (event['finished'] == true) {
+      if (_finished) return;
+      _finished = true;
       _setState(PlaybackDeckState.completed);
       _completions.add(null);
     } else if (event['suspended'] == true) {
@@ -99,14 +105,13 @@ class CastPlaybackDeck implements PlaybackDeck {
     'ogg' || 'opus' => 'audio/ogg',
     'wav' => 'audio/wav',
     'webm' => 'audio/webm',
-    _ => throw UnsupportedError(
-      'This audio format is not supported by Google Cast',
-    ),
+    _ => throw UnsupportedError('This audio format cannot be cast'),
   };
 
   Future<void> _load(String source) async {
     final token = _token = ++_nextToken;
     _ready = false;
+    _finished = false;
     final item = metadata();
     final path = Uri.tryParse(source)?.path ?? source;
     final format = item?.extras?['format'] as String?;
@@ -114,7 +119,9 @@ class CastPlaybackDeck implements PlaybackDeck {
       format == null || format.isEmpty ? path.split('.').last : format,
     );
     final serving = _serving ??= output.command('serve', {
-      'host': output.host ?? (throw StateError('TV has no network address')),
+      'host':
+          output.host ??
+          (throw StateError('The cast device has no network address')),
     });
     try {
       await serving;
@@ -166,7 +173,9 @@ class CastPlaybackDeck implements PlaybackDeck {
       'mime': mime,
     });
     final url = reply?['url'];
-    if (url is! String) throw StateError('TV media server did not answer');
+    if (url is! String) {
+      throw StateError('The cast media server did not answer');
+    }
     return url;
   }
 
@@ -179,6 +188,8 @@ class CastPlaybackDeck implements PlaybackDeck {
     bool requiresDsd = false,
     bool allowFixedVolume = false,
     bool dapExclusive = false,
+    int usbMaxSampleRate = 0,
+    bool usbDitherHighPass = false,
   }) => _load(path);
   @override
   Future<void> setNetworkSource(String url, {bool arriving = false}) =>
@@ -198,14 +209,18 @@ class CastPlaybackDeck implements PlaybackDeck {
 
   @override
   Future<void> resume() async {
-    if (!_ready) throw StateError('TV source is not ready');
+    if (!_ready) throw StateError('The cast source is not ready');
     await output.command('play');
     _setState(PlaybackDeckState.playing);
   }
 
+  /// The receiver still holds the loaded song. One that finished it has no
+  /// media session left and answers a transport command with an error.
+  bool get _holdsSong => _ready && !_finished && output.connected;
+
   @override
   Future<void> pause() async {
-    if (_ready && output.connected) await output.command('pause');
+    if (_holdsSong) await output.command('pause');
     _setState(PlaybackDeckState.paused);
   }
 
@@ -219,9 +234,17 @@ class CastPlaybackDeck implements PlaybackDeck {
 
   @override
   Future<void> stop() async {
-    final loaded = _ready;
+    final holdsSong = _holdsSong;
     _ready = false;
-    if (loaded && output.connected) await output.command('stop');
+    if (holdsSong) {
+      try {
+        await output.command('stop');
+      } on Object catch (error) {
+        // The song change that asked for this must go on: the next load
+        // replaces whatever the receiver still plays.
+        _log.w('TV did not stop: $error');
+      }
+    }
     _setState(PlaybackDeckState.stopped);
   }
 

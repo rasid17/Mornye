@@ -1,14 +1,36 @@
 import 'package:json_annotation/json_annotation.dart';
 import 'package:mornye/models/automix_options.dart';
+import 'package:mornye/models/home_layout.dart';
 import 'package:mornye/models/metadata_separators.dart';
 import 'package:mornye/utils/artist_utils.dart';
 
 part 'settings.g.dart';
 
+/// A saved Home layout, or the shipped one when there is none to read.
+HomeLayout homeLayoutFromJson(Object? value) => value is Map
+    ? HomeLayout.fromJson(Map<String, dynamic>.from(value))
+    : const HomeLayout();
+
 /// 'default' (a card) or 'fullscreen' once chosen, else empty for the app
 /// style's own ([AppSettings.playerCoverStyleFor]).
 String playerCoverStyleFromJson(Object? value) =>
     value == 'default' || value == 'fullscreen' ? value as String : '';
+
+/// How far up a full screen cover its fade reaches: 'short', 'medium' or
+/// 'long'.
+String playerCoverFadeFromJson(Object? value) =>
+    value == 'short' || value == 'long' ? value as String : 'medium';
+
+/// Where a full screen cover starts to fade, as a share of its height, when
+/// it starts at [medium] for the medium [fade].
+double playerCoverFadeStart(double medium, String fade) =>
+    1 -
+    (1 - medium) *
+        switch (fade) {
+          'short' => 0.65,
+          'long' => 1.4,
+          _ => 1.0,
+        };
 
 /// Pre-amp applied on top of ReplayGain during playback, in whole dB.
 /// -7 dB targets -25 LUFS from the -18 LUFS tag reference.
@@ -77,6 +99,14 @@ double interfaceScaleFromJson(Object? value) => value is num && value.isFinite
     ? value.toDouble().clamp(minInterfaceScale, maxInterfaceScale)
     : 1;
 
+/// Slowest and fastest Animation speed, as a factor of the designed speed.
+const double minAnimationSpeed = 0.5;
+const double maxAnimationSpeed = 2;
+
+double animationSpeedFromJson(Object? value) => value is num && value.isFinite
+    ? value.toDouble().clamp(minAnimationSpeed, maxAnimationSpeed)
+    : 1;
+
 /// Sort choices offered by the Library, in display order.
 const librarySortModes = [
   'latest',
@@ -133,6 +163,7 @@ class AppSettings {
   static const String libraryQualityLabelBitDepthOnly = 'bit_depth_only';
   static const String libraryQualityLabelBitDepth = 'bit_depth';
   static const String libraryQualityLabelBitDepthBitrate = 'bit_depth_bitrate';
+  static const String libraryQualityLabelSimple = 'simple';
   static const String librarySongTapPlay = 'play';
   static const String librarySongTapDetails = 'details';
 
@@ -162,6 +193,8 @@ class AppSettings {
   final double playbackNormalizationPreamp;
   @JsonKey(fromJson: playbackNormalizationModeFromJson)
   final String playbackNormalizationMode; // 'track' or 'album'
+  // Also turn up songs whose tags ask for more gain, not only turn down.
+  final bool playbackNormalizationBoost;
   // Ask before the app's volume bar goes above [loudVolumeLevel] percent.
   final bool confirmLoudVolume;
   @JsonKey(fromJson: loudVolumeLevelFromJson)
@@ -184,6 +217,10 @@ class AppSettings {
   final bool autoMixEcho;
   final bool autoMixLowPass;
 
+  /// How readily AutoMix mixes two songs on their beats.
+  @JsonKey(unknownEnumValue: AutoMixMatching.standard)
+  final AutoMixMatching autoMixMatching;
+
   /// Playback speed for every song, from [minPlaybackSpeed] to
   /// [maxPlaybackSpeed]; 1 is normal.
   @JsonKey(fromJson: playbackSpeedFromJson)
@@ -204,12 +241,21 @@ class AppSettings {
     pitchSemitones: autoMixPitch,
     echo: autoMixEcho,
     lowPass: autoMixLowPass,
+    matching: autoMixMatching,
   );
   final bool discordRichPresenceEnabled;
   final bool usbBitPerfect;
   final bool usbDirect;
   final bool usbDsdOverPcm;
   final bool usbAllowFixedVolume;
+
+  /// The highest sample rate the direct USB driver sets on the DAC, in Hz;
+  /// a song above it is converted. 0 leaves the choice to the DAC.
+  final int usbMaxSampleRate;
+
+  /// High-pass TPDF instead of plain TPDF when the direct USB driver
+  /// converts a song for a 16-bit output.
+  final bool usbDitherHighPass;
   final bool dapExclusive;
 
   /// Android beta, off by default: play the music player and AutoMix through
@@ -266,6 +312,10 @@ class AppSettings {
   final double musicHapticsStrength;
   @JsonKey(fromJson: playerCoverStyleFromJson)
   final String playerCoverStyle; // 'default' (card), 'fullscreen' or ''
+  @JsonKey(fromJson: playerCoverFadeFromJson)
+  final String playerCoverFade; // 'short', 'medium' or 'long'
+  /// A full screen cover keeps its sides, and so ends above the title.
+  final bool playerCoverWhole;
   final bool landscapeLyricsArtwork;
   final bool autoHideLyricsControls;
 
@@ -329,6 +379,15 @@ class AppSettings {
 
   /// Whether Home offers the last song again ("Continue listening").
   final bool homeContinueListening;
+
+  /// Whether Home recommends songs outside the Library, asked from an
+  /// extension with a few Library songs as the example.
+  final bool homeRecommendations;
+
+  /// The order of Home's sections and the ones turned off. Read what shows
+  /// through [homeShows].
+  @JsonKey(fromJson: homeLayoutFromJson)
+  final HomeLayout homeLayout;
   final bool separateSingles;
   final String singleFilenameFormat;
   final String albumFolderStructure;
@@ -351,6 +410,11 @@ class AppSettings {
   /// and TV scale. 1 is the normal size.
   @JsonKey(fromJson: interfaceScaleFromJson)
   final double interfaceScale;
+
+  /// Animation speed: how fast the app's own motion plays. 1 is the
+  /// designed speed, 2 twice as fast.
+  @JsonKey(fromJson: animationSpeedFromJson)
+  final double animationSpeed;
   final String
   extensionVerificationBrowserMode; // 'external_first' or 'in_app_first'
   final String locale;
@@ -359,6 +423,9 @@ class AppSettings {
 
   /// Show the line being sung in place of the song title on the lock screen.
   final bool lockScreenLyrics;
+
+  /// The lock screen line takes the artist's place and the title stays.
+  final bool lockScreenLyricsKeepTitle;
   final bool motionArtworkEnabled;
 
   /// Copy a download's animated cover into its album folder as `cover.mp4`.
@@ -501,6 +568,10 @@ class AppSettings {
   /// the track title. Off by default; Lyrics settings turns it on.
   final bool playerShowLyricSnippet;
 
+  /// Whether that line shows the song's translation instead of the sung
+  /// line. Off by default, so the line reads as sung.
+  final bool playerLyricSnippetTranslation;
+
   const AppSettings({
     this.defaultService = '',
     this.audioQuality = 'LOSSLESS',
@@ -521,6 +592,7 @@ class AppSettings {
     this.playbackNormalization = false,
     this.playbackNormalizationPreamp = 0,
     this.playbackNormalizationMode = 'track',
+    this.playbackNormalizationBoost = false,
     this.confirmLoudVolume = true,
     this.loudVolumeLevel = 80,
     this.pauseOnMute = true,
@@ -533,6 +605,7 @@ class AppSettings {
     this.autoMixPitch = 0,
     this.autoMixEcho = false,
     this.autoMixLowPass = false,
+    this.autoMixMatching = AutoMixMatching.standard,
     this.playbackSpeed = 1,
     this.playbackKeepPitch = true,
     this.playbackPitch = 0,
@@ -541,6 +614,8 @@ class AppSettings {
     this.usbDirect = false,
     this.usbDsdOverPcm = false,
     this.usbAllowFixedVolume = false,
+    this.usbMaxSampleRate = 0,
+    this.usbDitherHighPass = false,
     this.dapExclusive = false,
     this.media3Engine = false,
     this.skipSilence = false,
@@ -558,6 +633,8 @@ class AppSettings {
     this.musicHapticsSensitivity = 0.5,
     this.musicHapticsStrength = 0.5,
     this.playerCoverStyle = '',
+    this.playerCoverFade = 'medium',
+    this.playerCoverWhole = false,
     this.landscapeLyricsArtwork = false,
     this.autoHideLyricsControls = true,
     this.autoHideLyricsControlsWithAccessibility = false,
@@ -596,6 +673,8 @@ class AppSettings {
       'networkStorage',
     ],
     this.homeContinueListening = true,
+    this.homeRecommendations = true,
+    this.homeLayout = const HomeLayout(),
     this.separateSingles = false,
     this.singleFilenameFormat = '{title} - {artist}',
     this.albumFolderStructure = 'artist_album',
@@ -604,11 +683,13 @@ class AppSettings {
     this.heroAnimationsEnabled = true,
     this.forceBackdropBlur = false,
     this.interfaceScale = 1,
+    this.animationSpeed = 1,
     this.extensionVerificationBrowserMode = 'in_app_first',
     this.locale = 'system',
     this.lyricsMode = 'embed',
     this.keepScreenOnLyrics = true,
     this.lockScreenLyrics = false,
+    this.lockScreenLyricsKeepTitle = false,
     this.motionArtworkEnabled = true,
     this.saveMotionArtworkFile = false,
     this.saveFolderCover = false,
@@ -674,6 +755,7 @@ class AppSettings {
     this.playerShowTranslation = true,
     this.playerShowVolume = true,
     this.playerShowLyricSnippet = false,
+    this.playerLyricSnippetTranslation = false,
   });
 
   @JsonKey(includeFromJson: false, includeToJson: false)
@@ -685,6 +767,10 @@ class AppSettings {
     'musixmatch_language': musixmatchLanguage,
     'prefer_best_timing': lyricsPreferBestTiming,
   };
+
+  /// Whether this app plays the music. With another app chosen, settings
+  /// that only shape the built-in player are hidden.
+  bool get usesBuiltInPlayer => playerMode == 'internal';
 
   /// The cover art style the player shows: the one chosen, else the app
   /// style's own, full screen in Material and a card in Mornye.
@@ -719,6 +805,7 @@ class AppSettings {
     bool? playbackNormalization,
     double? playbackNormalizationPreamp,
     String? playbackNormalizationMode,
+    bool? playbackNormalizationBoost,
     bool? confirmLoudVolume,
     int? loudVolumeLevel,
     bool? pauseOnMute,
@@ -731,6 +818,7 @@ class AppSettings {
     double? autoMixPitch,
     bool? autoMixEcho,
     bool? autoMixLowPass,
+    AutoMixMatching? autoMixMatching,
     double? playbackSpeed,
     bool? playbackKeepPitch,
     double? playbackPitch,
@@ -739,6 +827,8 @@ class AppSettings {
     bool? usbDirect,
     bool? usbDsdOverPcm,
     bool? usbAllowFixedVolume,
+    int? usbMaxSampleRate,
+    bool? usbDitherHighPass,
     bool? dapExclusive,
     bool? media3Engine,
     bool? skipSilence,
@@ -756,6 +846,8 @@ class AppSettings {
     double? musicHapticsSensitivity,
     double? musicHapticsStrength,
     String? playerCoverStyle,
+    String? playerCoverFade,
+    bool? playerCoverWhole,
     bool? landscapeLyricsArtwork,
     bool? autoHideLyricsControls,
     bool? autoHideLyricsControlsWithAccessibility,
@@ -792,6 +884,8 @@ class AppSettings {
     bool clearHomeFeedProvider = false,
     List<String>? homeShortcuts,
     bool? homeContinueListening,
+    bool? homeRecommendations,
+    HomeLayout? homeLayout,
     bool? separateSingles,
     String? singleFilenameFormat,
     String? albumFolderStructure,
@@ -800,11 +894,13 @@ class AppSettings {
     bool? heroAnimationsEnabled,
     bool? forceBackdropBlur,
     double? interfaceScale,
+    double? animationSpeed,
     String? extensionVerificationBrowserMode,
     String? locale,
     String? lyricsMode,
     bool? keepScreenOnLyrics,
     bool? lockScreenLyrics,
+    bool? lockScreenLyricsKeepTitle,
     bool? motionArtworkEnabled,
     bool? saveMotionArtworkFile,
     bool? saveFolderCover,
@@ -864,6 +960,7 @@ class AppSettings {
     bool? playerShowTranslation,
     bool? playerShowVolume,
     bool? playerShowLyricSnippet,
+    bool? playerLyricSnippetTranslation,
   }) {
     return AppSettings(
       defaultService: defaultService ?? this.defaultService,
@@ -891,6 +988,8 @@ class AppSettings {
           playbackNormalizationPreamp ?? this.playbackNormalizationPreamp,
       playbackNormalizationMode:
           playbackNormalizationMode ?? this.playbackNormalizationMode,
+      playbackNormalizationBoost:
+          playbackNormalizationBoost ?? this.playbackNormalizationBoost,
       confirmLoudVolume: confirmLoudVolume ?? this.confirmLoudVolume,
       loudVolumeLevel: loudVolumeLevel ?? this.loudVolumeLevel,
       pauseOnMute: pauseOnMute ?? this.pauseOnMute,
@@ -903,6 +1002,7 @@ class AppSettings {
       autoMixPitch: autoMixPitch ?? this.autoMixPitch,
       autoMixEcho: autoMixEcho ?? this.autoMixEcho,
       autoMixLowPass: autoMixLowPass ?? this.autoMixLowPass,
+      autoMixMatching: autoMixMatching ?? this.autoMixMatching,
       playbackSpeed: playbackSpeed ?? this.playbackSpeed,
       playbackKeepPitch: playbackKeepPitch ?? this.playbackKeepPitch,
       playbackPitch: playbackPitch ?? this.playbackPitch,
@@ -912,6 +1012,8 @@ class AppSettings {
       usbDirect: usbDirect ?? this.usbDirect,
       usbDsdOverPcm: usbDsdOverPcm ?? this.usbDsdOverPcm,
       usbAllowFixedVolume: usbAllowFixedVolume ?? this.usbAllowFixedVolume,
+      usbMaxSampleRate: usbMaxSampleRate ?? this.usbMaxSampleRate,
+      usbDitherHighPass: usbDitherHighPass ?? this.usbDitherHighPass,
       dapExclusive: dapExclusive ?? this.dapExclusive,
       media3Engine: media3Engine ?? this.media3Engine,
       skipSilence: skipSilence ?? this.skipSilence,
@@ -933,6 +1035,8 @@ class AppSettings {
           musicHapticsSensitivity ?? this.musicHapticsSensitivity,
       musicHapticsStrength: musicHapticsStrength ?? this.musicHapticsStrength,
       playerCoverStyle: playerCoverStyle ?? this.playerCoverStyle,
+      playerCoverFade: playerCoverFade ?? this.playerCoverFade,
+      playerCoverWhole: playerCoverWhole ?? this.playerCoverWhole,
       landscapeLyricsArtwork:
           landscapeLyricsArtwork ?? this.landscapeLyricsArtwork,
       autoHideLyricsControls:
@@ -984,6 +1088,8 @@ class AppSettings {
       homeShortcuts: homeShortcuts ?? this.homeShortcuts,
       homeContinueListening:
           homeContinueListening ?? this.homeContinueListening,
+      homeRecommendations: homeRecommendations ?? this.homeRecommendations,
+      homeLayout: homeLayout ?? this.homeLayout,
       separateSingles: separateSingles ?? this.separateSingles,
       singleFilenameFormat: singleFilenameFormat ?? this.singleFilenameFormat,
       albumFolderStructure: albumFolderStructure ?? this.albumFolderStructure,
@@ -993,6 +1099,7 @@ class AppSettings {
           heroAnimationsEnabled ?? this.heroAnimationsEnabled,
       forceBackdropBlur: forceBackdropBlur ?? this.forceBackdropBlur,
       interfaceScale: interfaceScale ?? this.interfaceScale,
+      animationSpeed: animationSpeed ?? this.animationSpeed,
       extensionVerificationBrowserMode:
           extensionVerificationBrowserMode ??
           this.extensionVerificationBrowserMode,
@@ -1000,6 +1107,8 @@ class AppSettings {
       lyricsMode: lyricsMode ?? this.lyricsMode,
       keepScreenOnLyrics: keepScreenOnLyrics ?? this.keepScreenOnLyrics,
       lockScreenLyrics: lockScreenLyrics ?? this.lockScreenLyrics,
+      lockScreenLyricsKeepTitle:
+          lockScreenLyricsKeepTitle ?? this.lockScreenLyricsKeepTitle,
       motionArtworkEnabled: motionArtworkEnabled ?? this.motionArtworkEnabled,
       saveMotionArtworkFile:
           saveMotionArtworkFile ?? this.saveMotionArtworkFile,
@@ -1088,8 +1197,18 @@ class AppSettings {
       playerShowVolume: playerShowVolume ?? this.playerShowVolume,
       playerShowLyricSnippet:
           playerShowLyricSnippet ?? this.playerShowLyricSnippet,
+      playerLyricSnippetTranslation:
+          playerLyricSnippetTranslation ?? this.playerLyricSnippetTranslation,
     );
   }
+
+  /// Whether Home shows [section]. Continue listening and Recommended for
+  /// you keep the switches they had before the layout.
+  bool homeShows(HomeSection section) => switch (section) {
+    HomeSection.continueListening => homeContinueListening,
+    HomeSection.recommended => homeRecommendations,
+    _ => homeLayout.shows(section),
+  };
 
   factory AppSettings.fromJson(Map<String, dynamic> json) {
     final settings = _$AppSettingsFromJson(json);

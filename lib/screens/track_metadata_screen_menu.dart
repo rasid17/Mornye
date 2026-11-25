@@ -46,6 +46,16 @@ extension _TrackMetadataMenu on _TrackMetadataScreenState {
             else if (downloadItem != null)
               UnifiedLibraryItem.fromDownloadHistory(downloadItem),
           ]);
+    final redownloadSource = _redownloadSource;
+    // The new file goes to the download folder, so a missing file qualifies.
+    final canRedownload =
+        _canSaveSidecarFiles &&
+        !remoteFile &&
+        !LocalTrackRedownloadService.isQueued(
+          redownloadSource,
+          ref.read(downloadQueueProvider).items,
+          sourceTrackId: _spotifyId,
+        );
     final uploadItems = [
       if (_fileExists && !_isNetworkItem)
         if (localItem != null)
@@ -121,6 +131,12 @@ extension _TrackMetadataMenu on _TrackMetadataScreenState {
         dividerAbove: _fileExists,
         onTap: () => _copyToClipboard(screenContext, cleanFilePath),
       ),
+      _MetadataOption(
+        icon: Icons.copy_all_rounded,
+        label: l10n.trackOptionCopyTrackAndArtist,
+        onTap: () =>
+            _copyToClipboard(screenContext, '$trackName - $artistName'),
+      ),
       if (_canEditMetadataFile)
         _MetadataOption(
           icon: Icons.edit_outlined,
@@ -161,6 +177,17 @@ extension _TrackMetadataMenu on _TrackMetadataScreenState {
           icon: Icons.undo,
           label: l10n.trackReEnrichUndo,
           onTap: _undoReEnrich,
+        ),
+      if (canRedownload)
+        _MetadataOption(
+          icon: Icons.download_outlined,
+          label: l10n.trackRedownload,
+          onTap: () => redownloadTrack(
+            screenContext,
+            ref,
+            redownloadSource,
+            sourceTrackId: _spotifyId,
+          ),
         ),
       if (canEditFile && _isConvertibleFormat)
         _MetadataOption(
@@ -245,7 +272,10 @@ extension _TrackMetadataMenu on _TrackMetadataScreenState {
       _showDesktopOptionsMenu(screenContext, ref, colorScheme, anchor: anchor);
       return;
     }
-    Widget buildMenu(BuildContext sheetContext) {
+    Widget buildMenu(
+      BuildContext sheetContext, [
+      ScrollController? controller,
+    ]) {
       final l10n = sheetContext.l10n;
       final options = _menuOptions(screenContext, ref, colorScheme, l10n);
 
@@ -294,89 +324,79 @@ extension _TrackMetadataMenu on _TrackMetadataScreenState {
         );
       }
 
-      Widget buildContent({ScrollController? controller}) => SafeArea(
+      // The song stays in place above the rows, which are one connected
+      // group like the other menus.
+      return SafeArea(
         top: false,
-        child: SingleChildScrollView(
-          controller: controller,
-          primary: false,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const AppSheetHandle(),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-                child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const AppSheetHandle(),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                connectedRunTitleInset,
+                12,
+                connectedRunTitleInset,
+                8,
+              ),
+              child: Row(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: _buildOptionsHeaderCover(colorScheme),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          trackName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(sheetContext).textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w600),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          artistName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(sheetContext).textTheme.bodyMedium
+                              ?.copyWith(color: colorScheme.onSurfaceVariant),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Flexible(
+              child: SingleChildScrollView(
+                controller: controller,
+                padding: EdgeInsets.only(bottom: sheetContext.tokens.gapLg),
+                child: SettingsGroup(
+                  connected: true,
                   children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: _buildOptionsHeaderCover(colorScheme),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            trackName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(sheetContext).textTheme.titleMedium
-                                ?.copyWith(fontWeight: FontWeight.w600),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            artistName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(sheetContext).textTheme.bodyMedium
-                                ?.copyWith(color: colorScheme.onSurfaceVariant),
-                          ),
-                        ],
+                    for (final option in options)
+                      SettingsItem(
+                        icon: option.icon,
+                        iconColor: option.destructive
+                            ? colorScheme.error
+                            : null,
+                        title: option.label,
+                        titleColor: option.destructive
+                            ? colorScheme.error
+                            : null,
+                        onTap: () =>
+                            _closeOptionsMenuAndRun(sheetContext, option.onTap),
                       ),
-                    ),
                   ],
                 ),
               ),
-              Divider(
-                height: 1,
-                color: colorScheme.outlineVariant.withValues(alpha: 0.5),
-              ),
-              const SizedBox(height: 8),
-              Builder(
-                builder: (context) {
-                  final items = <Widget>[
-                    for (int i = 0; i < options.length; i++) ...[
-                      if (options[i].dividerAbove && i != 0)
-                        Divider(
-                          height: 1,
-                          thickness: 1,
-                          color: colorScheme.outlineVariant.withValues(
-                            alpha: 0.3,
-                          ),
-                        ),
-                      _MetadataOptionTile(
-                        option: options[i],
-                        colorScheme: colorScheme,
-                        onTap: () => _closeOptionsMenuAndRun(
-                          sheetContext,
-                          options[i].onTap,
-                        ),
-                      ),
-                    ],
-                  ];
-                  return SettingsGroup(children: items);
-                },
-              ),
-              const SizedBox(height: 16),
-            ],
-          ),
+            ),
+          ],
         ),
-      );
-      return ConstrainedBox(
-        constraints: BoxConstraints(
-          maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.85,
-        ),
-        child: buildContent(),
       );
     }
 
@@ -392,7 +412,8 @@ extension _TrackMetadataMenu on _TrackMetadataScreenState {
       context: screenContext,
       useRootNavigator: true,
       isScrollControlled: true,
-      builder: buildMenu,
+      // The sheet owns the scrolling, so a pull down at the top closes it.
+      builder: (_) => AppScrollableSheet(builder: buildMenu),
     );
   }
 
@@ -433,6 +454,23 @@ extension _TrackMetadataMenu on _TrackMetadataScreenState {
       groups: groups,
     );
   }
+
+  /// The song as Re-download searches for it, with the tags the page read.
+  LocalLibraryItem get _redownloadSource => LocalLibraryItem(
+    id: _itemId,
+    trackName: trackName,
+    artistName: artistName,
+    albumName: albumName,
+    albumArtist: albumArtist,
+    filePath: cleanFilePath,
+    scannedAt: _addedAt,
+    isrc: isrc,
+    trackNumber: trackNumber,
+    discNumber: discNumber,
+    duration: duration,
+    releaseDate: releaseDate,
+    format: _storedAudioFormat,
+  );
 
   Widget _buildOptionsHeaderCover(ColorScheme colorScheme) {
     const size = 56.0;

@@ -106,9 +106,11 @@ class PlatformBridge {
       state.dispatched = true;
       Object? result;
       try {
+        final operation = request['operation'];
         result = await _channel.invokeMethod('runNativeDataJob', {
           'request_json': encoded,
           'request_id': id,
+          if (operation is String) 'operation': operation,
           'bytes': ?bytes,
         });
       } finally {
@@ -2634,25 +2636,33 @@ class PlatformBridge {
   // in DesktopDiagnostics.
 
   static Future<Map<String, dynamic>?> getPendingAppCrash() async {
-    if (isDesktopPlatform) return DesktopDiagnostics.instance?.pendingCrash();
+    if (isDesktopPlatform) {
+      return (await DesktopDiagnostics.ready)?.pendingCrash();
+    }
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return null;
     return _invokeDecoded(_decodeNullableMapResult, 'getPendingAppCrash');
   }
 
   static Future<void> dismissAppCrash(String id) async {
-    if (isDesktopPlatform) return DesktopDiagnostics.instance?.dismiss(id);
+    if (isDesktopPlatform) {
+      return (await DesktopDiagnostics.ready)?.dismiss(id);
+    }
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
     await _channel.invokeMethod<void>('dismissAppCrash', {'id': id});
   }
 
   static Future<Map<String, dynamic>?> getLatestAppCrash() async {
-    if (isDesktopPlatform) return DesktopDiagnostics.instance?.latestCrash();
+    if (isDesktopPlatform) {
+      return (await DesktopDiagnostics.ready)?.latestCrash();
+    }
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return null;
     return _invokeDecoded(_decodeNullableMapResult, 'getLatestAppCrash');
   }
 
   static Future<void> markAppCrashShown(String id) async {
-    if (isDesktopPlatform) return DesktopDiagnostics.instance?.markShown(id);
+    if (isDesktopPlatform) {
+      return (await DesktopDiagnostics.ready)?.markShown(id);
+    }
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
     await _channel.invokeMethod<void>('markAppCrashShown', {'id': id});
   }
@@ -2663,7 +2673,7 @@ class PlatformBridge {
     required String logs,
   }) async {
     if (isDesktopPlatform) {
-      return DesktopDiagnostics.instance?.recordRuntimeError(
+      return (await DesktopDiagnostics.ready)?.recordRuntimeError(
         error: error,
         stack: stack,
         logs: logs,
@@ -2705,10 +2715,15 @@ class PlatformBridge {
   static Future<Map<String, dynamic>> scanLibraryFolderIncremental(
     String folderPath,
     Map<String, int> existingFiles,
-  ) async => _invokeMap('scanLibraryFolderIncremental', {
-    'folder_path': folderPath,
-    'existing_files': jsonEncode(existingFiles),
-  });
+  ) async {
+    final encoded = existingFiles.length > 256
+        ? await compute(_encodeJsonInBackground, existingFiles)
+        : jsonEncode(existingFiles);
+    return _invokeMap('scanLibraryFolderIncremental', {
+      'folder_path': folderPath,
+      'existing_files': encoded,
+    });
+  }
 
   static Future<LibraryScanNDJSONFile> scanSafTreeToNDJSONFile(
     String treeUri, {
@@ -2809,16 +2824,20 @@ class PlatformBridge {
     Map<String, int> existingFiles,
   ) async {
     _ensureBackendEventHandler();
+    final encoded = existingFiles.length > 256
+        ? await compute(_encodeJsonInBackground, existingFiles)
+        : jsonEncode(existingFiles);
     return _invokeMap('scanSafTreeIncremental', {
       'tree_uri': treeUri,
-      'existing_files': jsonEncode(existingFiles),
+      'existing_files': encoded,
     });
   }
 
   static Future<Map<String, int>> getSafFileModTimes(List<String> uris) async {
-    final map = await _invokeMap('getSafFileModTimes', {
-      'uris': jsonEncode(uris),
-    });
+    final encoded = uris.length > 256
+        ? await compute(_encodeJsonInBackground, uris)
+        : jsonEncode(uris);
+    final map = await _invokeMap('getSafFileModTimes', {'uris': encoded});
     return map.map((key, value) => MapEntry(key, (value as num).toInt()));
   }
 

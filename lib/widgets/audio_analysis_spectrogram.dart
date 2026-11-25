@@ -134,7 +134,7 @@ class _SpectrogramView extends StatelessWidget {
               children: [
                 const Text(
                   '-120 dBFS',
-                  style: TextStyle(color: labelColor, fontSize: 10),
+                  style: TextStyle(color: labelColor, fontSize: 11),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
@@ -149,7 +149,7 @@ class _SpectrogramView extends StatelessWidget {
                 const SizedBox(width: 8),
                 const Text(
                   '0 dBFS',
-                  style: TextStyle(color: labelColor, fontSize: 10),
+                  style: TextStyle(color: labelColor, fontSize: 11),
                 ),
               ],
             ),
@@ -273,23 +273,27 @@ class _SpectrogramPainter extends CustomPainter {
     final tp = TextPainter(
       text: TextSpan(
         text: text,
-        style: TextStyle(color: labelColor, fontSize: 10),
+        style: TextStyle(color: labelColor, fontSize: 11),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
-    double dx = anchor.dx;
-    double dy = anchor.dy;
-    switch (align) {
-      case _TextAlignV.rightCenter:
-        dx = anchor.dx - tp.width;
-        dy = anchor.dy - tp.height / 2;
-        break;
-      case _TextAlignV.topCenter:
-        dx = anchor.dx - tp.width / 2;
-        dy = anchor.dy;
-        break;
+    try {
+      double dx = anchor.dx;
+      double dy = anchor.dy;
+      switch (align) {
+        case _TextAlignV.rightCenter:
+          dx = anchor.dx - tp.width;
+          dy = anchor.dy - tp.height / 2;
+          break;
+        case _TextAlignV.topCenter:
+          dx = anchor.dx - tp.width / 2;
+          dy = anchor.dy;
+          break;
+      }
+      tp.paint(canvas, Offset(dx, dy));
+    } finally {
+      tp.dispose();
     }
-    tp.paint(canvas, Offset(dx, dy));
   }
 
   static double _niceStepKHz(double maxKHz) {
@@ -312,7 +316,9 @@ class _SpectrogramPainter extends CustomPainter {
   bool shouldRepaint(covariant _SpectrogramPainter old) =>
       old.image != image ||
       old.maxFreqHz != maxFreqHz ||
-      old.durationSec != durationSec;
+      old.durationSec != durationSec ||
+      old.labelColor != labelColor ||
+      old.gridColor != gridColor;
 }
 
 enum _TextAlignV { rightCenter, topCenter }
@@ -381,7 +387,7 @@ Future<Uint8List> renderAudioSpectrogramPng({
     details.join('   '),
     const TextStyle(color: labelColor, fontSize: 11),
   );
-  const legendStyle = TextStyle(color: labelColor, fontSize: 10);
+  const legendStyle = TextStyle(color: labelColor, fontSize: 11);
   final minLabel = text('-120 dBFS', legendStyle);
   final maxLabel = text('0 dBFS', legendStyle);
 

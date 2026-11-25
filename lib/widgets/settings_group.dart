@@ -10,7 +10,6 @@ import 'package:mornye/widgets/app_icon.dart';
 import 'package:mornye/widgets/app_switch.dart';
 import 'package:mornye/theme/app_tokens.dart';
 import 'package:mornye/theme/mornye_theme.dart';
-import 'package:mornye/theme/mornye_icons.dart';
 import 'package:mornye/widgets/mornye_chrome.dart';
 import 'package:mornye/utils/adaptive_layout.dart';
 
@@ -18,17 +17,14 @@ import 'package:mornye/utils/adaptive_layout.dart';
 Color settingsGroupColor(BuildContext context) {
   final colorScheme = Theme.of(context).colorScheme;
   if (context.isMornye) return colorScheme.surfaceContainer;
-  final isDark = Theme.of(context).brightness == Brightness.dark;
-  return isDark
-      ? Color.alphaBlend(
-          Colors.white.withValues(alpha: 0.08),
-          colorScheme.surface,
-        )
-      : Color.alphaBlend(
-          Colors.black.withValues(alpha: 0.04),
-          colorScheme.surface,
-        );
+  return Color.alphaBlend(settingsGroupOverlay(context), colorScheme.surface);
 }
+
+/// The tint the Material [settingsGroupColor] lays over the page surface.
+Color settingsGroupOverlay(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark
+    ? Colors.white.withValues(alpha: 0.08)
+    : Colors.black.withValues(alpha: 0.04);
 
 /// Carries a Settings search result into its destination page.
 ///
@@ -228,6 +224,20 @@ BorderRadius connectedRowRadius(
   );
 }
 
+/// Whether a group's [children] are rows, each drawn as its own connected
+/// surface: several children are, custom ones included, unless a spacer or
+/// divider shows a hand-built form. One child alone is when it is a standard
+/// row; other single content keeps its card.
+bool settingsGroupHasRows(List<Widget> children) {
+  bool standard(Widget child) =>
+      child is SettingsItem || child is SettingsSwitchItem || child is ListTile;
+  return switch (children) {
+    [] => false,
+    [final only] => standard(only),
+    _ => !children.any((child) => child is SizedBox || child is Divider),
+  };
+}
+
 class _ConnectedRowsScope extends InheritedWidget {
   const _ConnectedRowsScope({required super.child});
 
@@ -240,17 +250,16 @@ class SettingsGroup extends StatelessWidget {
   final EdgeInsetsGeometry? margin;
   final bool glass;
 
-  /// Connects custom [children] that are each one complete row, such as
-  /// extension rows. Groups of [SettingsItem], [SettingsSwitchItem] and [ListTile]
-  /// connect without it.
-  final bool connected;
+  /// Whether each of [children] is one complete row with its own connected
+  /// surface. Null decides from the children, see [settingsGroupHasRows].
+  final bool? connected;
 
   const SettingsGroup({
     super.key,
     required this.children,
     this.margin,
     this.glass = false,
-    this.connected = false,
+    this.connected,
   });
 
   @override
@@ -298,19 +307,9 @@ class SettingsGroup extends StatelessWidget {
     }
 
     final expressive = materialExpressiveEnabled(context);
-    // Only groups of standard rows split into connected tiles. Forms and
-    // custom content keep one card, so spacers never become empty tiles.
-    final standardRows =
-        children.isNotEmpty &&
-        (connected ||
-            children.every(
-              (child) =>
-                  child is SettingsItem ||
-                  child is SettingsSwitchItem ||
-                  child is ListTile,
-            ));
+    final rows = connected ?? settingsGroupHasRows(children);
     // Connected surfaces are static layout, so reduced motion keeps the gaps.
-    if (!context.isMornye && standardRows) {
+    if (!context.isMornye && rows) {
       // Expressive connected list: every row is its own surface separated by
       // a 2dp gap. The group's ends keep the card radius, inner corners stay
       // tight, and the gaps replace row dividers.
@@ -365,11 +364,48 @@ class SettingsGroup extends StatelessWidget {
   }
 }
 
+/// One row of a connected run that a list builds as it scrolls: its own
+/// surface, 2dp under the row before it. Mornye shows [child] as it is.
+class ConnectedGroupRow extends StatelessWidget {
+  const ConnectedGroupRow({
+    super.key,
+    required this.index,
+    required this.count,
+    required this.child,
+  });
+
+  final int index;
+  final int count;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (context.isMornye) return child;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(16, index == 0 ? 4 : 2, 16, 0),
+      child: _ConnectedRowsScope(
+        child: Material(
+          color: settingsGroupColor(context),
+          clipBehavior: Clip.antiAlias,
+          shape: RoundedRectangleBorder(
+            borderRadius: connectedRowRadius(
+              context,
+              first: index == 0,
+              last: index == count - 1,
+            ),
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+}
+
 /// A [SettingsSectionHeader] sliver followed by its [SettingsGroup] sliver.
 List<Widget> settingsSectionSlivers({
   required String title,
   required List<Widget> children,
-  bool connected = false,
+  bool? connected,
   bool glass = false,
 }) => [
   SliverToBoxAdapter(child: SettingsSectionHeader(title: title)),
@@ -434,6 +470,9 @@ class SettingsItem extends StatelessWidget {
   /// Show category icons in Mornye's top-level settings and search results.
   final bool showIconInMornye;
   final String title;
+
+  /// Overrides the title's colour, for a destructive action.
+  final Color? titleColor;
   final Widget? titleTrailing;
   final String? subtitle;
   final Widget? footer;
@@ -451,6 +490,7 @@ class SettingsItem extends StatelessWidget {
     this.iconColor,
     this.showIconInMornye = false,
     required this.title,
+    this.titleColor,
     this.titleTrailing,
     this.subtitle,
     this.footer,
@@ -474,7 +514,9 @@ class SettingsItem extends StatelessWidget {
           child: InkWell(
             onTap: onTap,
             splashColor: colorScheme.primary.withValues(alpha: 0.12),
-            highlightColor: Colors.transparent,
+            highlightColor: context.isMornye
+                ? MornyeTheme.controlFill(context)
+                : Colors.transparent,
             child: Padding(
               padding: EdgeInsets.symmetric(
                 horizontal: context.tokens.rowPaddingH,
@@ -504,7 +546,8 @@ class SettingsItem extends StatelessWidget {
                               Flexible(
                                 child: Text(
                                   title,
-                                  style: Theme.of(context).textTheme.bodyLarge,
+                                  style: Theme.of(context).textTheme.bodyLarge
+                                      ?.copyWith(color: titleColor),
                                 ),
                               ),
                               if (titleTrailing != null) ...[
@@ -611,7 +654,9 @@ class SettingsSwitchItem extends StatelessWidget {
             child: InkWell(
               onTap: isDisabled ? null : () => onChanged!(!value),
               splashColor: colorScheme.primary.withValues(alpha: 0.12),
-              highlightColor: Colors.transparent,
+              highlightColor: context.isMornye
+                  ? MornyeTheme.controlFill(context)
+                  : Colors.transparent,
               child: Padding(
                 padding: EdgeInsets.symmetric(
                   horizontal: context.tokens.rowPaddingH,
@@ -1058,8 +1103,8 @@ class SettingsInfoCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (icon != null) ...[
-            AppIcon(
-              useGlass ? mornyeIconFor(icon!) : icon,
+            AppIcon.adaptive(
+              icon!,
               size: 20,
               color: useGlass ? colorScheme.primary : foreground,
             ),

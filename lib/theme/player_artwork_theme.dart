@@ -23,18 +23,22 @@ class PlayerArtworkPalette {
 /// A cover whose scheme is cached shows it from the first frame. While the
 /// next cover's scheme resolves, the previous one stays; then the whole
 /// scheme moves at once on the effects spring, or swaps under reduced
-/// motion. Tracks without readable artwork use the app scheme. With AMOLED
+/// motion and in a hidden scope, such as the shell under the full player.
+/// Tracks without readable artwork use the app scheme. With AMOLED
 /// on, the page background stays pure black.
 ///
-/// A large page sets [fadesSurfaceOnly]: moving the whole scheme rebuilds
-/// everything under it on every frame, so its scheme swaps in one step and
-/// only the page background, painted by [PlayerArtworkSurface], moves.
+/// A large page or a player bar sets [fadesSurfaceOnly]: moving the whole
+/// scheme rebuilds everything under it on every frame, so its scheme swaps
+/// in one step and only the background, painted by [PlayerArtworkSurface],
+/// moves. A song row turns off [animates] and swaps in one step too.
 class PlayerArtworkTheme extends StatefulWidget {
   const PlayerArtworkTheme({
     super.key,
     required this.artUri,
     required this.child,
     this.fadesSurfaceOnly = false,
+    this.background = _surfaceOf,
+    this.animates = true,
   });
 
   /// The track's artwork, in any form `PlayerArtwork` shows: an HTTP(S)
@@ -48,7 +52,18 @@ class PlayerArtworkTheme extends StatefulWidget {
   /// [PlayerArtworkSurface] instead of the scheme's surface.
   final bool fadesSurfaceOnly;
 
-  /// The moving page background of the nearest [PlayerArtworkTheme] with
+  /// The scheme colour the moving background follows with
+  /// [fadesSurfaceOnly]: a page's surface, or a bar's container.
+  final Color Function(ColorScheme scheme) background;
+
+  static Color _surfaceOf(ColorScheme scheme) => scheme.surface;
+
+  /// Whether the scheme moves on the effects spring. A song row swaps it in
+  /// one step: its card fades its own fill, and a move rebuilt the whole row
+  /// on every frame.
+  final bool animates;
+
+  /// The moving background of the nearest [PlayerArtworkTheme] when it sets
   /// [fadesSurfaceOnly]. Null elsewhere, where the whole scheme moves.
   static Animation<Color>? surfaceOf(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<_ArtworkSurface>()?.surface;
@@ -60,6 +75,14 @@ class PlayerArtworkTheme extends StatefulWidget {
   @visibleForTesting
   static set debugPalette(PlayerArtworkPalette? palette) =>
       _palette = palette ?? const PlayerArtworkPalette();
+
+  /// Resolves [artUri]'s scheme ahead, so a scope that reaches it later
+  /// shows that scheme from its first frame.
+  static void warm(String? artUri, Brightness brightness) {
+    final source = coverImageSource(artUri);
+    if (source == null || _palette.peek(source, brightness) != null) return;
+    _palette.resolve(source, brightness).ignore();
+  }
 
   @override
   State<PlayerArtworkTheme> createState() => _PlayerArtworkThemeState();
@@ -89,6 +112,10 @@ class _PlayerArtworkThemeState extends State<PlayerArtworkTheme>
   Brightness? _brightness;
   int _generation = 0;
 
+  /// Whether the scope showed when it last checked. A cover that changes
+  /// while it is hidden, or as it shows again, swaps without a transition.
+  bool _onScreen = false;
+
   ThemeData? _base;
   ColorScheme? _scheme;
   ThemeData? _theme;
@@ -97,6 +124,7 @@ class _PlayerArtworkThemeState extends State<PlayerArtworkTheme>
   void didChangeDependencies() {
     super.didChangeDependencies();
     _sync();
+    _onScreen = TickerMode.valuesOf(context).enabled;
   }
 
   @override
@@ -118,17 +146,18 @@ class _PlayerArtworkThemeState extends State<PlayerArtworkTheme>
     if (source == _source && brightness == _brightness) return;
     // The first frame and a brightness change have no scheme worth keeping.
     final keepPrevious = brightness == _brightness;
+    final animate = keepPrevious && _onScreen;
     _source = source;
     _brightness = brightness;
     final generation = ++_generation;
     if (source == null) {
-      _moveTo(null, animate: keepPrevious);
+      _moveTo(null, animate: animate);
       return;
     }
     final palette = PlayerArtworkTheme._palette;
     final cached = palette.peek(source, brightness);
     if (cached != null || !keepPrevious) {
-      _moveTo(cached, animate: keepPrevious);
+      _moveTo(cached, animate: animate);
     }
     palette
         .resolve(source, brightness)
@@ -141,8 +170,8 @@ class _PlayerArtworkThemeState extends State<PlayerArtworkTheme>
   /// Moves to a resolved scheme unless a newer cover replaced its request.
   /// Null, for unreadable artwork, returns to the app scheme.
   void _resolved(int generation, ColorScheme? scheme) {
-    if (!mounted || generation != _generation) return;
-    setState(() => _moveTo(scheme, animate: true));
+    if (!mounted || generation != _generation || scheme == _artwork) return;
+    setState(() => _moveTo(scheme, animate: _onScreen));
   }
 
   void _moveTo(ColorScheme? artwork, {required bool animate}) {
@@ -153,15 +182,29 @@ class _PlayerArtworkThemeState extends State<PlayerArtworkTheme>
       context,
       const AppMotionSpec(Duration.zero, Curves.linear),
     );
-    if (!animate || _from == null || motion.duration == Duration.zero) {
+    if (!animate ||
+        !widget.animates ||
+        _from == null ||
+        motion.duration == Duration.zero) {
       _from = null;
       _controller?.value = 1;
       return;
     }
     if (widget.fadesSurfaceOnly) {
+      final nextSurface = widget.background(
+        _targetFor(Theme.of(context), artwork),
+      );
+      final currentSurface = _surface.value;
+      if (currentSurface == nextSurface) {
+        _from = null;
+        _surface.to = nextSurface;
+        _controller?.value = 1;
+        return;
+      }
       // From the colour on screen, which may be partway through a move.
       _surface
-        ..from = _surface.value
+        ..from = currentSurface
+        ..to = nextSurface
         ..curve = motion.curve;
     }
     _curve = motion.curve;
@@ -175,22 +218,25 @@ class _PlayerArtworkThemeState extends State<PlayerArtworkTheme>
       base.brightness == Brightness.dark &&
       base.colorScheme.surface == Colors.black;
 
+  /// The scheme a move goes to, shared by [_moveTo] and [_themeFor].
+  static ColorScheme _targetFor(ThemeData base, ColorScheme? artwork) =>
+      artwork == null
+      ? base.colorScheme
+      : _isAmoled(base)
+      ? artwork.copyWith(
+          surface: Colors.black,
+          surfaceContainerLowest: Colors.black,
+        )
+      : artwork;
+
   ThemeData _themeFor(ThemeData base) {
-    final artwork = _artwork;
-    final target = artwork == null
-        ? base.colorScheme
-        : _isAmoled(base)
-        ? artwork.copyWith(
-            surface: Colors.black,
-            surfaceContainerLowest: Colors.black,
-          )
-        : artwork;
+    final target = _targetFor(base, _artwork);
     final from = _from;
     final progress = _controller?.value ?? 1;
     final scheme = widget.fadesSurfaceOnly || from == null || progress >= 1
         ? target
         : ColorScheme.lerp(from, target, _curve.transform(progress));
-    if (widget.fadesSurfaceOnly) _surface.to = target.surface;
+    if (widget.fadesSurfaceOnly) _surface.to = widget.background(target);
     _shown = scheme;
     if (!identical(base, _base) || scheme != _scheme) {
       _base = base;
@@ -207,6 +253,8 @@ class _PlayerArtworkThemeState extends State<PlayerArtworkTheme>
   static ThemeData _scopedTheme(ThemeData base, ColorScheme scheme) {
     final appBar = base.appBarTheme;
     final progress = base.progressIndicatorTheme;
+    final navBar = base.navigationBarTheme;
+    final slider = base.sliderTheme;
     return base.copyWith(
       colorScheme: scheme,
       canvasColor: scheme.surface,
@@ -219,6 +267,23 @@ class _PlayerArtworkThemeState extends State<PlayerArtworkTheme>
         titleTextStyle: appBar.titleTextStyle?.copyWith(
           color: scheme.onSurface,
         ),
+      ),
+      navigationBarTheme: navBar.copyWith(
+        backgroundColor: navBar.backgroundColor == null
+            ? null
+            : scheme.surfaceContainer,
+        indicatorColor: navBar.indicatorColor == null
+            ? null
+            : scheme.secondaryContainer,
+      ),
+      sliderTheme: slider.copyWith(
+        activeTrackColor: slider.activeTrackColor == null
+            ? null
+            : scheme.primary,
+        inactiveTrackColor: slider.inactiveTrackColor == null
+            ? null
+            : scheme.secondaryContainer,
+        thumbColor: slider.thumbColor == null ? null : scheme.primary,
       ),
       progressIndicatorTheme: progress.copyWith(
         color: progress.color == null ? null : scheme.primary,
@@ -243,11 +308,17 @@ class _PlayerArtworkThemeState extends State<PlayerArtworkTheme>
         child: Theme(data: theme, child: widget.child),
       );
     }
-    return AnimatedBuilder(
-      // Stands still until a move makes the controller, in the same build.
-      animation: _controller ?? kAlwaysCompleteAnimation,
-      builder: (context, child) => Theme(data: _themeFor(base), child: child!),
-      child: widget.child,
+    // Its own scheme paints the fills below, not an outer moving background.
+    return _ArtworkSurface(
+      surface: null,
+      target: null,
+      child: AnimatedBuilder(
+        // Stands still until a move makes the controller, in the same build.
+        animation: _controller ?? kAlwaysCompleteAnimation,
+        builder: (context, child) =>
+            Theme(data: _themeFor(base), child: child!),
+        child: widget.child,
+      ),
     );
   }
 }
@@ -283,15 +354,16 @@ class _ArtworkSurface extends InheritedWidget {
     required super.child,
   });
 
-  final Animation<Color> surface;
-  final Color target;
+  /// Null under a scope that moves the whole scheme.
+  final Animation<Color>? surface;
+  final Color? target;
 
   @override
   bool updateShouldNotify(_ArtworkSurface oldWidget) =>
       target != oldWidget.target || surface != oldWidget.surface;
 }
 
-/// Paints a Material player's page background: [surface], or the moving
+/// Paints a Material player's background: [surface], or the moving
 /// background of a [PlayerArtworkTheme] with
 /// [PlayerArtworkTheme.fadesSurfaceOnly]. Only this box repaints while that
 /// background moves.
@@ -299,12 +371,17 @@ class PlayerArtworkSurface extends StatelessWidget {
   const PlayerArtworkSurface({
     super.key,
     required this.surface,
+    this.overlay,
     this.opacity = 1,
     this.child,
   });
 
-  /// The scheme's surface, used outside a surface-moving theme.
+  /// The scheme colour the theme's background follows, used outside a
+  /// surface-moving theme.
   final Color surface;
+
+  /// Laid over the background, as the Material group tint is.
+  final Color? overlay;
 
   /// Opacity of the background over what lies below it.
   final double opacity;
@@ -314,8 +391,12 @@ class PlayerArtworkSurface extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final moving = PlayerArtworkTheme.surfaceOf(context);
-    Color tint(Color color) =>
-        opacity == 1 ? color : color.withValues(alpha: color.a * opacity);
+    final overlay = this.overlay;
+    Color tint(Color color) {
+      final fill = overlay == null ? color : Color.alphaBlend(overlay, color);
+      return opacity == 1 ? fill : fill.withValues(alpha: fill.a * opacity);
+    }
+
     if (moving == null) {
       return ColoredBox(color: tint(surface), child: child);
     }

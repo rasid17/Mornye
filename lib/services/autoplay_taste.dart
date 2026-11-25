@@ -9,6 +9,7 @@ import 'package:mornye/services/autoplay_signal.dart';
 import 'package:mornye/services/playable_media.dart';
 import 'package:mornye/services/platform_bridge.dart';
 import 'package:mornye/services/sqlite_helpers.dart' as sqlite;
+import 'package:mornye/utils/artist_utils.dart' show splitArtistTagValues;
 import 'package:mornye/utils/logger.dart';
 import 'package:sqflite/sqflite.dart';
 
@@ -49,6 +50,133 @@ String _key(String value) {
 
 String _songToken(String song) => 'song:$song';
 String _artistToken(String artist) => 'artist:$artist';
+
+// How much a vector a song inherits counts at most against its own, from
+// its album's songs, its credited artists, its genre's songs and in all.
+const _albumTrust = 0.8;
+const _creditTrust = 0.7;
+const _genreTrust = 0.4;
+const _inheritedTrust = 0.8;
+
+/// Genre songs that give half the trust a genre can.
+const _genreEvidence = 5;
+
+final _genreSeparator = RegExp(r'[,;/|&]');
+
+/// Each artist credited on [artist], normalized and once.
+List<String> _credits(String artist) => {
+  for (final credit in splitArtistTagValues(artist))
+    if (_key(credit) case final key when key.isNotEmpty) key,
+}.toList();
+
+Iterable<String> _genreKeys(String? genre) => {
+  for (final part in (genre ?? '').split(_genreSeparator))
+    if (_key(part) case final key when key.isNotEmpty) key,
+};
+
+class _Sum {
+  final vector = Float64List(AutoplayTasteModel.dimensions);
+  int count = 0;
+
+  void add(List<double> other, [int count = 1]) {
+    for (var k = 0; k < vector.length; k++) {
+      vector[k] += other[k];
+    }
+    this.count += count;
+  }
+}
+
+/// Vectors songs without their own inherit from songs and artists the model
+/// knows. An inherited vector's length is how much it counts, below 1.
+class _TasteInheritance {
+  _TasteInheritance(this._lookup);
+
+  final Float32List? Function(String token) _lookup;
+  final _albums = <String, _Sum>{}, _genres = <String, _Sum>{};
+
+  // Libraries repeat artists far more often than they add new ones.
+  final _creditsOf = <String, List<String>>{};
+  final _genresOf = <String, List<String>>{};
+  List<String> _creditsFor(String artist) =>
+      _creditsOf[artist] ??= _credits(artist);
+  List<String> _genreKeysFor(String? genre) =>
+      _genresOf[genre ?? ''] ??= _genreKeys(genre).toList();
+
+  /// A song with its own [vector], which its album and genre songs inherit.
+  void learn(String artist, String album, String? genre, Float32List vector) {
+    final albumKey = _key(album);
+    if (albumKey.isNotEmpty) {
+      // By album and artist, so albums that share a name stay apart.
+      for (final credit in _creditsFor(artist)) {
+        (_albums['$albumKey|$credit'] ??= _Sum()).add(vector);
+      }
+    }
+    for (final key in _genreKeysFor(genre)) {
+      (_genres[key] ??= _Sum()).add(vector);
+    }
+  }
+
+  final _inherited = <String, Float64List?>{};
+
+  /// The vector a song without its own inherits, or null when nothing it
+  /// could inherit from is known. Each source adds its songs' mean vector,
+  /// scaled by its trust and how much evidence it rests on, so sources that
+  /// disagree cancel out. Asked after every [learn].
+  Float64List? inherit(String artist, String album, String? genre) {
+    // An album's songs mostly share all three.
+    final key = '$artist\n$album\n${genre ?? ''}';
+    if (_inherited.containsKey(key)) return _inherited[key];
+    return _inherited[key] = _inherit(artist, album, genre);
+  }
+
+  Float64List? _inherit(String artist, String album, String? genre) {
+    final vector = Float64List(AutoplayTasteModel.dimensions);
+    void add(_Sum sum, double scale) {
+      if (sum.count == 0) return;
+      for (var k = 0; k < vector.length; k++) {
+        vector[k] += scale * sum.vector[k] / sum.count;
+      }
+    }
+
+    final credits = _creditsFor(artist);
+    final albumKey = _key(album);
+    if (albumKey.isNotEmpty && _albums.isNotEmpty) {
+      final mates = _Sum();
+      for (final credit in credits) {
+        if (_albums['$albumKey|$credit'] case final sum?) {
+          mates.add(sum.vector, sum.count);
+        }
+      }
+      add(mates, _albumTrust * mates.count / (mates.count + 1));
+    }
+    final known = _Sum();
+    for (final credit in credits) {
+      if (_lookup(_artistToken(credit)) case final credited?) {
+        known.add(credited);
+      }
+    }
+    // An artist credited beside unknown ones explains less of the song.
+    if (credits.isNotEmpty) {
+      add(known, _creditTrust * known.count / credits.length);
+    }
+    if (_genres.isNotEmpty) {
+      final genres = _Sum();
+      for (final key in _genreKeysFor(genre)) {
+        if (_genres[key] case final sum?) genres.add(sum.vector, sum.count);
+      }
+      add(genres, _genreTrust * genres.count / (genres.count + _genreEvidence));
+    }
+
+    final trust = sqrt(vector.fold(0.0, (sum, value) => sum + value * value));
+    if (trust == 0) return null;
+    if (trust > _inheritedTrust) {
+      for (var k = 0; k < vector.length; k++) {
+        vector[k] *= _inheritedTrust / trust;
+      }
+    }
+    return vector;
+  }
+}
 
 /// One play in the taste log. Metadata keys only: never a path, catalog id,
 /// artwork or the original spelling.
@@ -275,6 +403,59 @@ Future<_PackedTaste> _trainNativePackedTaste(
 Future<AutoplayTasteModel> trainAutoplayTasteInBackground(
   List<AutoplayTastePlay> plays,
 ) async => (await _trainNativePackedTaste(plays)).model;
+
+/// A training run's model and how many plays it learned from.
+typedef _TasteRun = ({_PackedTaste taste, int plays});
+
+/// The plays of stored `plays` [rows], in their order. A row of a kind this
+/// build does not know drops out.
+List<AutoplayTastePlay> autoplayTastePlaysFromRows(
+  List<Map<String, Object?>> rows,
+) {
+  final kinds = AutoplayFeedbackKind.values.asNameMap();
+  return [
+    for (final row in rows)
+      if (kinds[row['kind']] case final kind?)
+        AutoplayTastePlay(
+          id: row['id'] as int,
+          song: row['song'] as String,
+          artist: row['artist'] as String,
+          at: DateTime.fromMillisecondsSinceEpoch(row['at'] as int),
+          kind: kind,
+          reward: (row['reward'] as num).toDouble(),
+        ),
+  ];
+}
+
+Map<String, dynamic> _tasteTrainingRequestFromRows(
+  List<Map<String, Object?>> rows,
+) => _tasteTrainingRequest(autoplayTastePlaysFromRows(rows));
+
+_TasteRun? _trainPackedTasteFromRows(List<Map<String, Object?>> rows) {
+  final plays = autoplayTastePlaysFromRows(rows);
+  if (plays.isEmpty) return null;
+  return (taste: _trainPackedTaste(plays), plays: plays.length);
+}
+
+/// As [_trainNativePackedTaste], with the rows read into plays on the worker
+/// that already runs. Null when no row holds a play.
+Future<_TasteRun?> _trainNativeTasteFromRows(
+  List<Map<String, Object?>> rows,
+) async {
+  try {
+    final request = await compute(_tasteTrainingRequestFromRows, rows);
+    final plays = (request['plays'] as List).length;
+    if (plays == 0) return null;
+    final result = await PlatformBridge.runNativeDataJob(request);
+    return (taste: await compute(_hydrateNativeTaste, result), plays: plays);
+  } on MissingPluginException {
+    return compute(
+      _trainPackedTasteFromRows,
+      rows,
+      debugLabel: 'autoplay-taste',
+    );
+  }
+}
 
 class _Position {
   _Position(this.song, this.artist, this.weight);
@@ -542,12 +723,15 @@ AutoplayTasteModel trainAutoplayTaste(List<AutoplayTastePlay> plays) {
 }
 
 /// Favors the songs the listener plays with the session's songs, across
-/// artists and genres that tags do not connect. Plain data only, so ranking
+/// artists and genres that tags do not connect. A song the model does not
+/// know inherits a vector from its album's songs, its credited artists and
+/// its genre's songs, which counts for less. Plain data only, so ranking
 /// can run on a worker isolate.
 class AutoplayTasteSignal extends AutoplaySignal {
   AutoplayTasteSignal(this.vectors);
 
-  /// Unit vectors of the session's and candidates' songs and artists only.
+  /// Unit vectors of the session's and candidates' songs and artists, and
+  /// of the artists credited on candidates the model does not know.
   final Map<String, Float32List> vectors;
 
   @override
@@ -555,12 +739,12 @@ class AutoplayTasteSignal extends AutoplaySignal {
   final _scores = <String, double>{};
   double _average = 0;
 
+  Float32List? _song(PlayableMedia media) =>
+      vectors[_songToken('${_key(media.artist)}|${_key(media.title)}')];
+
   /// The song's own vector, or its artist's when the song has none.
-  Float32List? _vector(PlayableMedia media) {
-    final artist = _key(media.artist);
-    return vectors[_songToken('$artist|${_key(media.title)}')] ??
-        vectors[_artistToken(artist)];
-  }
+  Float32List? _vector(PlayableMedia media) =>
+      _song(media) ?? vectors[_artistToken(_key(media.artist))];
 
   @override
   void prepare(List<PlayableMedia> session, List<PlayableMedia> candidates) {
@@ -579,25 +763,174 @@ class AutoplayTasteSignal extends AutoplaySignal {
     }
     final norm = sqrt(centre.fold(0.0, (sum, value) => sum + value * value));
     if (norm == 0) return;
-    var total = 0.0;
-    for (final candidate in candidates) {
-      final vector = _vector(candidate);
-      if (vector == null) continue;
+    double fit(List<double> vector, double length) {
       var cosine = 0.0;
       for (var k = 0; k < centre.length; k++) {
         cosine += centre[k] * vector[k];
       }
-      final score = _maxScore * (cosine / norm).clamp(0.0, 1.0);
-      _scores[candidate.source] = score;
-      total += score;
+      return _maxScore * (cosine / (norm * length)).clamp(0.0, 1.0);
+    }
+
+    final inheritance = _TasteInheritance((token) => vectors[token]);
+    void learn(PlayableMedia media, Float32List? vector) {
+      if (vector == null) return;
+      inheritance.learn(media.artist, media.album, media.genre, vector);
+    }
+
+    final songs = [for (final candidate in candidates) _song(candidate)];
+    for (final media in session) {
+      learn(media, _song(media));
+    }
+    for (final (index, media) in candidates.indexed) {
+      learn(media, songs[index]);
+    }
+    var total = 0.0;
+    final inherited = <(String, double, double)>[];
+    for (final (index, candidate) in candidates.indexed) {
+      final vector =
+          songs[index] ?? vectors[_artistToken(_key(candidate.artist))];
+      if (vector != null) {
+        final score = fit(vector, 1);
+        _scores[candidate.source] = score;
+        total += score;
+      } else if (inheritance.inherit(
+            candidate.artist,
+            candidate.album,
+            candidate.genre,
+          )
+          case final vector?) {
+        final trust = sqrt(vector.fold(0.0, (sum, v) => sum + v * v));
+        inherited.add((candidate.source, fit(vector, trust), trust));
+      }
     }
     // Songs the model does not know score as an average known one.
-    if (_scores.isNotEmpty) _average = total / _scores.length;
+    if (_scores.isNotEmpty) {
+      _average = total / _scores.length;
+    } else if (inherited.isNotEmpty) {
+      _average =
+          inherited.fold(0.0, (sum, entry) => sum + entry.$2) /
+          inherited.length;
+    }
+    // An inherited vector moves a song from there only as far as it is
+    // trusted.
+    for (final (source, score, trust) in inherited) {
+      _scores.putIfAbsent(source, () => _average + trust * (score - _average));
+    }
   }
 
   @override
   double score(PlayableMedia candidate) =>
       _scores[candidate.source] ?? _average;
+}
+
+/// What [model] knows about [session] (in playback order, newest last) and
+/// [candidates], or null when it knows none of the session's songs. Pure, so
+/// it can run on a worker isolate.
+AutoplayTasteSignal? autoplayTasteSignal(
+  AutoplayTasteModel model,
+  List<PlayableMedia> session,
+  List<PlayableMedia> candidates,
+) {
+  final vectors = <String, Float32List>{};
+  final credited = <String>{};
+  void add(PlayableMedia media, {bool credits = false}) {
+    final artist = _key(media.artist);
+    var known = false;
+    for (final token in [
+      _songToken('$artist|${_key(media.title)}'),
+      if (artist.isNotEmpty) _artistToken(artist),
+    ]) {
+      if (model._vector(token) case final vector?) {
+        vectors[token] = vector;
+        known = true;
+      }
+    }
+    // What an unknown candidate may inherit from its credited artists.
+    if (known || !credits || !credited.add(media.artist)) return;
+    for (final credit in _credits(media.artist)) {
+      final token = _artistToken(credit);
+      if (vectors.containsKey(token)) continue;
+      if (model._vector(token) case final vector?) vectors[token] = vector;
+    }
+  }
+
+  // A few more than the window, as ranking merges repeats.
+  for (final media in session.skip(
+    max(0, session.length - _sessionWindow - 4),
+  )) {
+    add(media);
+  }
+  if (vectors.isEmpty) return null;
+  for (final media in candidates) {
+    add(media, credits: true);
+  }
+  return AutoplayTasteSignal(vectors);
+}
+
+/// Days after which a play counts half toward the listener's lasting taste.
+const _profileHalfLife = 30;
+
+/// The listener's lasting taste: the direction of what they listened
+/// through, the latest counting most, for songs outside any session.
+class AutoplayTasteProfile {
+  AutoplayTasteProfile._(this._model, this._centre);
+
+  final AutoplayTasteModel _model;
+
+  /// A unit vector.
+  final Float64List _centre;
+
+  /// How well a song fits, -1 to 1: its vector's cosine to the taste, an
+  /// inherited one shrunk toward 0 by its trust. Null when the model can
+  /// place neither the song nor its artists.
+  double? fit(String artist, String title) {
+    final List<double>? vector =
+        _model.song(artist, title) ??
+        _model.artist(artist) ??
+        _TasteInheritance(_model._vector).inherit(artist, '', null);
+    if (vector == null) return null;
+    var dot = 0.0;
+    for (var k = 0; k < _centre.length; k++) {
+      dot += _centre[k] * vector[k];
+    }
+    return dot;
+  }
+}
+
+/// [model]'s taste of [plays] at [at]: listens, replays and loves by their
+/// strength, halving every [_profileHalfLife] days; skips count for nothing.
+/// Null when none of them is known.
+AutoplayTasteProfile? autoplayTasteProfile(
+  AutoplayTasteModel model,
+  List<AutoplayTastePlay> plays, {
+  required DateTime at,
+}) {
+  final centre = Float64List(AutoplayTasteModel.dimensions);
+  for (final play in plays) {
+    final strength = switch (play.kind) {
+      AutoplayFeedbackKind.listened => play.reward,
+      AutoplayFeedbackKind.replayed => 1.5,
+      AutoplayFeedbackKind.loved => 2.0,
+      AutoplayFeedbackKind.playlisted => 1.5,
+      AutoplayFeedbackKind.skipped => 0.0,
+    };
+    if (strength <= 0) continue;
+    final vector =
+        model._vector(_songToken(play.song)) ??
+        model._vector(_artistToken(play.artist));
+    if (vector == null) continue;
+    final days = max(0, at.difference(play.at).inHours) / 24;
+    final weight = strength * pow(0.5, days / _profileHalfLife);
+    for (var k = 0; k < centre.length; k++) {
+      centre[k] += weight * vector[k];
+    }
+  }
+  final norm = sqrt(centre.fold(0.0, (sum, value) => sum + value * value));
+  if (norm == 0 || !norm.isFinite) return null;
+  for (var k = 0; k < centre.length; k++) {
+    centre[k] /= norm;
+  }
+  return AutoplayTasteProfile._(model, centre);
 }
 
 /// Learns, from this device's listening sessions only, which songs and
@@ -610,10 +943,17 @@ class AutoplayTaste {
   }) : _open = open ?? _openShared,
        _trainer = train == null
            ? _trainOnWorker
-           : ((plays) async => _packTaste(await train(plays)));
+           : ((rows) async {
+               final plays = autoplayTastePlaysFromRows(rows);
+               if (plays.isEmpty) return null;
+               return (
+                 taste: _packTaste(await train(plays)),
+                 plays: plays.length,
+               );
+             });
 
   final Future<Database> Function() _open;
-  final Future<_PackedTaste> Function(List<AutoplayTastePlay>) _trainer;
+  final Future<_TasteRun?> Function(List<Map<String, Object?>> rows) _trainer;
   final _pending = <AutoplayTastePlay>[];
   AutoplayTasteModel? _model;
   Future<void>? _loading, _training, _queued;
@@ -672,8 +1012,8 @@ class AutoplayTaste {
     options: OpenDatabaseOptions(version: _schema, onCreate: _create),
   );
 
-  static Future<_PackedTaste> _trainOnWorker(List<AutoplayTastePlay> plays) =>
-      _trainNativePackedTaste(plays);
+  static Future<_TasteRun?> _trainOnWorker(List<Map<String, Object?>> rows) =>
+      _trainNativeTasteFromRows(rows);
 
   /// The model autoplay uses now, if any.
   @visibleForTesting
@@ -734,22 +1074,12 @@ class AutoplayTaste {
   }
 
   /// The stored log, oldest first.
-  Future<List<AutoplayTastePlay>> readLog() async {
+  Future<List<AutoplayTastePlay>> readLog() async =>
+      autoplayTastePlaysFromRows(await _readRows());
+
+  Future<List<Map<String, Object?>>> _readRows() async {
     await flush();
-    final rows = await (await _open()).query('plays', orderBy: 'id');
-    final kinds = AutoplayFeedbackKind.values.asNameMap();
-    return [
-      for (final row in rows)
-        if (kinds[row['kind']] case final kind?)
-          AutoplayTastePlay(
-            id: row['id'] as int,
-            song: row['song'] as String,
-            artist: row['artist'] as String,
-            at: DateTime.fromMillisecondsSinceEpoch(row['at'] as int),
-            kind: kind,
-            reward: (row['reward'] as num).toDouble(),
-          ),
-    ];
+    return (await _open()).query('plays', orderBy: 'id');
   }
 
   /// Loads the cached model, and learns again when the log is newer.
@@ -795,16 +1125,18 @@ class AutoplayTaste {
     final generation = _generation;
     _sinceTraining = 0;
     try {
-      final plays = await readLog();
-      if (plays.isEmpty || generation != _generation || _disposed) return;
+      final rows = await _readRows();
+      if (rows.isEmpty || generation != _generation || _disposed) return;
       final clock = Stopwatch()..start();
-      final trained = await _trainer(plays);
-      if (generation != _generation || _disposed) return;
+      // Null when no row holds a play this build knows.
+      final run = await _trainer(rows);
+      if (run == null || generation != _generation || _disposed) return;
+      final trained = run.taste;
       final model = trained.model;
       _model = model;
       _log.d(
         'Learned ${model.tokens.length} songs and artists from '
-        '${plays.length} plays in ${clock.elapsedMilliseconds} ms',
+        '${run.plays} plays in ${clock.elapsedMilliseconds} ms',
       );
       await (_writing = _writing.then((_) async {
         try {
@@ -821,38 +1153,55 @@ class AutoplayTaste {
     }
   }
 
+  /// The model when it knows enough to rank, else null.
+  Future<AutoplayTasteModel?> _ready() async {
+    if (_disposed) return null;
+    await _ensureLoaded();
+    final model = _model;
+    if (model == null || model.positives < _coldStart) return null;
+    return model;
+  }
+
   /// What the model knows about [session] (in playback order, newest last)
   /// and [candidates], or null before it knows enough.
   Future<AutoplayTasteSignal?> signal(
     List<PlayableMedia> session,
     List<PlayableMedia> candidates,
   ) async {
+    final model = await _ready();
+    return model == null
+        ? null
+        : autoplayTasteSignal(model, session, candidates);
+  }
+
+  /// The model [autoplayTasteSignal] reads, for a worker isolate, or null
+  /// before it knows enough. Its token index stays behind, so it copies less.
+  Future<AutoplayTasteModel?> signalModel() async {
+    final model = await _ready();
+    if (model == null) return null;
+    return AutoplayTasteModel(
+      tokens: model.tokens,
+      vectors: model.vectors,
+      positives: model.positives,
+      through: model.through,
+    );
+  }
+
+  /// The listener's lasting taste, or null before the model knows enough.
+  /// Reads the whole log, so callers wait until startup has settled.
+  Future<AutoplayTasteProfile?> profile({DateTime? at}) async {
     if (_disposed) return null;
     await _ensureLoaded();
     final model = _model;
     if (model == null || model.positives < _coldStart) return null;
-    final vectors = <String, Float32List>{};
-    void add(PlayableMedia media) {
-      final artist = _key(media.artist);
-      for (final token in [
-        _songToken('$artist|${_key(media.title)}'),
-        if (artist.isNotEmpty) _artistToken(artist),
-      ]) {
-        if (model._vector(token) case final vector?) vectors[token] = vector;
-      }
+    try {
+      final plays = await readLog();
+      if (_disposed) return null;
+      return autoplayTasteProfile(model, plays, at: at ?? DateTime.now());
+    } catch (error) {
+      _log.w('Could not read the lasting autoplay taste: $error');
+      return null;
     }
-
-    // A few more than the window, as ranking merges repeats.
-    for (final media in session.skip(
-      max(0, session.length - _sessionWindow - 4),
-    )) {
-      add(media);
-    }
-    if (vectors.isEmpty) return null;
-    for (final media in candidates) {
-      add(media);
-    }
-    return AutoplayTasteSignal(vectors);
   }
 
   Future<void> reset() async {

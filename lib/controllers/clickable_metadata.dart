@@ -12,6 +12,7 @@ import 'package:mornye/screens/album_screen.dart';
 import 'package:mornye/screens/extension_collection_screens.dart'
     show ExtensionArtistScreen, ExtensionAlbumScreen;
 import 'package:mornye/services/shell_navigation_service.dart';
+import 'package:mornye/theme/page_transitions.dart';
 import 'package:mornye/utils/artist_utils.dart';
 import 'package:mornye/utils/logger.dart';
 import 'package:mornye/utils/string_utils.dart';
@@ -78,9 +79,26 @@ List<String> _metadataSearchProviderCandidates(
   String? sourceProviderId,
 }) {
   final container = ProviderScope.containerOf(context, listen: false);
-  final extensionState = container.read(extensionProvider);
-  final settings = container.read(settingsProvider);
-  final extensionNotifier = container.read(extensionProvider.notifier);
+  return metadataLookupOrder(
+    extensionState: container.read(extensionProvider),
+    allMetadataProviders: container
+        .read(extensionProvider.notifier)
+        .getAllMetadataProviders(),
+    sourceProviderId: sourceProviderId,
+    searchProvider: container.read(settingsProvider).searchProvider,
+  );
+}
+
+/// The extensions a lookup by name asks, in order: the item's own provider,
+/// then the Metadata Priority list from the top, then the search provider
+/// and every other extension that can search.
+@visibleForTesting
+List<String> metadataLookupOrder({
+  required ExtensionState extensionState,
+  required List<String> allMetadataProviders,
+  String? sourceProviderId,
+  String? searchProvider,
+}) {
   final candidates = <String>[];
 
   void addProvider(String? providerId) {
@@ -95,12 +113,11 @@ List<String> _metadataSearchProviderCandidates(
   }
 
   addProvider(sourceProviderId);
-  addProvider(settings.searchProvider);
-
   for (final providerId in extensionState.metadataProviderPriority) {
     addProvider(providerId);
   }
-  for (final providerId in extensionNotifier.getAllMetadataProviders()) {
+  addProvider(searchProvider);
+  for (final providerId in allMetadataProviders) {
     addProvider(providerId);
   }
 
@@ -147,13 +164,18 @@ Future<void> navigateToArtistCredits(
           maxHeightFactor: 0.6,
           builder: (context) => ListView(
             shrinkWrap: true,
+            padding: const EdgeInsets.only(bottom: 16),
             children: [
-              for (final artist in artists)
-                AppSheetOption(
-                  leading: const Icon(Icons.person_outline),
-                  title: Text(artist.name),
-                  onTap: () => Navigator.pop(context, artist),
-                ),
+              AppSheetOptions(
+                children: [
+                  for (final artist in artists)
+                    AppSheetOption(
+                      leading: const Icon(Icons.person_outline),
+                      title: Text(artist.name),
+                      onTap: () => Navigator.pop(context, artist),
+                    ),
+                ],
+              ),
             ],
           ),
         );
@@ -551,7 +573,7 @@ void pushViaPreferredNavigator(
 
   void push(NavigatorState navigator) {
     if (page != null && DetailPage._isOnTop(navigator, page)) return;
-    navigator.push(MaterialPageRoute<void>(builder: builder));
+    navigator.push(SteadyPageRoute<void>(builder: builder));
   }
 
   final shouldRouteToTabNavigator =
@@ -579,7 +601,7 @@ void pushViaPreferredNavigator(
 }
 
 Future<T?> pushPage<T>(BuildContext context, WidgetBuilder builder) =>
-    Navigator.push(context, MaterialPageRoute<T>(builder: builder));
+    Navigator.push(context, SteadyPageRoute<T>(builder: builder));
 
 void _showLoadingSnackBar(BuildContext context, String message) {
   ScaffoldMessenger.of(context).showSnackBar(

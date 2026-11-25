@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
@@ -325,6 +326,22 @@ class _DownloadExtensions extends ExtensionNotifier {
       ),
     ],
   );
+}
+
+/// The app's English strings under any locale: the app has no right-to-left
+/// language, so the mirrored layout test supplies its own.
+class _EnglishStrings extends LocalizationsDelegate<AppLocalizations> {
+  const _EnglishStrings();
+
+  @override
+  bool isSupported(Locale locale) => true;
+
+  @override
+  Future<AppLocalizations> load(Locale locale) =>
+      SynchronousFuture(lookupAppLocalizations(const Locale('en')));
+
+  @override
+  bool shouldReload(_EnglishStrings old) => false;
 }
 
 void main() {
@@ -858,6 +875,9 @@ void main() {
           matching: find.byType(TrackCard),
         );
         await tester.scrollUntilVisible(row, 200);
+        // The whole row, so the tap lands on its button.
+        await tester.ensureVisible(row);
+        await tester.pumpAndSettle();
         expect(
           find.descendant(of: row, matching: findByTooltip('Show details')),
           tapPlays ? findsOneWidget : findsNothing,
@@ -961,8 +981,11 @@ void main() {
             theme: mornye
                 ? MornyeTheme.build(Brightness.dark)
                 : AppTheme.light(),
-            localizationsDelegates: appLocalizationsDelegates,
-            supportedLocales: AppLocalizations.supportedLocales,
+            localizationsDelegates: const [
+              _EnglishStrings(),
+              ...GlobalMaterialLocalizations.delegates,
+            ],
+            supportedLocales: const [Locale('ar')],
             home: const LibraryTracksFolderScreen(
               mode: LibraryTracksFolderMode.playlist,
               playlistId: 'playlist',
@@ -1021,6 +1044,23 @@ void main() {
         'Last',
       ]);
       expect(player.index, player.queue.length - 1);
+    },
+  );
+
+  test(
+    'a start file found elsewhere plays when the lookup misses it',
+    () async {
+      await container
+          .read(playbackProvider.notifier)
+          .playTrackList(_tracks, startIndex: 1, startPath: '/found.flac');
+      expect(player.queue.map((item) => item.title), [
+        'First',
+        'Unavailable',
+        'Selected',
+        'Last',
+      ]);
+      expect(player.queue[1].source, '/found.flac');
+      expect(player.index, 1);
     },
   );
 

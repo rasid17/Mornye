@@ -13,6 +13,10 @@ class _MusicPrefetch {
   /// How many songs after the current one are kept.
   static const ahead = 2;
 
+  /// How long a song may take to arrive whole before it streams instead.
+  static const wholeWithin = Duration(seconds: 60);
+  static const _wholePoll = Duration(milliseconds: 200);
+
   final MusicPlayerHandler handler;
   String? _key;
   int _revision = 0;
@@ -83,11 +87,37 @@ class _MusicPrefetch {
     }
   }
 
-  Future<String?> lookup(PlayableMedia media) async {
+  /// Downloads [source] ahead of its neighbours and waits for the whole copy
+  /// while [current] holds. False when it has to stream instead: the copy
+  /// cannot be kept, its download failed, or [within] passed.
+  Future<bool> whole(
+    String source,
+    bool Function() current, {
+    Duration within = wholeWithin,
+  }) async {
+    final cache = _cache;
+    if (cache == null || !source.startsWith('network://')) return false;
+    try {
+      if (await cache.lookup(source) != null) return true;
+      if (!current()) return false;
+      // Drops a pending neighbour update; the next position asks again.
+      _revision++;
+      _key = null;
+      cache.want([source]);
+      final watch = Stopwatch()..start();
+      while (current() && watch.elapsed < within) {
+        if (await cache.ready(source, _wholePoll)) return true;
+        if (!cache.arriving(source)) return false;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  Future<String?> lookup(String source) async {
     final cache = _cache;
     if (cache == null) return null;
     try {
-      return await cache.lookup(media.source);
+      return await cache.lookup(source);
     } catch (_) {
       return null;
     }

@@ -6,6 +6,7 @@ import 'package:mornye/controllers/collapsing_header_scroll_mixin.dart';
 import 'package:mornye/controllers/local_track_batch_actions.dart';
 import 'package:mornye/controllers/selection_mode_mixin.dart';
 import 'package:mornye/l10n/l10n.dart';
+import 'package:mornye/models/home_pin.dart';
 import 'package:mornye/models/library_database_models.dart'
     show LocalLibraryItem;
 import 'package:mornye/models/unified_library_item.dart';
@@ -33,6 +34,7 @@ import 'package:mornye/widgets/desktop/detail_header.dart';
 import 'package:mornye/widgets/desktop/library_track_menu.dart';
 import 'package:mornye/widgets/desktop/track_table.dart';
 import 'package:mornye/widgets/expressive_button.dart';
+import 'package:mornye/widgets/home_pin_action.dart';
 import 'package:mornye/widgets/library_mix_cover.dart';
 import 'package:mornye/widgets/library_selection_playback_actions.dart';
 import 'package:mornye/widgets/library_track_selection_bar.dart';
@@ -53,6 +55,8 @@ String libraryMixTitle(AppLocalizations l10n, LibraryMix mix) =>
       LibraryMixKind.fresh => l10n.homeMixFreshTitle,
       LibraryMixKind.rediscover => l10n.homeMixRediscoverTitle,
       LibraryMixKind.discover => l10n.homeMixDiscoverTitle,
+      LibraryMixKind.year => l10n.homeMixYearTitle(mix.label),
+      LibraryMixKind.deepCuts => l10n.homeMixDeepCutsTitle,
     };
 
 /// The translated name of a genre family; null for a tag outside the
@@ -195,6 +199,7 @@ class _LibraryMixScreenState extends ConsumerState<LibraryMixScreen>
 
   Widget _buildPage(BuildContext context) {
     final ids = [for (final item in _items) item.id];
+    slideSelectIds = ids;
     pruneSelection(ids.toSet());
     return DesktopListScope(
       onSelectAll: ids.isEmpty ? null : () => selectAll(ids),
@@ -419,69 +424,93 @@ class _LibraryMixScreenState extends ConsumerState<LibraryMixScreen>
                       .togglePlayPause(isPlaying)
                 : () => _play(0),
             onShuffle: _shuffle,
+            showShuffle: ref.watch(playerUiEnabledProvider),
             onAddToPlaylist: () => _saveAsPlaylist(context),
           );
         },
       ),
-      moreMenu: () => libraryTrackMenuGroups(
-        context,
-        ref,
-        items: _items,
-        onPlay: () => _play(0),
-      ),
+      moreMenu: () {
+        final groups = libraryTrackMenuGroups(
+          context,
+          ref,
+          items: _items,
+          onPlay: () => _play(0),
+        );
+        final pin = switch (widget) {
+          LibraryMixScreen(:final genre?) => homePinOfBrowseEntry(
+            genre,
+            HomePinKind.genre,
+          ),
+          LibraryMixScreen(:final artist?) => HomePin.artist(
+            name: artist,
+            cover: _paletteSource,
+          ),
+          _ => null,
+        };
+        if (pin != null && groups.isNotEmpty) {
+          groups.first.add(homePinMenuAction(context, ref, pin));
+        }
+        return groups;
+      },
     );
   }
 
   Widget _buildTrackList(BuildContext context) {
     final tokens = context.tokens;
     return SliverPadding(
-      padding: EdgeInsets.symmetric(horizontal: wideListInset(context)),
+      padding: EdgeInsets.symmetric(
+        horizontal: wideListInset(context),
+      ).copyWith(top: collectionRunTopGap(context)),
       sliver: SliverList.builder(
         itemCount: _items.length,
         itemBuilder: (context, index) {
           final item = _items[index];
-          return Consumer(
+          // Material joins the filled rows into one connected list.
+          return TrackCardSegment.at(
             key: ValueKey(item.id),
-            builder: (context, ref, _) {
-              final playback = ref.watch(
-                mediaItemPlaybackUiProvider(_rowKey(item)),
-              );
-              return TrackCard(
-                style: context.isMornye
-                    ? TrackCardStyle.flat
-                    : TrackCardStyle.filled,
-                leadingArtwork: true,
-                leading: ClipRRect(
-                  borderRadius: BorderRadius.circular(tokens.radiusThumb),
-                  child: LibraryItemArtwork(
-                    item: item,
-                    size: tokens.coverCompact,
-                  ),
-                ),
-                title: item.trackName,
-                subtitle: Text(
-                  item.artistName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                isCurrent: playback.isCurrent,
-                isPlaying: playback.isPlaying,
-                isSelectionMode: isSelectionMode,
-                isSelected: selectedIds.contains(item.id),
-                // A long press selects, as on the album pages.
-                onTap: isSelectionMode
-                    ? () => toggleSelection(item.id)
-                    : playback.isCurrent
-                    ? () => ref
-                          .read(musicPlayerControllerProvider)
-                          .togglePlayPause(playback.isPlaying)
-                    : () => _play(index),
-                onLongPress: isSelectionMode
-                    ? null
-                    : () => enterSelectionMode(item.id),
-                queueSwipe: libraryItemQueueSwipe(ref, item),
-              );
-            },
+            index: index,
+            count: _items.length,
+            child: slideSelectRow(
+              item.id,
+              Consumer(
+                builder: (context, ref, _) {
+                  final playback = ref.watch(
+                    mediaItemPlaybackUiProvider(_rowKey(item)),
+                  );
+                  return TrackCard(
+                    style: collectionTrackCardStyle(context),
+                    leadingArtwork: true,
+                    leading: ClipRRect(
+                      borderRadius: BorderRadius.circular(tokens.radiusThumb),
+                      child: LibraryItemArtwork(
+                        item: item,
+                        size: tokens.coverCompact,
+                      ),
+                    ),
+                    title: item.trackName,
+                    subtitle: Text(
+                      item.artistName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    isCurrent: playback.isCurrent,
+                    isPlaying: playback.isPlaying,
+                    isSelectionMode: isSelectionMode,
+                    isSelected: selectedIds.contains(item.id),
+                    // A long press selects, as on the album pages.
+                    onTap: isSelectionMode
+                        ? () => toggleSelection(item.id)
+                        : playback.isCurrent
+                        ? () => ref
+                              .read(musicPlayerControllerProvider)
+                              .togglePlayPause(playback.isPlaying)
+                        : () => _play(index),
+                    onLongPress: () => holdToSelect(item.id),
+                    queueSwipe: libraryItemQueueSwipe(ref, item),
+                  );
+                },
+              ),
+            ),
           );
         },
       ),
@@ -581,19 +610,30 @@ class _LibraryMixScreenState extends ConsumerState<LibraryMixScreen>
     final start = songs.indexWhere((song) => song.$1 >= index);
     final controller = ref.read(musicPlayerControllerProvider);
     await controller.setShuffle(false);
-    await controller.playAll([
-      for (final song in songs) song.$2,
-    ], initialIndex: max(0, start));
+    await _queue([for (final song in songs) song.$2], max(0, start));
   }
 
   Future<void> _shuffle() async {
     final songs = await _playable();
     if (songs.isEmpty || !mounted) return;
     final controller = ref.read(musicPlayerControllerProvider);
-    await controller.playAll([
+    await _queue([
       for (final song in songs) song.$2,
-    ], initialIndex: Random().nextInt(songs.length));
+    ], Random().nextInt(songs.length));
     await controller.setShuffle(true);
+  }
+
+  /// Plays [songs] as the queue; a mix's queue counts how its songs go.
+  Future<void> _queue(List<PlayableMedia> songs, int initialIndex) {
+    final controller = ref.read(musicPlayerControllerProvider);
+    return switch (widget.view?.mix) {
+      final mix? => controller.playMix(
+        mix.kind,
+        songs,
+        initialIndex: initialIndex,
+      ),
+      null => controller.playAll(songs, initialIndex: initialIndex),
+    };
   }
 
   Future<void> _saveAsPlaylist(BuildContext context) =>

@@ -4,9 +4,11 @@ import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mornye/controllers/clickable_metadata.dart';
 import 'package:mornye/l10n/l10n.dart';
+import 'package:mornye/models/home_pin.dart';
 import 'package:mornye/providers/download_queue_provider.dart';
 import 'package:mornye/providers/library_browse_provider.dart';
 import 'package:mornye/providers/library_genres_provider.dart';
+import 'package:mornye/providers/music_player_provider.dart';
 import 'package:mornye/providers/settings_provider.dart';
 import 'package:mornye/screens/downloaded_album_screen.dart';
 import 'package:mornye/screens/library_artist_screen.dart';
@@ -20,6 +22,8 @@ import 'package:mornye/services/library_database.dart';
 import 'package:mornye/utils/adaptive_layout.dart';
 import 'package:mornye/utils/nav_bar_inset.dart';
 import 'package:mornye/widgets/app_bottom_sheet.dart';
+import 'package:mornye/widgets/app_icon.dart';
+import 'package:mornye/widgets/app_loading_indicator.dart';
 import 'package:mornye/widgets/open_audio_button.dart';
 import 'package:mornye/widgets/tv_navigation.dart';
 import 'package:mornye/widgets/app_refresh_indicator.dart';
@@ -31,6 +35,7 @@ import 'package:mornye/widgets/desktop/context_menu.dart';
 import 'package:mornye/widgets/desktop/hover_play_button.dart';
 import 'package:mornye/widgets/expressive_button.dart';
 import 'package:mornye/widgets/cached_cover_image.dart';
+import 'package:mornye/widgets/home_pin_action.dart';
 import 'package:mornye/widgets/local_library_artwork_builder.dart';
 import 'package:mornye/widgets/library_search_results.dart';
 import 'package:mornye/widgets/sliver_layout_info_builder.dart';
@@ -68,6 +73,7 @@ class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen> {
   late String _sort;
   List<LibraryBrowseEntry> _rows = const [];
   bool _loading = true;
+  bool _hasMore = false;
 
   bool get _overview => widget.page == MornyeLibraryPage.overview;
   bool get _artists => widget.page == MornyeLibraryPage.artists;
@@ -91,7 +97,8 @@ class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen> {
         : ref.read(settingsProvider).libraryAlbumSortMode;
     _scroll.addListener(() {
       // Genres arrive in one read.
-      if (_scroll.position.extentAfter < 500 &&
+      if (_hasMore &&
+          _scroll.position.extentAfter < 500 &&
           !_loading &&
           !_genres &&
           !(_overview && _query.isNotEmpty)) {
@@ -364,6 +371,7 @@ class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen> {
         ? ref.watch(libraryGenresProvider).whenData(_genreRows)
         : ref.watch(libraryBrowseProvider(_request));
     _loading = result.isLoading || (result.value?.isLoadingMore ?? false);
+    _hasMore = result.value?.hasMore ?? false;
     if (result.hasValue) _rows = result.requireValue.entries;
     void reload() => _genres
         ? ref.invalidate(libraryGenresProvider)
@@ -541,7 +549,7 @@ class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen> {
                         child: ListTile(
                           contentPadding: EdgeInsets.zero,
                           minVerticalPadding: 12,
-                          leading: Icon(
+                          leading: AppIcon.adaptive(
                             category.$1,
                             color: colors.primary,
                             size: 28,
@@ -550,7 +558,7 @@ class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen> {
                             category.$2,
                             style: const TextStyle(fontSize: 22),
                           ),
-                          trailing: Icon(
+                          trailing: AppIcon.adaptive(
                             Icons.chevron_right,
                             color: colors.onSurfaceVariant,
                           ),
@@ -565,6 +573,7 @@ class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen> {
             // The seasonal Rewind, beside the listening history it replays.
             if (_overview &&
                 _query.isEmpty &&
+                ref.watch(playerUiEnabledProvider) &&
                 ref.watch(
                   settingsProvider.select((s) => s.listeningStatisticsEnabled),
                 ))
@@ -635,6 +644,7 @@ class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen> {
                     return Column(
                       children: [
                         DesktopContextMenuRegion(
+                          touch: true,
                           onContextMenu: (position) => showContextMenu(
                             context,
                             position: position,
@@ -644,6 +654,16 @@ class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen> {
                                   icon: Icons.open_in_new,
                                   label: context.l10n.desktopMenuOpen,
                                   onSelected: open,
+                                ),
+                                homePinMenuAction(
+                                  context,
+                                  ref,
+                                  homePinOfBrowseEntry(
+                                    entry,
+                                    _genres
+                                        ? HomePinKind.genre
+                                        : HomePinKind.artist,
+                                  ),
                                 ),
                               ],
                             ],
@@ -703,6 +723,7 @@ class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen> {
                         itemBuilder: (context, index) {
                           final entry = _rows[index];
                           return DesktopContextMenuRegion(
+                            touch: true,
                             onContextMenu: (position) =>
                                 _showAlbumMenu(entry, position),
                             child: _buildAlbumTile(entry, colors),
@@ -715,10 +736,11 @@ class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen> {
             if (result.hasError || result.value?.loadMoreError != null)
               SliverToBoxAdapter(
                 child: Center(
-                  child: TextButton.icon(
+                  child: ExpressiveButton(
+                    text: true,
                     onPressed: reload,
-                    icon: const Icon(Icons.refresh),
-                    label: Text(context.l10n.dialogRetry),
+                    icon: const AppIcon.adaptive(Icons.refresh),
+                    child: Text(context.l10n.dialogRetry),
                   ),
                 ),
               )
@@ -726,7 +748,7 @@ class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen> {
               const SliverToBoxAdapter(
                 child: Padding(
                   padding: EdgeInsets.all(24),
-                  child: Center(child: CircularProgressIndicator.adaptive()),
+                  child: Center(child: AppLoadingIndicator()),
                 ),
               )
             else if (_rows.isEmpty)
@@ -772,6 +794,11 @@ class _MornyeLibraryScreenState extends ConsumerState<MornyeLibraryScreen> {
             icon: Icons.play_arrow,
             label: context.l10n.tooltipPlay,
             onSelected: () => _playAlbum(entry),
+          ),
+          homePinMenuAction(
+            context,
+            ref,
+            homePinOfBrowseEntry(entry, HomePinKind.album),
           ),
         ],
       ],
@@ -878,15 +905,20 @@ class _LibraryBrowseArtworkState extends State<_LibraryBrowseArtwork> {
             : LocalOrNetworkCoverImage(url: cover, placeholder: fallback),
       );
     }
-    final embedded = entry.cover?.isNotEmpty == true
+    final stored = entry.cover?.isNotEmpty == true;
+    final embedded = stored
         ? null
         : DownloadedEmbeddedCoverResolver.resolve(
             entry.samplePath,
             onChanged: _resolveAgain,
           );
-    final cover = entry.cover?.isNotEmpty == true ? entry.cover! : embedded;
+    final cover = stored ? entry.cover! : embedded;
     return cover == null
         ? fallback(context)
-        : LocalOrNetworkCoverImage(url: cover, placeholder: fallback);
+        : LocalOrNetworkCoverImage(
+            url: cover,
+            placeholder: fallback,
+            songFile: stored ? entry.samplePath : null,
+          );
   }
 }

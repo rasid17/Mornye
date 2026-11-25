@@ -342,7 +342,6 @@ class _LyricsEditorSheetState extends ConsumerState<LyricsEditorSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final media = MediaQuery.of(context);
     Widget body = AppScaffoldMessenger(
       key: _messengerKey,
       child: Scaffold(
@@ -358,13 +357,19 @@ class _LyricsEditorSheetState extends ConsumerState<LyricsEditorSheet> {
       ),
     );
     // On phones the sheet takes most of the screen and rises with the
-    // keyboard; the desktop dialog brings its own height cap.
+    // keyboard; isolate viewInsets so keyboard animation frames do not rebuild
+    // the lyric line list.
     if (!isDesktopPlatform) {
+      final inner = body;
       body = SizedBox(
-        height: media.size.height * 0.92,
-        child: Padding(
-          padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
-          child: body,
+        height: MediaQuery.sizeOf(context).height * 0.92,
+        child: Builder(
+          builder: (context) => Padding(
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.viewInsetsOf(context).bottom,
+            ),
+            child: inner,
+          ),
         ),
       );
     }
@@ -532,25 +537,30 @@ class _LyricsEditorSheetState extends ConsumerState<LyricsEditorSheet> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Row(
-              children: [
-                Text(
-                  formatClock(active ? position.inSeconds : 0),
-                  style: timeStyle,
-                ),
-                Expanded(
-                  child: PlaybackSeekSlider(
-                    key: ValueKey(widget.item.id),
-                    position: active ? position : Duration.zero,
-                    duration: active ? duration : Duration.zero,
-                    onSeek: (position) async {
-                      if (_editingCurrentTrack) await controller.seek(position);
-                    },
-                    playing: playing,
+            Directionality(
+              textDirection: TextDirection.ltr,
+              child: Row(
+                children: [
+                  Text(
+                    formatClock(active ? position.inSeconds : 0),
+                    style: timeStyle,
                   ),
-                ),
-                Text(formatClock(duration.inSeconds), style: timeStyle),
-              ],
+                  Expanded(
+                    child: PlaybackSeekSlider(
+                      key: ValueKey(widget.item.id),
+                      position: active ? position : Duration.zero,
+                      duration: active ? duration : Duration.zero,
+                      onSeek: (position) async {
+                        if (_editingCurrentTrack) {
+                          await controller.seek(position);
+                        }
+                      },
+                      playing: playing,
+                    ),
+                  ),
+                  Text(formatClock(duration.inSeconds), style: timeStyle),
+                ],
+              ),
             ),
             const SizedBox(height: 4),
             if (mornye)
@@ -592,12 +602,10 @@ class _LyricsEditorSheetState extends ConsumerState<LyricsEditorSheet> {
                   icon: _saving
                       ? SizedBox.square(
                           dimension: 18,
-                          child: mornye
-                              ? const CupertinoActivityIndicator()
-                              : AppLoadingIndicator(
-                                  size: 18,
-                                  color: scheme.onPrimary,
-                                ),
+                          child: AppLoadingIndicator(
+                            size: 18,
+                            color: scheme.onPrimary,
+                          ),
                         )
                       : const AppIcon(Icons.check),
                   label: Text(l10n.dialogSave),

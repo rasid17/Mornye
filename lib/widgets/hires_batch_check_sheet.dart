@@ -1,4 +1,3 @@
-import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:mornye/l10n/l10n.dart';
 import 'package:mornye/models/unified_library_item.dart';
@@ -59,6 +58,9 @@ class _Entry {
   HiResCheckResult? result;
   String? error;
 
+  /// Its place among the songs on the shared chart; null without a spectrum.
+  int? slot;
+
   String get name => '${item.artistName} - ${item.trackName}';
 }
 
@@ -92,7 +94,14 @@ class _HiResBatchCheckState extends State<HiResBatchCheck> {
   int _current = 0;
   String? _expandedId;
 
+  /// Songs read so far that have a spectrum to draw.
+  int _charted = 0;
+
   bool get _done => _current >= _entries.length;
+
+  /// One song has nothing to be compared with, so the shared chart and the
+  /// colors that go with it wait for a second.
+  bool get _showsChart => _charted > 1;
 
   @override
   void initState() {
@@ -117,8 +126,12 @@ class _HiResBatchCheckState extends State<HiResBatchCheck> {
     for (final entry in _entries) {
       try {
         final result = await check(entry.item.filePath);
-        if (result.supported && result.report != null) {
+        final report = result.report;
+        if (result.supported && report != null) {
           entry.result = result;
+          // Taken in reading order and never given away, so a song keeps
+          // its color while the others are still being read.
+          if (report.spectrumDb.length > 1) entry.slot = _charted++;
         } else {
           entry.error = '';
         }
@@ -215,62 +228,94 @@ class _HiResBatchCheckState extends State<HiResBatchCheck> {
       fontSize: 15,
       height: 1.35,
     );
-    return ListView(
+    return CustomScrollView(
       controller: widget.controller,
-      shrinkWrap: true,
-      padding: EdgeInsets.only(bottom: tokens.gapLg),
-      children: [
-        Padding(
-          // In line with the sheet title and the rows below.
-          padding: EdgeInsets.fromLTRB(tokens.gapXl, 0, tokens.gapXl, 8),
-          child: _done
-              ? Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    for (final line in _summary())
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 4),
-                        child: Text(line, style: secondary),
-                      ),
-                  ],
-                )
-              : Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      l10n.hiResBatchProgress(_current + 1, total),
-                      style: secondary,
-                    ),
-                    const SizedBox(height: 10),
-                    AppProgressIndicator.linear(value: _current / total),
-                  ],
-                ),
-        ),
-        for (final (index, entry) in _entries.indexed)
-          ..._row(context, index, entry),
-        if (_done && _entries.any((entry) => entry.result != null))
-          Padding(
-            padding: EdgeInsets.fromLTRB(
-              tokens.gapXl,
-              tokens.gapMd,
-              tokens.gapXl,
-              0,
-            ),
-            child: mornye
-                ? AppActionButton(
-                    outlined: true,
-                    tonal: true,
-                    onPressed: _share,
-                    icon: const Icon(Icons.share_outlined),
-                    label: Text(l10n.hiResReportShare),
+      shrinkWrap: _entries.length <= 8,
+      slivers: [
+        SliverToBoxAdapter(
+          child: Padding(
+            // In line with the sheet title and the rows below.
+            padding: EdgeInsets.fromLTRB(tokens.gapXl, 0, tokens.gapXl, 8),
+            child: _done
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (final line in _summary())
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: Text(line, style: secondary),
+                        ),
+                    ],
                   )
-                : ExpressiveButton(
-                    tonal: true,
-                    onPressed: _share,
-                    icon: const Icon(Icons.share_outlined, size: 20),
-                    child: Text(l10n.hiResReportShare),
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        l10n.hiResBatchProgress(_current + 1, total),
+                        style: secondary,
+                      ),
+                      const SizedBox(height: 10),
+                      AppProgressIndicator.linear(value: _current / total),
+                    ],
                   ),
           ),
+        ),
+        if (_showsChart)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                tokens.gapXl,
+                tokens.gapSm,
+                tokens.gapXl,
+                tokens.gapSm,
+              ),
+              child: HiResSpectrumOverlay(
+                lines: [
+                  for (final entry in _entries)
+                    if (entry.slot case final slot?)
+                      (
+                        db: entry.result!.report!.spectrumDb,
+                        stepHz: entry.result!.report!.spectrumStepHz,
+                        color: HiResSongColors.of(context, slot),
+                      ),
+                ],
+              ),
+            ),
+          ),
+        SliverList.builder(
+          itemCount: _entries.length,
+          itemBuilder: (context, index) => Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: _row(context, index, _entries[index]),
+          ),
+        ),
+        if (_done && _entries.any((entry) => entry.result != null))
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                tokens.gapXl,
+                tokens.gapMd,
+                tokens.gapXl,
+                0,
+              ),
+              child: mornye
+                  ? AppActionButton(
+                      outlined: true,
+                      tonal: true,
+                      onPressed: _share,
+                      icon: const Icon(Icons.share_outlined),
+                      label: Text(l10n.hiResReportShare),
+                    )
+                  : ExpressiveButton(
+                      tonal: true,
+                      onPressed: _share,
+                      icon: const Icon(Icons.share_outlined, size: 20),
+                      child: Text(l10n.hiResReportShare),
+                    ),
+            ),
+          ),
+        SliverToBoxAdapter(child: SizedBox(height: tokens.gapLg)),
       ],
     );
   }
@@ -297,14 +342,10 @@ class _HiResBatchCheckState extends State<HiResBatchCheck> {
         statusColor = cs.error;
       }
     } else if (reading) {
-      leading = SizedBox(
+      leading = const SizedBox(
         width: 24,
         height: 24,
-        child: Center(
-          child: context.isMornye
-              ? const CupertinoActivityIndicator()
-              : const AppLoadingIndicator(size: 20, strokeWidth: 2.5),
-        ),
+        child: Center(child: AppLoadingIndicator(size: 20, strokeWidth: 2.5)),
       );
       status = l10n.hiResBatchReading;
     } else if (waiting) {
@@ -318,14 +359,35 @@ class _HiResBatchCheckState extends State<HiResBatchCheck> {
       status = _failure(entry);
       statusColor = cs.error;
     }
+    final slot = _showsChart ? entry.slot : null;
+    final color = slot == null ? null : HiResSongColors.of(context, slot);
+    final title = Text(
+      entry.item.trackName,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+    );
     return [
       AppSheetOption(
         leading: leading,
-        title: Text(
-          entry.item.trackName,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
+        // The dot is the chart's legend: the song's line has this color.
+        title: color == null
+            ? title
+            : Row(
+                children: [
+                  ExcludeSemantics(
+                    child: Container(
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        color: color,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(child: title),
+                ],
+              ),
         subtitle: Text(status, style: TextStyle(color: statusColor)),
         trailing: content == null
             ? null
@@ -346,7 +408,11 @@ class _HiResBatchCheckState extends State<HiResBatchCheck> {
             context.tokens.gapXl,
             context.tokens.gapLg,
           ),
-          child: HiResReportView(result: result, report: result.report!),
+          child: HiResReportView(
+            result: result,
+            report: result.report!,
+            spectrumColor: color,
+          ),
         ),
     ];
   }

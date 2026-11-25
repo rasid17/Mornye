@@ -12,7 +12,10 @@ import 'package:mornye/screens/equalizer_screen.dart';
 import 'package:mornye/services/playback_equalizer.dart';
 import 'package:mornye/theme/app_theme.dart';
 import 'package:mornye/theme/mornye_theme.dart';
+import 'package:mornye/widgets/app_menu_button.dart';
 import 'package:mornye/widgets/app_slider.dart';
+import 'package:mornye/widgets/expressive_button.dart';
+import 'package:mornye/widgets/expressive_icon_button.dart';
 import 'package:mornye/widgets/mornye_chrome.dart';
 import 'package:mornye/widgets/mornye_level_slider.dart';
 import 'package:mornye/widgets/slider_value_header.dart';
@@ -100,9 +103,10 @@ void main() {
         );
         await tester.pumpAndSettle();
         final page = tester.widget<Scaffold>(find.byType(Scaffold));
-        final picker = find.byType(
-          mornye ? MornyeSegmentedControl : M3EButtonGroup,
-        );
+        // The band count, under the Graphic or Parametric choice.
+        final picker = find
+            .byType(mornye ? MornyeSegmentedControl : M3EButtonGroup)
+            .last;
         final bandPicker = tester.widget(picker);
         Widget bass() => mornye
             ? tester
@@ -343,6 +347,48 @@ void main() {
     expect(restored.read(equalizerProvider).presets.length, 3);
   });
 
+  testWidgets('preset actions end the row on a wide page', (tester) async {
+    tester.view.physicalSize = const Size(1200, 3000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          theme: AppTheme.light(),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: const EqualizerScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final save = tester.getRect(
+      find.ancestor(
+        of: find.text('Save preset'),
+        matching: find.byType(ExpressiveButton),
+      ),
+    );
+    final more = tester.getRect(
+      find.byWidgetPredicate(
+        (widget) => widget is AppMenuButton && widget.tooltip == 'Presets',
+      ),
+    );
+    final reset = tester.getRect(
+      find.byWidgetPredicate(
+        (widget) => widget is ExpressiveIconButton && widget.tooltip == 'Reset',
+      ),
+    );
+    // Save starts the row and the menu ends it, the same distance from
+    // their edges of the page.
+    expect(1200 - more.right, closeTo(save.left, 0.5));
+    expect(reset.right, closeTo(more.left, 0.5));
+    expect(save.width, lessThan(300));
+  });
+
   for (final mornye in [false, true]) {
     testWidgets(
       'EQ editing and dialogs fit a narrow screen with large text ($mornye)',
@@ -372,8 +418,11 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        final picker = find.byType(
-          mornye ? MornyeSegmentedControl : M3EButtonGroup,
+        // The band count, not the Graphic or Parametric choice above it.
+        final picker = find.byWidgetPredicate(
+          (widget) => mornye
+              ? widget is MornyeSegmentedControl && widget.labels.length == 4
+              : widget is M3EButtonGroup && widget.actions.length == 4,
         );
         await tester.scrollUntilVisible(
           picker,

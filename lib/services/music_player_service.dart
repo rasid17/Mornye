@@ -161,12 +161,19 @@ class MusicPlayerHandler extends BaseAudioHandler
   StreamSubscription<Set<AudioDevice>>? _automationDevicesSubscription;
   bool _headphoneMonitoringRequested = false;
   int _headphoneMonitoringRevision = 0;
+  // The connected outputs learning reads its output kind from.
+  StreamSubscription<Set<AudioDevice>>? _outputDevicesSubscription;
+  Set<AudioDevice>? _outputDevices;
+  bool _outputMonitoringRequested = false;
+  int _outputMonitoringRevision = 0;
+  bool _exclusiveHeld = false;
   final List<PlayableMedia> _media = [];
   final List<MediaItem> _queueItems = [];
   late final ContentUriPlaybackCache _sourceCache;
   final List<StreamSubscription<dynamic>> _subscriptions = [];
   int _index = -1;
   int _playRequestGeneration = 0;
+  int _queueGeneration = 0;
   int _playbackInstance = 0;
   final _metadataChanges = <String, Object>{};
   String? _activeResolvedPath;
@@ -202,6 +209,9 @@ class MusicPlayerHandler extends BaseAudioHandler
 
   bool _pausedByInterruption = false;
   bool _interruptionActive = false;
+  int _usbFocusCheck = 0;
+  int _callWait = 0;
+  int _deniedFocusRetries = 0;
   bool _userPaused = false;
   // Position saved with the restored session; applied on the first play().
   Duration? _pendingRestorePosition;
@@ -219,6 +229,8 @@ class MusicPlayerHandler extends BaseAudioHandler
 
   /// No engine position has arrived since a forced broadcast.
   bool _positionCheckDue = false;
+  bool _hapticsConfiguredActive = false;
+  PlaybackState? _lastHapticsPlaybackState;
   late final PlaybackSessionWriter _sessionWriter;
   int get _sessionQueueRevision => _sessionWriter.queueRevision;
   static const Duration _positionBroadcastInterval = Duration(
@@ -237,6 +249,10 @@ class MusicPlayerHandler extends BaseAudioHandler
   bool get isDisposed => _disposed;
   int get playbackRequestGeneration => _playRequestGeneration;
 
+  /// Counts the queues that replaced the whole queue, so one tells which
+  /// queue plays. Reordering or adding songs keeps it.
+  int get queueGeneration => _queueGeneration;
+
   /// Reconcile only the playback fields affected by the new settings snapshot.
   void applySettings(AppSettings previous) {
     final settings = _settings;
@@ -248,7 +264,9 @@ class MusicPlayerHandler extends BaseAudioHandler
         previous.playbackNormalizationPreamp !=
             settings.playbackNormalizationPreamp ||
         previous.playbackNormalizationMode !=
-            settings.playbackNormalizationMode) {
+            settings.playbackNormalizationMode ||
+        previous.playbackNormalizationBoost !=
+            settings.playbackNormalizationBoost) {
       reapplyNormalization();
     }
     // A prepared or queued next song must not keep the engine it was
@@ -377,17 +395,14 @@ class MusicPlayerHandler extends BaseAudioHandler
     }
   }
 
-  MediaItem _toMediaItem(PlayableMedia media, {String? resolvedSource}) {
-    final item = media.toMediaItem(
-      resolvedSource: resolvedSource,
-      unknownTitle: _runtime.unknownTitle,
-      unknownArtist: _runtime.unknownArtist,
-      covers: _dependencies.coverStore,
-    );
-    return item.copyWith(
-      extras: {...?item.extras, 'playbackInstance': _playbackInstance},
-    );
-  }
+  MediaItem _toMediaItem(PlayableMedia media, {String? resolvedSource}) =>
+      media.toMediaItem(
+        resolvedSource: resolvedSource,
+        unknownTitle: _runtime.unknownTitle,
+        unknownArtist: _runtime.unknownArtist,
+        covers: _dependencies.coverStore,
+        playbackInstance: _playbackInstance,
+      );
 
   void _init() {
     if (_initialized) return;
@@ -445,7 +460,25 @@ class MusicPlayerHandler extends BaseAudioHandler
       }),
     );
     _subscriptions.add(mediaItem.listen((_) => _updateHaptics()));
-    _subscriptions.add(playbackState.listen((_) => _updateHaptics()));
+    _subscriptions.add(
+      playbackState.listen((state) {
+        final previous = _lastHapticsPlaybackState;
+        _lastHapticsPlaybackState = state;
+        if (!_settings.musicHaptics && !_hapticsConfiguredActive) return;
+        if (previous != null &&
+            previous.playing == state.playing &&
+            previous.processingState == state.processingState &&
+            previous.speed == state.speed &&
+            previous.queueIndex == state.queueIndex &&
+            (!state.playing
+                ? previous.updatePosition == state.updatePosition
+                : (state.position - previous.position).abs() <=
+                      const Duration(milliseconds: 60))) {
+          return;
+        }
+        _updateHaptics();
+      }),
+    );
     _subscriptions.add(
       _dependencies.coverStore.changes.listen(_covers.changed),
     );
@@ -454,6 +487,8 @@ class MusicPlayerHandler extends BaseAudioHandler
     _refreshPlaybackAutomation();
     playbackSpeed.addListener(_tempoChanged);
     playbackTempoSupportRevision.addListener(_tempoChanged);
+    usbAudioStatus.addListener(refreshPlaybackOutput);
+    playbackExclusiveStatus.addListener(refreshPlaybackOutput);
 
     _listenToPlayer(_player);
     _cast.initialize();
@@ -496,6 +531,7 @@ class MusicPlayerHandler extends BaseAudioHandler
   /// Haptics follow only decodable local files; streams have no full copy.
   void _updateHaptics() {
     if (_disposed) return;
+    if (!_settings.musicHaptics && !_hapticsConfiguredActive) return;
     final extras = mediaItem.value?.extras;
     final source = extras?['source']?.toString() ?? '';
     final resolved = extras?['resolvedSource']?.toString().trim() ?? '';
@@ -510,6 +546,7 @@ class MusicPlayerHandler extends BaseAudioHandler
         (document || !path.contains('://')) &&
         _settings.musicHaptics &&
         _settings.playerMode == 'internal';
+    _hapticsConfiguredActive = local;
     _haptics.configure(
       sensitivity: _settings.musicHapticsSensitivity,
       strength: _settings.musicHapticsStrength,
@@ -532,6 +569,76 @@ class MusicPlayerHandler extends BaseAudioHandler
             state.processingState == AudioProcessingState.ready,
       );
     }
+    _refreshOutputMonitoring();
+  }
+
+  /// Reads the connected outputs while learning is on. audio_session lists
+  /// them on Android and iOS; elsewhere only the player's own state counts.
+  void _refreshOutputMonitoring() {
+    final session = _audioSession;
+    final watch =
+        !_disposed && session != null && _runtime.personalization.enabled;
+    if (watch && !_outputMonitoringRequested) {
+      _outputMonitoringRequested = true;
+      unawaited(_startOutputMonitoring(session, ++_outputMonitoringRevision));
+    } else if (!watch && _outputMonitoringRequested) {
+      _outputMonitoringRequested = false;
+      _outputMonitoringRevision++;
+      _outputDevices = null;
+      final subscription = _outputDevicesSubscription;
+      _outputDevicesSubscription = null;
+      if (subscription != null) unawaited(subscription.cancel());
+    }
+    refreshPlaybackOutput();
+  }
+
+  Future<void> _startOutputMonitoring(
+    AudioSession session,
+    int revision,
+  ) async {
+    void changed(Set<AudioDevice> devices) {
+      if (_disposed || revision != _outputMonitoringRevision) return;
+      _outputDevices = devices;
+      refreshPlaybackOutput();
+    }
+
+    try {
+      changed(await session.getDevices());
+      if (_disposed || revision != _outputMonitoringRevision) return;
+      _outputDevicesSubscription = session.devicesChangedEventStream
+          .asyncMap((_) => session.getDevices())
+          .listen(
+            changed,
+            onError: (Object error) =>
+                _log.w('Could not read the audio output: $error'),
+          );
+    } catch (error) {
+      _log.w('Could not read the audio output: $error');
+    }
+  }
+
+  /// Tells learning the kind of output music plays on now. Only the kind,
+  /// never a device's name or address.
+  void refreshPlaybackOutput() {
+    if (_disposed) return;
+    final usb = usbAudioStatus.value;
+    final exclusive = isDesktopPlatform && _settings.exclusiveOutput;
+    // Each new song reports pending before it opens the device again.
+    _exclusiveHeld = switch (playbackExclusiveStatus.value) {
+      _ when !exclusive => false,
+      ExclusiveOutputStatus.active => true,
+      ExclusiveOutputStatus.unavailable => false,
+      ExclusiveOutputStatus.pending => _exclusiveHeld,
+    };
+    _runtime.personalization.output = playbackOutputKind(
+      devices: _outputDevices,
+      dac:
+          _exclusiveHeld ||
+          (_settings.usbBitPerfect &&
+              usb.driver == 'usb_direct' &&
+              usb.reason == 'active'),
+      elsewhere: _cast.active || _runtime.playsElsewhere,
+    );
   }
 
   /// Recover system controls without reloading, seeking or restarting audio.
@@ -612,7 +719,10 @@ class MusicPlayerHandler extends BaseAudioHandler
       player.onDurationChanged.listen((duration) {
         if (!identical(player, _player) || !_sourceReady) return;
         final current = mediaItem.value;
-        if (current != null && duration > Duration.zero) {
+        // The same duration again would rebuild every player surface.
+        if (current != null &&
+            duration > Duration.zero &&
+            current.duration != duration) {
           mediaItem.add(current.copyWith(duration: duration));
         }
       }),
@@ -720,12 +830,23 @@ class MusicPlayerHandler extends BaseAudioHandler
             if (event.type == AudioInterruptionType.duck) {
               return;
             }
+            // Some calls in other apps take focus for good and never give it
+            // back, so only their end can resume the music.
+            final permanent = event.type == AudioInterruptionType.unknown;
+            if (_holdsUsbDac) {
+              unawaited(_keepPlayingOnUsbDac(permanent: permanent));
+              return;
+            }
 
             _interruptionActive = true;
             _pausedByInterruption =
                 _player.state == PlaybackDeckState.playing ||
                 playbackState.value.playing;
-            unawaited(_pauseForFocusLoss(reason: 'audio interruption'));
+            unawaited(
+              _pauseForFocusLoss(reason: 'audio interruption').then((_) {
+                if (permanent) return _resumeAfterCall();
+              }),
+            );
           } else {
             if (event.type == AudioInterruptionType.duck) {
               return;
@@ -735,8 +856,7 @@ class MusicPlayerHandler extends BaseAudioHandler
             if (_pausedByInterruption &&
                 event.type == AudioInterruptionType.pause &&
                 !_playbackAutomation.blocksPlayback) {
-              _pausedByInterruption = false;
-              unawaited(play());
+              unawaited(_resumeAfterInterruption());
             } else {
               _pausedByInterruption = false;
             }
@@ -814,6 +934,7 @@ class MusicPlayerHandler extends BaseAudioHandler
       _automationDevicesSubscription = null;
       if (subscription != null) unawaited(subscription.cancel());
     }
+    _refreshOutputMonitoring();
   }
 
   Future<void> _startHeadphoneMonitoring(
@@ -844,6 +965,86 @@ class MusicPlayerHandler extends BaseAudioHandler
       _interruptionActive ||
       _userPaused ||
       _playbackError != null;
+
+  /// Direct USB playing on a DAC that Android's mixer no longer reaches.
+  /// Another app cannot sound through it, so its focus does not pause.
+  bool get _holdsUsbDac =>
+      _player.isDirect &&
+      _player.state == PlaybackDeckState.playing &&
+      usbAudioStatus.value.driver == 'usb_direct' &&
+      usbAudioStatus.value.reason == 'active';
+
+  /// Keeps playing through a lost focus, unless a call takes it. A call can
+  /// set its mode just after taking focus, so it is asked again a second on.
+  Future<void> _keepPlayingOnUsbDac({required bool permanent}) async {
+    final check = ++_usbFocusCheck;
+    _log.i('Audio interruption ignored: Direct USB holds the DAC');
+    for (final wait in const [Duration.zero, Duration(seconds: 1)]) {
+      if (wait > Duration.zero) await Future<void>.delayed(wait);
+      if (_disposed || check != _usbFocusCheck || !_holdsUsbDac) return;
+      if (!await _dependencies.callActive()) continue;
+      if (_disposed || check != _usbFocusCheck || !_holdsUsbDac) return;
+      _interruptionActive = true;
+      _pausedByInterruption = true;
+      await _pauseForFocusLoss(reason: 'a call');
+      if (permanent) _playWhenCallEnds(_playRequestGeneration);
+      return;
+    }
+  }
+
+  /// Resumes music a call paused for good once the call ends. A call can
+  /// set its mode just after taking focus, so it is asked again a second on.
+  Future<void> _resumeAfterCall() async {
+    if (!_dependencies.isAndroid || !_pausedByInterruption) return;
+    final generation = _playRequestGeneration;
+    for (final wait in const [Duration.zero, Duration(seconds: 1)]) {
+      if (wait > Duration.zero) await Future<void>.delayed(wait);
+      if (_disposed || generation != _playRequestGeneration) return;
+      if (!await _dependencies.callActive()) continue;
+      if (_disposed || generation != _playRequestGeneration) return;
+      _playWhenCallEnds(generation);
+      return;
+    }
+  }
+
+  /// Focus can come back while the phone is still leaving call mode, and a
+  /// player resumed into that switch can stall, so it waits for the end.
+  Future<void> _resumeAfterInterruption() async {
+    final generation = _playRequestGeneration;
+    if (_dependencies.isAndroid && await _dependencies.callActive()) {
+      if (!_disposed && generation == _playRequestGeneration) {
+        _playWhenCallEnds(generation);
+      }
+      return;
+    }
+    if (_disposed || generation != _playRequestGeneration) return;
+    if (!_pausedByInterruption) return;
+    await play();
+  }
+
+  /// Plays once no call is active, unless anything paused, skipped or
+  /// played meanwhile.
+  void _playWhenCallEnds(int generation) {
+    final wait = ++_callWait;
+    _log.i('Playback waits for the call to end');
+    unawaited(() async {
+      // A call lasting longer than this is left to the listener.
+      for (var second = 0; second < 4 * 3600; second++) {
+        await Future<void>.delayed(const Duration(seconds: 1));
+        bool stale() =>
+            _disposed ||
+            wait != _callWait ||
+            generation != _playRequestGeneration ||
+            !_pausedByInterruption;
+        if (stale()) return;
+        if (await _dependencies.callActive()) continue;
+        if (stale()) return;
+        _log.i('Call ended; resuming playback');
+        await play();
+        return;
+      }
+    }());
+  }
 
   Future<void> _pauseForFocusLoss({
     required String reason,
@@ -918,6 +1119,9 @@ class MusicPlayerHandler extends BaseAudioHandler
       final granted = await session.setActive(true);
       if (!granted) {
         _log.w('Audio focus request was not granted');
+        // audio_session keeps a refused request and reports every later one
+        // as granted without asking; dropping it makes the next one ask.
+        if (_dependencies.isAndroid) await session.setActive(false);
       }
       return granted;
     } catch (e) {
@@ -1217,6 +1421,7 @@ class MusicPlayerHandler extends BaseAudioHandler
       displayName: displayName,
       preampDb: _settings.playbackNormalizationPreamp,
       preferAlbumGain: _settings.playbackNormalizationMode == 'album',
+      boost: _settings.playbackNormalizationBoost,
     );
   }
 
@@ -1305,7 +1510,9 @@ class MusicPlayerHandler extends BaseAudioHandler
       }
       // A whole prefetched copy opens as a local file on every engine; a
       // song still downloading streams from the server instead.
-      if (await _prefetch.lookup(media) case final cached?) return cached;
+      if (await _prefetch.lookup(media.source) case final cached?) {
+        return cached;
+      }
       try {
         return await _dependencies.resolveNetworkSource(media.source);
       } catch (_) {
@@ -1315,6 +1522,7 @@ class MusicPlayerHandler extends BaseAudioHandler
     }
     if (media.originSource case final origin?) {
       if (!await fileExists(media.source)) {
+        if (await _prefetch.lookup(origin) case final cached?) return cached;
         try {
           return await _dependencies.resolveNetworkSource(origin);
         } catch (_) {
@@ -1513,6 +1721,7 @@ class MusicPlayerHandler extends BaseAudioHandler
     // Never clobber a session the user already started this launch.
     if (_index >= 0 || (_media.isNotEmpty && !replaceStoppedQueue)) return;
     _restoringSession = true;
+    _queueGeneration++;
     try {
       _media
         ..clear()
@@ -1586,6 +1795,7 @@ class MusicPlayerHandler extends BaseAudioHandler
     if (items.isEmpty) return;
     _autoplay.reset();
     _playRequestGeneration++;
+    _queueGeneration++;
     _media
       ..clear()
       ..addAll(items);
@@ -1662,21 +1872,19 @@ class MusicPlayerHandler extends BaseAudioHandler
       return;
     }
     final added = _withoutQueuedDuplicates(items);
-    var at = playNext
-        ? (_index + 1).clamp(0, _media.length)
-        : _autoplay.manualInsertIndex;
-    final queued = <MediaItem>[];
-    for (final item in added) {
-      _media.insert(at, item);
-      final queueItem = _toMediaItem(item);
-      _queueItems.insert(at, queueItem);
-      queued.add(queueItem);
+    if (added.isNotEmpty) {
+      final at = playNext
+          ? (_index + 1).clamp(0, _media.length)
+          : _autoplay.manualInsertIndex;
+      final queued = [for (final item in added) _toMediaItem(item)];
+      _media.insertAll(at, added);
+      _queueItems.insertAll(at, queued);
+      final delta = added.length;
       for (var i = 0; i < _playHistory.length; i++) {
-        if (_playHistory[i] >= at) _playHistory[i]++;
+        if (_playHistory[i] >= at) _playHistory[i] += delta;
       }
-      at++;
+      _rememberEnqueued(queued, playNext: playNext);
     }
-    _rememberEnqueued(queued, playNext: playNext);
     _markSessionQueueChanged();
     queue.add(List<MediaItem>.unmodifiable(_queueItems));
     _broadcastState();
@@ -1857,7 +2065,22 @@ class MusicPlayerHandler extends BaseAudioHandler
     // Link may resolve a network song to its completed local copy.
     // A file still arriving resolves to its HTTP stream instead.
     try {
-      if (const {'http', 'https'}.contains(Uri.tryParse(path)?.scheme)) {
+      final streams = const {
+        'http',
+        'https',
+      }.contains(Uri.tryParse(path)?.scheme);
+      if (_settings.usbBitPerfect && _dependencies.isAndroid) {
+        // The USB output plays whole local files only: a song that streams
+        // goes through Android's mixer, at the level the DAC was left on.
+        final scheme = Uri.tryParse(media.source)?.scheme ?? '';
+        final kind = scheme.isEmpty ? 'file' : scheme;
+        _log.i(
+          streams
+              ? 'USB output not used: this song streams ($kind source)'
+              : 'USB output requested ($kind source)',
+        );
+      }
+      if (streams) {
         await _player.setNetworkSource(
           path,
           arriving: _runtime.streamsArrivingFile(path),
@@ -1870,6 +2093,8 @@ class MusicPlayerHandler extends BaseAudioHandler
           allowFixedVolume: _settings.usbAllowFixedVolume,
           dapExclusive: _settings.dapExclusive,
           allowDop: _settings.usbDsdOverPcm,
+          usbMaxSampleRate: _settings.usbMaxSampleRate,
+          usbDitherHighPass: _settings.usbDitherHighPass,
           requiresDsd: _requiresDsd(media),
         );
       }
@@ -1893,6 +2118,43 @@ class MusicPlayerHandler extends BaseAudioHandler
     if (!startPaused) await _player.resume();
     if (!_isCurrentPlayRequest(generation, media)) await _player.pause();
     return path;
+  }
+
+  /// The USB output plays whole files only. With it on and its output
+  /// connected, a network song without a copy downloads before it starts
+  /// instead of streaming through Android's mixer.
+  Future<void> _fetchWholeForUsb(PlayableMedia media, int generation) async {
+    if (!_settings.usbBitPerfect || !_dependencies.isAndroid) return;
+    // A saved copy that is gone would stream from the server it came from.
+    final origin = media.originSource;
+    final source = media.source.startsWith('network://')
+        ? media.source
+        : origin != null &&
+              origin.startsWith('network://') &&
+              !media.isContentUri &&
+              !await fileExists(media.source)
+        ? origin
+        : null;
+    if (source == null || !_isCurrentPlayRequest(generation, media)) return;
+    if (!await AudioplayersPlaybackDeck.bitPerfectOutputPresent(
+      directUsb: _settings.usbDirect,
+      dapExclusive: _settings.dapExclusive,
+    )) {
+      return;
+    }
+    if (!_isCurrentPlayRequest(generation, media)) return;
+    final watch = Stopwatch()..start();
+    final whole = await _prefetch.whole(
+      source,
+      () => _isCurrentPlayRequest(generation, media),
+    );
+    if (!_isCurrentPlayRequest(generation, media)) return;
+    final waited = watch.elapsedMilliseconds;
+    if (!whole) {
+      _log.w('USB output: no whole copy of this network song ($waited ms)');
+    } else if (waited >= 500) {
+      _log.i('USB output: fetched this network song whole ($waited ms)');
+    }
   }
 
   Future<void> _loadIndex(
@@ -1985,6 +2247,10 @@ class MusicPlayerHandler extends BaseAudioHandler
       ..fetchFor(media)
       ..fetchAhead();
 
+    if (playbackLease == null) {
+      await _fetchWholeForUsb(media, generation);
+      if (!_isCurrentPlayRequest(generation, media)) return;
+    }
     var resolved = playbackLease?.path ?? await _formats.resolve(media);
     var usingLocalSafCopy = media.isContentUri && playbackLease == null;
     if (!_isCurrentPlayRequest(generation, media)) {
@@ -2373,6 +2639,7 @@ class MusicPlayerHandler extends BaseAudioHandler
   }
 
   Future<void> _playInternal() async {
+    final afterInterruption = _pausedByInterruption;
     _pausedByInterruption = false;
     _interruptionActive = false;
     _userPaused = false;
@@ -2419,9 +2686,18 @@ class MusicPlayerHandler extends BaseAudioHandler
         await _player.pause();
         if (generation == _playRequestGeneration && !_disposed) {
           _broadcastState(playerState: PlaybackDeckState.paused);
+          // The phone app can hold focus a moment after the call ends.
+          if (afterInterruption &&
+              _dependencies.isAndroid &&
+              _deniedFocusRetries < 3) {
+            _deniedFocusRetries++;
+            _pausedByInterruption = true;
+            _playWhenCallEnds(generation);
+          }
         }
         return;
       }
+      _deniedFocusRetries = 0;
       await _claimHardwareMediaButtons();
       if (generation != _playRequestGeneration || _disposed) return;
       try {
@@ -2441,7 +2717,28 @@ class MusicPlayerHandler extends BaseAudioHandler
       }
       _heldPaused = false;
       _broadcastState(playerState: PlaybackDeckState.playing);
+      if (afterInterruption && _dependencies.isAndroid) {
+        unawaited(_reloadIfStalled(generation));
+      }
     });
+  }
+
+  /// Some phones resume the player after a call without it moving, while a
+  /// fresh load plays, as a skip does. The song reloads where it stood.
+  Future<void> _reloadIfStalled(int generation) async {
+    final player = _player;
+    final start = await player.getCurrentPosition();
+    await Future<void>.delayed(const Duration(seconds: 2));
+    bool stale() =>
+        _disposed ||
+        generation != _playRequestGeneration ||
+        !identical(player, _player) ||
+        player.state != PlaybackDeckState.playing;
+    if (start == null || stale()) return;
+    final now = await player.getCurrentPosition();
+    if (now == null || now > start || stale()) return;
+    _log.w('Playback did not move after a call; reloading the song');
+    await _playIndex(_index, recordHistory: false, startPosition: now);
   }
 
   @override
@@ -2552,8 +2849,10 @@ class MusicPlayerHandler extends BaseAudioHandler
     }
   }
 
+  /// The system stops without arguments, as when the playback notification
+  /// or media card is dismissed: the queue then stays for Home's Resume.
   @override
-  Future<void> stop({bool keepResume = false}) async {
+  Future<void> stop({bool keepResume = true}) async {
     _runtime.personalization.finish();
     unawaited(_runtime.personalization.flush());
     unawaited(_runtime.taste.flush());
@@ -2581,6 +2880,11 @@ class MusicPlayerHandler extends BaseAudioHandler
       await _persistSession(position: position);
       if (generation != _playRequestGeneration || _disposed) return;
       resumeMedia = _media[_index].toJson();
+    }
+    if (_dependencies.isAndroid &&
+        _settings.usbBitPerfect &&
+        _settings.usbDirect) {
+      await AudioplayersPlaybackDeck.endUsbSession();
     }
     await _player.stop();
     if (generation != _playRequestGeneration || _disposed) return;
@@ -2914,7 +3218,7 @@ class MusicPlayerHandler extends BaseAudioHandler
 
     Future<void>? reaction;
     if (_media.isEmpty) {
-      reaction = stop();
+      reaction = stop(keepResume: false);
     } else if (removed.wasCurrent) {
       reaction = _playIndex(removed.nextIndex.clamp(0, _media.length - 1));
     } else {
@@ -2990,6 +3294,8 @@ class MusicPlayerHandler extends BaseAudioHandler
     _disposed = true;
     playbackSpeed.removeListener(_tempoChanged);
     playbackTempoSupportRevision.removeListener(_tempoChanged);
+    usbAudioStatus.removeListener(refreshPlaybackOutput);
+    playbackExclusiveStatus.removeListener(refreshPlaybackOutput);
     await _autoplay.history.flush();
     await _cast.dispose();
     _runtime.personalization.finish();
@@ -3008,6 +3314,8 @@ class MusicPlayerHandler extends BaseAudioHandler
     _headphoneMonitoringRevision++;
     await _automationVolumeSubscription?.cancel();
     await _automationDevicesSubscription?.cancel();
+    _outputMonitoringRevision++;
+    await _outputDevicesSubscription?.cancel();
     await _playbackAutomation.dispose();
     await _player.cancelPreparation();
     await _sourceChangeTail;

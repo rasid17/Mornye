@@ -37,6 +37,7 @@ import 'package:mornye/screens/now_playing_screen.dart';
 import 'package:mornye/screens/lyrics_share_screen.dart';
 import 'package:mornye/theme/mornye_theme.dart';
 import 'package:mornye/theme/app_theme.dart';
+import 'package:mornye/theme/player_artwork_theme.dart';
 import 'package:mornye/utils/lyrics_parser.dart';
 import 'package:mornye/widgets/audio_output_button.dart';
 import 'package:mornye/widgets/expressive_icon_button.dart';
@@ -62,6 +63,7 @@ import 'package:mornye/widgets/material_player_layout.dart';
 import 'package:mornye/widgets/material_player_backdrop.dart';
 import 'package:mornye/widgets/mornye_player_layout.dart';
 import 'package:mornye/widgets/overflow_marquee.dart';
+import 'package:mornye/widgets/player_gesture_regions.dart';
 import 'package:mornye/widgets/player_lyric_preview.dart';
 import 'package:mornye/widgets/player_lyrics.dart';
 import 'package:mornye/widgets/player_lyrics_controls.dart';
@@ -361,7 +363,14 @@ void main() {
                 matching: find.byType(CustomPaint),
               ),
             )
-            .map((paint) => paint.painter)
+            .map(
+              (paint) => switch (paint.painter) {
+                final MiniPlayerPhasePainter wave => wave.painterAt(
+                  wave.phase.value,
+                ),
+                final painter => painter,
+              },
+            )
             .whereType<M3ELinearProgressPainter>()
             .single
             .value!;
@@ -757,7 +766,216 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('the open Material player readies the next song\'s colours', (
+    tester,
+  ) async {
+    final palette = _RecordingPalette();
+    PlayerArtworkTheme.debugPalette = palette;
+    addTearDown(() => PlayerArtworkTheme.debugPalette = null);
+    MediaItem covered(String id) =>
+        item(id).copyWith(artUri: Uri.file('/covers/$id.png'));
+    final queue = [covered('first'), covered('second'), covered('third')];
+    await pumpNowPlaying(
+      tester,
+      theme: AppTheme.light(),
+      size: const Size(390, 844),
+      queue: queue,
+    );
+    mediaItems.add(queue[0]);
+    await settlePlayer(tester);
+    bool asked(String name) =>
+        palette.asked.any((source) => source.endsWith(name));
+    expect(asked('second.png'), isTrue);
+    expect(asked('third.png'), isFalse);
+
+    mediaItems.add(queue[1]);
+    await settlePlayer(tester);
+    expect(asked('third.png'), isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a motion cover lookup in Material rebuilds only the backdrop', (
+    tester,
+  ) async {
+    var video = 'file:///one.mp4';
+    await pumpNowPlaying(
+      tester,
+      theme: AppTheme.light(),
+      size: const Size(390, 844),
+      motionArtworkOf: (_) => MotionArtwork(video),
+    );
+    mediaItems.add(item('first'));
+    await settlePlayer(tester);
+    Scaffold player() => tester.widget<Scaffold>(
+      find
+          .descendant(
+            of: find.byType(NowPlayingScreen),
+            matching: find.byType(Scaffold),
+          )
+          .first,
+    );
+    String? backdropVideo() => tester
+        .widget<MaterialPlayerBackdrop>(find.byType(MaterialPlayerBackdrop))
+        .videoUrl;
+    expect(backdropVideo(), 'file:///one.mp4');
+    final before = player();
+
+    // A new answer, as when a song changes or the player opens again.
+    video = 'file:///two.mp4';
+    ProviderScope.containerOf(
+      tester.element(find.byType(NowPlayingScreen)),
+    ).invalidate(playerMotionArtworkProvider);
+    await settlePlayer(tester);
+    expect(backdropVideo(), 'file:///two.mp4');
+    expect(player(), same(before));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a motion cover answer that changes nothing keeps the Mornye '
+      'player', (tester) async {
+    String? video;
+    await pumpNowPlaying(
+      tester,
+      theme: MornyeTheme.build(Brightness.dark),
+      size: const Size(390, 844),
+      motionArtworkOf: (_) => switch (video) {
+        final source? => MotionArtwork(source),
+        null => null,
+      },
+    );
+    mediaItems.add(item('first'));
+    await settlePlayer(tester);
+    Scaffold player() => tester.widget<Scaffold>(
+      find
+          .descendant(
+            of: find.byType(NowPlayingScreen),
+            matching: find.byType(Scaffold),
+          )
+          .first,
+    );
+    String? artworkVideo() => tester
+        .widget<MornyePlayerArtwork>(find.byType(MornyePlayerArtwork).first)
+        .videoUrl;
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(NowPlayingScreen)),
+    );
+    final before = player();
+
+    // A new lookup that again finds no motion cover, as for most songs.
+    container.invalidate(playerMotionArtworkProvider);
+    await settlePlayer(tester);
+    expect(player(), same(before));
+    expect(artworkVideo(), isNull);
+
+    // An answer with a motion cover still reaches the player.
+    video = 'file:///one.mp4';
+    container.invalidate(playerMotionArtworkProvider);
+    await settlePlayer(tester);
+    expect(artworkVideo(), 'file:///one.mp4');
+
+    // The same video found again, as for the next song of its album.
+    final withVideo = player();
+    container.invalidate(playerMotionArtworkProvider);
+    await settlePlayer(tester);
+    expect(player(), same(withVideo));
+    expect(artworkVideo(), 'file:///one.mp4');
+
+    // Another video still replaces it.
+    video = 'file:///two.mp4';
+    container.invalidate(playerMotionArtworkProvider);
+    await settlePlayer(tester);
+    expect(artworkVideo(), 'file:///two.mp4');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a saved motion cover ratio or a repeated failure keeps the '
+      'Mornye player', (tester) async {
+    await pumpNowPlaying(
+      tester,
+      theme: MornyeTheme.build(Brightness.dark),
+      size: const Size(390, 844),
+      motionArtworkOf: (_) =>
+          const MotionArtwork('file:///one.mp4', aspectRatio: 1),
+    );
+    mediaItems.add(item('first'));
+    await settlePlayer(tester);
+    Scaffold player() => tester.widget<Scaffold>(
+      find
+          .descendant(
+            of: find.byType(NowPlayingScreen),
+            matching: find.byType(Scaffold),
+          )
+          .first,
+    );
+    final artwork = tester.widget<MornyePlayerArtwork>(
+      find.byType(MornyePlayerArtwork).first,
+    );
+    expect(artwork.videoUrl, 'file:///one.mp4');
+    final before = player();
+
+    artwork.onAspectRatioChanged!(16 / 9);
+    await settlePlayer(tester);
+    expect(player(), same(before));
+
+    // A failure falls back to the still cover once, however many
+    // placements report it.
+    artwork.onError!();
+    await settlePlayer(tester);
+    final failed = player();
+    expect(failed, isNot(same(before)));
+    expect(
+      tester
+          .widget<MornyePlayerArtwork>(find.byType(MornyePlayerArtwork).first)
+          .videoUrl,
+      isNull,
+    );
+    artwork.onError!();
+    await settlePlayer(tester);
+    expect(player(), same(failed));
+    expect(tester.takeException(), isNull);
+  });
+
   for (final mornye in [false, true]) {
+    testWidgets('the whole cover setting keeps a full screen cover square '
+        '($mornye)', (tester) async {
+      await pumpNowPlaying(
+        tester,
+        theme: mornye ? MornyeTheme.build(Brightness.dark) : AppTheme.light(),
+        size: const Size(390, 844),
+      );
+      mediaItems.add(item('first'));
+      await settlePlayer(tester);
+      final settings = ProviderScope.containerOf(
+        tester.element(find.byType(NowPlayingScreen)),
+      ).read(settingsProvider.notifier);
+      settings.setPlayerCoverStyle('fullscreen');
+      await settlePlayer(tester);
+      // The cover's box: 390 wide, and cropped to reach 56% of the height.
+      Size cover() => mornye
+          ? Size(
+              390,
+              390 /
+                  tester
+                      .widget<MornyePlayerBackground>(
+                        find.byType(MornyePlayerBackground),
+                      )
+                      .artworkAspectRatio!,
+            )
+          : tester.getSize(
+              find.descendant(
+                of: find.byType(MaterialPlayerBackdrop),
+                matching: find.byType(Hero),
+              ),
+            );
+      expect(cover().width, 390);
+      expect(cover().height, closeTo(844 * 0.56, 0.01));
+      settings.setPlayerCoverWhole(true);
+      await settlePlayer(tester);
+      expect(cover().width, 390);
+      expect(cover().height, closeTo(390, 0.01));
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('cover style switches live and survives rotation ($mornye)', (
       tester,
     ) async {
@@ -945,6 +1163,39 @@ void main() {
       await settlePlayer(tester);
       expect(controller.selected, [1, 0]);
       expect(find.text('First').hitTestable(), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  for (final page in ['lyrics', 'queue']) {
+    testWidgets('the Mornye $page header is centred on its cover', (
+      tester,
+    ) async {
+      await pumpNowPlaying(
+        tester,
+        theme: MornyeTheme.build(Brightness.dark),
+        size: const Size(393, 852),
+      );
+      mediaItems.add(item('first'));
+      await settlePlayer(tester);
+      await tester.tap(
+        findAppIcon(
+          page == 'lyrics'
+              ? CupertinoIcons.quote_bubble
+              : CupertinoIcons.list_bullet,
+        ),
+      );
+      await settlePlayer(tester);
+      final cover = tester.getRect(
+        find.byKey(const ValueKey('compact-player-artwork')).hitTestable(),
+      );
+      final title = tester.getRect(find.text('First').hitTestable());
+      final artist = tester.getRect(find.text('Artist').hitTestable());
+      final more = tester.getRect(
+        find.byIcon(CupertinoIcons.ellipsis).hitTestable(),
+      );
+      expect((title.top + artist.bottom) / 2, closeTo(cover.center.dy, 2));
+      expect(more.center.dy, closeTo(cover.center.dy, 2));
       expect(tester.takeException(), isNull);
     });
   }
@@ -4271,7 +4522,7 @@ void main() {
           final flyingCover = find.byKey(
             const ValueKey('player-minimize-artwork'),
           );
-          final surface = find.byKey(const ValueKey('player-minimize-surface'));
+          final surface = find.byKey(const ValueKey('player-surface'));
           expect(tester.getRect(flyingCover), releasedCover);
           expect(tester.getRect(surface), releasedPanel);
           var previousDistance =
@@ -4294,6 +4545,62 @@ void main() {
         },
       );
     }
+  }
+
+  for (final mornye in [false, true]) {
+    testWidgets('a sheet over the player leaves the player unbuilt '
+        '(Mornye: $mornye)', (tester) async {
+      await pumpNowPlaying(
+        tester,
+        theme: mornye ? MornyeTheme.build(Brightness.dark) : ThemeData(),
+        size: const Size(393, 852),
+        wrapPlayer: (_) => const Scaffold(
+          body: Align(alignment: Alignment.bottomCenter, child: MiniPlayer()),
+        ),
+      );
+      mediaItems.add(item('first'));
+      await settlePlayer(tester);
+      await tester.tap(
+        find.descendant(
+          of: find.byType(MiniPlayer),
+          matching: find.text('First'),
+        ),
+      );
+      await settlePlayer(tester);
+      final player = find.byType(NowPlayingScreen);
+      expect(player, findsOneWidget);
+      final rebuilt = <Type, int>{};
+      debugOnRebuildDirtyWidget = (element, _) => rebuilt.update(
+        element.widget.runtimeType,
+        (count) => count + 1,
+        ifAbsent: () => 1,
+      );
+      addTearDown(() => debugOnRebuildDirtyWidget = null);
+      final navigator = Navigator.of(tester.element(player));
+      navigator.push(
+        ModalBottomSheetRoute<void>(
+          builder: (_) => const SizedBox(height: 200),
+          isScrollControlled: false,
+        ),
+      );
+      await settlePlayer(tester);
+      navigator.pop();
+      await settlePlayer(tester);
+      debugOnRebuildDirtyWidget = null;
+      // Only the sheet and the route's own frame build again.
+      for (final type in [
+        NowPlayingScreen,
+        Scaffold,
+        MaterialPlayerLayout,
+        MaterialPlayerBackdrop,
+        MornyePlayerLayout,
+        PlayerArtworkDragRegion,
+        PlayerTransitionArtwork,
+      ]) {
+        expect(rebuilt[type], isNull, reason: '$type');
+      }
+      expect(tester.takeException(), isNull);
+    });
   }
 
   for (final mornye in [false, true]) {
@@ -6330,6 +6637,20 @@ class _TestRemote implements RemotePlayback {
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+/// Notes each cover a scheme is asked for, and knows none ahead.
+class _RecordingPalette extends PlayerArtworkPalette {
+  final asked = <String>[];
+
+  @override
+  ColorScheme? peek(String source, Brightness brightness) => null;
+
+  @override
+  Future<ColorScheme?> resolve(String source, Brightness brightness) async {
+    asked.add(source);
+    return null;
+  }
 }
 
 class _TestCollections extends LibraryCollectionsNotifier {

@@ -4,6 +4,7 @@ import 'package:mornye/providers/extension_provider.dart';
 import 'package:mornye/services/batch_metadata_re_enrich.dart';
 import 'package:mornye/theme/mornye_theme.dart';
 import 'package:mornye/widgets/app_bottom_sheet.dart';
+import 'package:mornye/widgets/app_icon.dart';
 import 'package:mornye/widgets/metadata_candidate_tile.dart';
 import 'package:mornye/widgets/metadata_editor_fields.dart';
 import 'package:mornye/widgets/settings_group.dart';
@@ -121,6 +122,8 @@ class _CandidateListState extends State<_CandidateList> {
   Widget build(BuildContext context) {
     final l10n = context.l10n;
     return ListView(
+      // The sheet is as tall as its results, up to its cap.
+      shrinkWrap: true,
       padding: const EdgeInsets.only(bottom: 16),
       children: [
         if (_likely.isNotEmpty) ...[
@@ -139,7 +142,7 @@ class _CandidateListState extends State<_CandidateList> {
             MetadataEditorOptions(
               children: [
                 ListTile(
-                  leading: const Icon(Icons.expand_more),
+                  leading: const AppIcon.adaptive(Icons.expand_more),
                   title: Text(l10n.reEnrichShowOtherResults(_others.length)),
                   onTap: () => setState(() => _showOthers = true),
                 ),

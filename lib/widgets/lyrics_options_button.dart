@@ -18,11 +18,14 @@ import 'package:mornye/utils/android_tv.dart';
 import 'package:mornye/utils/logger.dart';
 import 'package:mornye/utils/lyrics_parser.dart';
 import 'package:mornye/widgets/app_bottom_sheet.dart';
+import 'package:mornye/widgets/settings_group.dart';
 import 'package:mornye/widgets/app_icon.dart';
 import 'package:mornye/widgets/app_icon_button.dart';
+import 'package:mornye/widgets/app_menu_button.dart';
 import 'package:mornye/widgets/app_progress_indicator.dart';
 import 'package:mornye/widgets/app_snack_bar.dart';
 import 'package:mornye/widgets/lyrics_editor_sheet.dart';
+import 'package:mornye/widgets/lyrics_translation_editor_sheet.dart';
 import 'package:mornye/widgets/lyrics_options_activity.dart';
 import 'package:mornye/widgets/lyrics_size_setting.dart';
 import 'package:mornye/widgets/mornye_context_menu.dart';
@@ -63,28 +66,39 @@ Future<String?> showLyricsLanguagePicker(
   context: context,
   title: title,
   subtitle: subtitle,
-  builder: (sheetContext, controller) => ListView(
-    controller: controller,
-    padding: const EdgeInsets.only(bottom: 16),
-    children: [
-      if (appDefaultLabel != null)
-        AppSheetOption.choice(
-          title: Text(appDefaultLabel),
-          selected: selected.isEmpty,
-          onTap: () => Navigator.pop(sheetContext, ''),
-        ),
-      for (final language in lyricsTranslationLanguages)
-        AppSheetOption.choice(
-          key: ValueKey('lyrics-language-${language.code}'),
-          title: Text(language.nativeName),
-          subtitle: language.nativeName == language.englishName
-              ? null
-              : Text(language.englishName),
-          selected: language.code == selected,
-          onTap: () => Navigator.pop(sheetContext, language.code),
-        ),
-    ],
-  ),
+  builder: (sheetContext, controller) {
+    final offset = appDefaultLabel == null ? 0 : 1;
+    final count = lyricsTranslationLanguages.length + offset;
+    return ListView.builder(
+      controller: controller,
+      padding: const EdgeInsets.only(bottom: 16),
+      itemCount: count,
+      itemBuilder: (context, index) {
+        final language = index < offset
+            ? null
+            : lyricsTranslationLanguages[index - offset];
+        return ConnectedGroupRow(
+          index: index,
+          count: count,
+          child: language == null
+              ? AppSheetOption.choice(
+                  title: Text(appDefaultLabel!),
+                  selected: selected.isEmpty,
+                  onTap: () => Navigator.pop(sheetContext, ''),
+                )
+              : AppSheetOption.choice(
+                  key: ValueKey('lyrics-language-${language.code}'),
+                  title: Text(language.nativeName),
+                  subtitle: language.nativeName == language.englishName
+                      ? null
+                      : Text(language.englishName),
+                  selected: language.code == selected,
+                  onTap: () => Navigator.pop(sheetContext, language.code),
+                ),
+        );
+      },
+    );
+  },
 );
 
 /// The player's lyrics menu: pronunciation and translation toggles, AI
@@ -165,17 +179,32 @@ class _LyricsOptionsButtonState extends ConsumerState<LyricsOptionsButton> {
   Widget build(BuildContext context) {
     final job = ref.watch(lyricsTranslationProvider.select((s) => s.job));
     ref.watch(lyricsTranslationProvider.select((s) => s.results));
-    final settings = ref.watch(settingsProvider);
+    final selectedSettings = ref.watch(
+      settingsProvider.select(
+        (s) => (
+          provider: s.lyricsAiProvider,
+          model: lyricsAiModelFor(s),
+          baseUrl: s.lyricsAiBaseUrl,
+          autoHideA11y: s.autoHideLyricsControlsWithAccessibility,
+          autoSave: s.lyricsTranslationAutoSave,
+          romanize: s.lyricsRomanize,
+          romanizeMain: s.lyricsRomanizedMainLine,
+          locale: s.locale,
+          translationLang: s.lyricsTranslationLanguage,
+          secondLang: s.lyricsTranslationSecondLanguage,
+        ),
+      ),
+    );
     final apiKey =
-        ref.watch(lyricsAiKeyProvider(settings.lyricsAiProvider)).value ?? '';
-    final ready = lyricsAiReady(settings, apiKey);
+        ref.watch(lyricsAiKeyProvider(selectedSettings.provider)).value ?? '';
+    final ready = lyricsAiReady(ref.read(settingsProvider), apiKey);
     // The button sits over lyric text, so it fades whether or not the
     // player's own controls stay. Accessible navigation keeps it unless
     // hiding was chosen there.
     final autoHide =
         !isAndroidTv &&
         (!MediaQuery.accessibleNavigationOf(context) ||
-            settings.autoHideLyricsControlsWithAccessibility);
+            selectedSettings.autoHideA11y);
     return ListenableBuilder(
       listenable: widget.metadata,
       builder: (context, _) {
@@ -239,6 +268,11 @@ class _LyricsOptionsButtonState extends ConsumerState<LyricsOptionsButton> {
         metadata.canSaveTranslations &&
         !translating &&
         lyricsTranslationUnsaved(original, lyrics);
+    // A translation can be written or edited by hand whether or not an AI
+    // provider is set up, as long as the song has lines to translate and
+    // the translation can be saved with it.
+    final canEditTranslation =
+        metadata.canSaveTranslations && !source.isEmpty && !translating;
     // Synced lyrics can always be timed, for this song or every song.
     final timing = original.synced;
     if (canSaveTranslation &&
@@ -246,7 +280,11 @@ class _LyricsOptionsButtonState extends ConsumerState<LyricsOptionsButton> {
       _scheduleAutoSave(lyrics);
     }
     final language =
-        pronunciation || translation || canTranslate || translating;
+        pronunciation ||
+        translation ||
+        canTranslate ||
+        translating ||
+        canEditTranslation;
     if (!language && !timing) {
       return canEdit ? _editButton(context) : null;
     }
@@ -275,7 +313,7 @@ class _LyricsOptionsButtonState extends ConsumerState<LyricsOptionsButton> {
                 ),
               )
             : language
-            ? const AppIcon(Icons.translate_rounded)
+            ? const AppIcon.adaptive(Icons.translate_rounded)
             : const AppIcon.adaptive(Icons.tune_rounded),
         style: IconButton.styleFrom(
           foregroundColor: foreground,
@@ -291,6 +329,7 @@ class _LyricsOptionsButtonState extends ConsumerState<LyricsOptionsButton> {
           canTranslate: canTranslate,
           translating: translating,
           canSaveTranslation: canSaveTranslation,
+          canEditTranslation: canEditTranslation,
           canEdit: canEdit,
           timing: timing,
         ),
@@ -340,6 +379,7 @@ class _LyricsOptionsButtonState extends ConsumerState<LyricsOptionsButton> {
     required bool canTranslate,
     required bool translating,
     required bool canSaveTranslation,
+    required bool canEditTranslation,
     required bool canEdit,
     required bool timing,
   }) async {
@@ -393,6 +433,14 @@ class _LyricsOptionsButtonState extends ConsumerState<LyricsOptionsButton> {
       ],
       if (canSaveTranslation)
         ('saveTranslation', l10n.nowPlayingSaveTranslation, Icons.save_alt),
+      if (canEditTranslation)
+        (
+          'editTranslation',
+          translation
+              ? l10n.lyricsTranslationEditTitle
+              : l10n.lyricsTranslationAddTitle,
+          Icons.edit_outlined,
+        ),
       if (timing) ('timing', l10n.lyricsOffset, Icons.timer_outlined),
       if (canEdit) ('edit', l10n.lyricsEditTitle, Icons.edit_note),
     ];
@@ -415,46 +463,41 @@ class _LyricsOptionsButtonState extends ConsumerState<LyricsOptionsButton> {
         if (painter.width + 80 > menuWidth) menuWidth = painter.width + 80;
         painter.dispose();
       }
-      action = context.isMornye
-          ? await showMornyeContextMenu<String>(
-              context: buttonContext,
-              anchor: anchor,
-              preferAbove: true,
-              maxWidth: menuWidth,
-              builder: (menuContext) => MornyeContextMenu(
-                dense: true,
-                groups: [
-                  [
-                    for (final (value, label, icon) in actions)
-                      MornyeMenuAction(
-                        icon: icon,
-                        label: label,
-                        onPressed: () => Navigator.of(menuContext).pop(value),
-                      ),
-                  ],
-                ],
-              ),
-            )
-          : await showMenu<String>(
-              context: buttonContext,
-              position: RelativeRect.fromRect(
-                anchor ?? Rect.zero,
-                Offset.zero & MediaQuery.sizeOf(context),
-              ),
-              items: [
+      if (context.isMornye) {
+        action = await showMornyeContextMenu<String>(
+          context: buttonContext,
+          anchor: anchor,
+          preferAbove: true,
+          maxWidth: menuWidth,
+          builder: (menuContext) => MornyeContextMenu(
+            dense: true,
+            groups: [
+              [
                 for (final (value, label, icon) in actions)
-                  PopupMenuItem(
-                    value: value,
-                    child: Row(
-                      children: [
-                        AppIcon(icon),
-                        const SizedBox(width: 12),
-                        Flexible(child: Text(label)),
-                      ],
-                    ),
+                  MornyeMenuAction(
+                    icon: icon,
+                    label: label,
+                    onPressed: () => Navigator.of(menuContext).pop(value),
                   ),
               ],
-            );
+            ],
+          ),
+        );
+      } else {
+        action = await showAppMenuPopup<String>(
+          context: buttonContext,
+          preferAbove: true,
+          fallbackAnchor: anchor,
+          items: [
+            for (final (value, label, icon) in actions)
+              AppMenuItem(
+                value: value,
+                label: label,
+                leading: AppIcon(icon, size: 20),
+              ),
+          ],
+        );
+      }
       if (!mounted) return;
       final notifier = ref.read(settingsProvider.notifier);
       switch (action) {
@@ -470,9 +513,12 @@ class _LyricsOptionsButtonState extends ConsumerState<LyricsOptionsButton> {
           unawaited(_saveTranslation());
       }
     } finally {
-      // The language sheet, the timing sheet and the editor keep controls
+      // The language sheet, the timing sheet and the editors keep controls
       // visible until they close.
-      if (action != 'translateInto' && action != 'edit' && action != 'timing') {
+      if (action != 'translateInto' &&
+          action != 'edit' &&
+          action != 'editTranslation' &&
+          action != 'timing') {
         _setOpen(false);
       }
     }
@@ -493,6 +539,15 @@ class _LyricsOptionsButtonState extends ConsumerState<LyricsOptionsButton> {
     if (action == 'edit') {
       try {
         if (mounted) await openLyricsEditor(context, widget.metadata);
+      } finally {
+        _setOpen(false);
+      }
+    }
+    if (action == 'editTranslation') {
+      try {
+        if (mounted) {
+          await openLyricsTranslationEditor(context, widget.metadata);
+        }
       } finally {
         _setOpen(false);
       }

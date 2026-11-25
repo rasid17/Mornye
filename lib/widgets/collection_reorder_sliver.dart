@@ -7,6 +7,7 @@ import 'package:mornye/theme/app_tokens.dart';
 import 'package:mornye/utils/adaptive_layout.dart';
 import 'package:mornye/widgets/app_icon.dart';
 import 'package:mornye/widgets/cached_cover_image.dart';
+import 'package:mornye/widgets/scaled_drag_proxy.dart';
 import 'package:mornye/widgets/track_card.dart';
 
 /// Editing has its own drag gestures, leaving normal track selection intact.
@@ -41,6 +42,7 @@ class _CollectionReorderSliverState extends State<CollectionReorderSliver> {
   Widget build(BuildContext context) => SliverPadding(
     padding: EdgeInsets.symmetric(horizontal: wideListInset(context)),
     sliver: SliverReorderableList(
+      proxyDecorator: ScaledDragProxy.plain,
       itemCount: widget.entries.length,
       onReorderItem: (oldIndex, newIndex) {
         widget.onReorder(oldIndex, newIndex);
@@ -60,8 +62,6 @@ class _CollectionReorderSliverState extends State<CollectionReorderSliver> {
       },
       itemBuilder: (context, index) {
         final entry = widget.entries[index];
-        final track = entry.track;
-        final size = context.tokens.coverCompact;
         return ReorderableDelayedDragStartListener(
           key: ValueKey(entry.key),
           enabled: widget.enabled,
@@ -81,39 +81,11 @@ class _CollectionReorderSliverState extends State<CollectionReorderSliver> {
                   ): () =>
                       widget.onReorder(index, index + 1),
               },
-              child: TrackCard(
-                style: TrackCardStyle.flat,
-                leadingArtwork: true,
-                leading: ClipRRect(
-                  borderRadius: context.tokens.borderRadiusThumb,
-                  child: track.coverUrl?.isNotEmpty == true
-                      ? LocalOrNetworkCoverImage(
-                          url: track.coverUrl!,
-                          width: size,
-                          height: size,
-                          networkCacheWidth: (size * 2).toInt(),
-                          placeholder: (_) => TrackCoverPlaceholder(size: size),
-                        )
-                      : TrackCoverPlaceholder(size: size),
-                ),
-                title: track.name,
-                subtitle: Text(
-                  track.artistName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                trailing: ReorderableDragStartListener(
-                  enabled: widget.enabled,
-                  index: index,
-                  child: SizedBox.square(
-                    key: ValueKey('collection-order-handle-${entry.key}'),
-                    dimension: context.tokens.minTouchTarget,
-                    child: AppIcon.adaptive(
-                      Icons.drag_handle,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ),
+              // Material joins the filled rows, as in the list being edited.
+              child: TrackCardSegment.at(
+                index: index,
+                count: widget.entries.length,
+                child: _row(context, entry, index),
               ),
             ),
           ),
@@ -121,4 +93,43 @@ class _CollectionReorderSliverState extends State<CollectionReorderSliver> {
       },
     ),
   );
+
+  Widget _row(BuildContext context, CollectionTrackEntry entry, int index) {
+    final track = entry.track;
+    final size = context.tokens.coverCompact;
+    return TrackCard(
+      style: collectionTrackCardStyle(context),
+      leadingArtwork: true,
+      leading: ClipRRect(
+        borderRadius: context.tokens.borderRadiusThumb,
+        child: track.coverUrl?.isNotEmpty == true
+            ? LocalOrNetworkCoverImage(
+                url: track.coverUrl!,
+                width: size,
+                height: size,
+                networkCacheWidth: (size * 2).toInt(),
+                placeholder: (_) => TrackCoverPlaceholder(size: size),
+              )
+            : TrackCoverPlaceholder(size: size),
+      ),
+      title: track.name,
+      subtitle: Text(
+        track.artistName,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      trailing: ReorderableDragStartListener(
+        enabled: widget.enabled,
+        index: index,
+        child: SizedBox.square(
+          key: ValueKey('collection-order-handle-${entry.key}'),
+          dimension: context.tokens.minTouchTarget,
+          child: AppIcon.adaptive(
+            Icons.drag_handle,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ),
+    );
+  }
 }

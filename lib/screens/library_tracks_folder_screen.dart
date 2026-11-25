@@ -13,21 +13,26 @@ import 'package:mornye/widgets/desktop/desktop_selection.dart';
 import 'package:mornye/widgets/desktop/track_list_table.dart';
 import 'package:mornye/widgets/expressive_button.dart';
 import 'package:mornye/widgets/expressive_button_group.dart';
+import 'package:mornye/widgets/home_pin_action.dart';
 import 'package:mornye/theme/app_tokens.dart';
+import 'package:mornye/theme/page_transitions.dart';
 import 'package:mornye/widgets/song_row_tap.dart';
 import 'package:mornye/widgets/track_card.dart';
 import 'package:mornye/widgets/queue_swipe.dart';
 import 'package:mornye/widgets/app_snack_bar.dart';
 import 'package:share_plus/share_plus.dart' show ShareParams, SharePlus, XFile;
 import 'package:mornye/widgets/album_detail_header.dart';
+import 'package:mornye/widgets/header_toolbar_actions.dart';
 import 'package:mornye/widgets/cached_cover_image.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mornye/l10n/l10n.dart';
+import 'package:mornye/models/home_pin.dart';
 import 'package:mornye/models/track.dart';
-import 'package:mornye/models/library_database_models.dart'
-    show LocalLibraryItem;
 import 'package:mornye/services/m3u_playlist_service.dart';
 import 'package:mornye/services/downloaded_embedded_cover_resolver.dart';
+import 'package:mornye/services/history_database.dart';
+import 'package:mornye/services/library_database.dart';
+import 'package:mornye/services/track_file_resolver.dart';
 import 'package:mornye/utils/file_access.dart';
 import 'package:mornye/providers/download_queue_provider.dart';
 import 'package:mornye/providers/collection_track_files_provider.dart';
@@ -41,6 +46,7 @@ import 'package:mornye/providers/local_library_provider.dart';
 import 'package:mornye/providers/settings_provider.dart';
 import 'package:mornye/utils/adaptive_layout.dart';
 import 'package:mornye/utils/cover_art_utils.dart';
+import 'package:mornye/utils/image_cache_utils.dart';
 import 'package:mornye/controllers/collapsing_header_scroll_mixin.dart';
 import 'package:mornye/controllers/confirm_and_delete_tracks.dart';
 import 'package:mornye/controllers/library_tracks_folder_data.dart';
@@ -440,6 +446,7 @@ class _LibraryTracksFolderScreenState
 
     final inHistory = _folderData.inHistory(existingHistoryKeys);
     final ids = [for (final entry in entries) entry.key];
+    slideSelectIds = ids;
     // The desktop table builds every row at once, so one lookup answers the
     // covers the rows cannot load from their own stored path.
     if (isDesktopPlatform &&
@@ -474,9 +481,9 @@ class _LibraryTracksFolderScreenState
           SliverToBoxAdapter(
             child: Padding(
               padding: EdgeInsets.fromLTRB(
-                16 + wideListInset(context),
+                connectedRunTitleInset + wideListInset(context),
                 16,
-                16 + wideListInset(context),
+                connectedRunTitleInset + wideListInset(context),
                 12,
               ),
               child: Text(context.l10n.playlistEditOrderDescription),
@@ -537,30 +544,35 @@ class _LibraryTracksFolderScreenState
           )
         else
           SliverPadding(
-            padding: EdgeInsets.symmetric(horizontal: wideListInset(context)),
+            padding: EdgeInsets.symmetric(
+              horizontal: wideListInset(context),
+            ).copyWith(top: collectionRunTopGap(context)),
             sliver: SliverList(
               delegate: SliverChildBuilderDelegate((context, index) {
                 final entry = entries[index];
                 final isSelected = selectedIds.contains(entry.key);
                 final isInHistory = inHistory[index];
-                return KeyedSubtree(
+                return TrackCardSegment.at(
                   key: ValueKey(entry.key),
-                  child: StaggeredListItem(
-                    index: index,
-                    child: _CollectionTrackTile(
-                      entry: entry,
-                      mode: widget.mode,
-                      folderTracks: folderTracks,
-                      trackIndex: index,
-                      isInHistory: isInHistory,
-                      isSelectionMode: isSelectionMode,
-                      isSelected: isSelected,
-                      onTap: isSelectionMode
-                          ? () => toggleSelection(entry.key)
-                          : null,
-                      onLongPress: isSelectionMode
-                          ? null
-                          : () => enterSelectionMode(entry.key),
+                  index: index,
+                  count: entries.length,
+                  child: slideSelectRow(
+                    entry.key,
+                    StaggeredListItem(
+                      index: index,
+                      child: _CollectionTrackTile(
+                        entry: entry,
+                        mode: widget.mode,
+                        folderTracks: folderTracks,
+                        trackIndex: index,
+                        isInHistory: isInHistory,
+                        isSelectionMode: isSelectionMode,
+                        isSelected: isSelected,
+                        onTap: isSelectionMode
+                            ? () => toggleSelection(entry.key)
+                            : null,
+                        onLongPress: () => holdToSelect(entry.key),
+                      ),
                     ),
                   ),
                 );
@@ -1027,11 +1039,7 @@ class _LibraryTracksFolderScreenState
           )
         : null;
 
-    final dpr = MediaQuery.devicePixelRatioOf(context);
-    final cacheWidth = (MediaQuery.sizeOf(context).width * dpr).round().clamp(
-      320,
-      2048,
-    );
+    final cacheWidth = detailHeaderCoverCacheWidth(context);
     final coverFallback = Container(
       color: colorScheme.surfaceContainerHighest,
       child: Icon(_modeIcon(), size: 80, color: colorScheme.onSurfaceVariant),
@@ -1059,6 +1067,22 @@ class _LibraryTracksFolderScreenState
             placeholder: (_) => Container(color: colorScheme.surface),
           )
         : coverFallback;
+    final toolbarActions = <Widget>[
+      if (_editingOrder)
+        ExpressiveButton(
+          key: const ValueKey('collection-order-save'),
+          text: true,
+          onPressed: !_orderChanged || _savingOrder || _draggingOrder
+              ? null
+              : _saveOrder,
+          child: Text(context.l10n.dialogSave),
+        ),
+      if (!_editingOrder && !isSelectionMode && entries.length > 1)
+        CollectionTrackSortButton(sortKey: _sortKey),
+      // The desktop header adds its own from [moreMenu].
+      if (moreMenu != null && !isDesktopPlatform)
+        HeaderMoreButton(groups: moreMenu),
+    ];
 
     return AlbumDetailHeader(
       title: title,
@@ -1131,20 +1155,8 @@ class _LibraryTracksFolderScreenState
             )
           : null,
       appBarActions: [
-        if (_editingOrder)
-          ExpressiveButton(
-            key: const ValueKey('collection-order-save'),
-            text: true,
-            onPressed: !_orderChanged || _savingOrder || _draggingOrder
-                ? null
-                : _saveOrder,
-            child: Text(context.l10n.dialogSave),
-          ),
-        if (!_editingOrder && !isSelectionMode && entries.length > 1)
-          CollectionTrackSortButton(sortKey: _sortKey),
-        // The desktop header adds its own from [moreMenu].
-        if (moreMenu != null && !isDesktopPlatform)
-          HeaderMoreButton(groups: moreMenu),
+        if (toolbarActions.isNotEmpty)
+          HeaderToolbarGroup(children: toolbarActions),
       ],
       moreMenu: moreMenu,
       // Centered so the tight leading slot cannot stretch it.
@@ -1304,6 +1316,8 @@ class _LibraryTracksFolderScreenState
             onSelected: _pickCoverImage,
           ),
         ],
+        if (_homePin(title, playlist) case final pin?)
+          homePinMenuAction(context, ref, pin),
       ],
       if (isPlaylistMode && hasCustomCover)
         [
@@ -1315,6 +1329,20 @@ class _LibraryTracksFolderScreenState
           ),
         ],
     ];
+  }
+
+  /// The Home pin of this playlist or of Loved; the Wishlist has none.
+  HomePin? _homePin(String title, UserPlaylistCollection? playlist) {
+    switch (widget.mode) {
+      case LibraryTracksFolderMode.loved:
+        return HomePin.loved;
+      case LibraryTracksFolderMode.playlist:
+        final id = widget.playlistId ?? playlist?.id;
+        if (id == null || id.isEmpty) return null;
+        return HomePin.playlist(id: id, name: playlist?.name ?? title);
+      case LibraryTracksFolderMode.wishlist:
+        return null;
+    }
   }
 
   Future<void> _showRenamePlaylistDialog(
@@ -1437,7 +1465,7 @@ class _CollectionTrackTile extends ConsumerWidget {
     void openDetails() => _navigateToMetadata(context, ref);
 
     return TrackCard(
-      style: TrackCardStyle.flat,
+      style: collectionTrackCardStyle(context),
       queueSwipe: queueSwipe,
       isSelectionMode: isSelectionMode,
       isSelected: isSelected,
@@ -1452,10 +1480,22 @@ class _CollectionTrackTile extends ConsumerWidget {
             final cover = ClipRRect(
               borderRadius: context.tokens.borderRadiusThumb,
               child: effectiveCoverUrl != null && effectiveCoverUrl.isNotEmpty
-                  ? _buildTrackCover(context, effectiveCoverUrl, size)
+                  ? _buildTrackCover(
+                      context,
+                      effectiveCoverUrl,
+                      size,
+                      songFile: inMemoryHistoryItem?.filePath,
+                      hasFile: hasFile,
+                    )
                   : TrackCoverPlaceholder(size: size),
             );
-            return heroTag != null ? Hero(tag: heroTag, child: cover) : cover;
+            return heroTag != null
+                ? Hero(
+                    tag: heroTag,
+                    transitionOnUserGestures: heroFollowsBackSwipe(context),
+                    child: cover,
+                  )
+                : cover;
           },
         ),
       ),
@@ -1514,7 +1554,7 @@ class _CollectionTrackTile extends ConsumerWidget {
           : hasFile
           ? songRowTap(ref, openDetails: openDetails, play: play)
           : openDetails,
-      onLongPress: isSelectionMode ? onTap : onLongPress,
+      onLongPress: onLongPress,
     );
   }
 
@@ -1529,7 +1569,13 @@ class _CollectionTrackTile extends ConsumerWidget {
     }
   }
 
-  Widget _buildTrackCover(BuildContext context, String coverUrl, double size) {
+  Widget _buildTrackCover(
+    BuildContext context,
+    String coverUrl,
+    double size, {
+    String? songFile,
+    required bool hasFile,
+  }) {
     final colorScheme = Theme.of(context).colorScheme;
     Widget placeholder() => Container(
       width: size,
@@ -1546,6 +1592,16 @@ class _CollectionTrackTile extends ConsumerWidget {
       fadeInDuration: const Duration(milliseconds: 180),
       fadeOutDuration: const Duration(milliseconds: 90),
       placeholder: (_) => placeholder(),
+      songFile: songFile,
+      // A file outside the recent History in memory is read only once the
+      // cover fails.
+      findSongFile: songFile == null && hasFile
+          ? () => firstTrackSongFile(
+              [entry.track],
+              library: LibraryDatabase.instance,
+              history: HistoryDatabase.instance,
+            )
+          : null,
     );
   }
 

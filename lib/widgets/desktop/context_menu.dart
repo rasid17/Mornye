@@ -12,6 +12,7 @@ import 'package:mornye/theme/mornye_theme.dart';
 import 'package:mornye/utils/desktop_platform.dart';
 import 'package:mornye/utils/android_tv.dart';
 import 'package:mornye/widgets/app_icon.dart';
+import 'package:mornye/widgets/app_menu_button.dart';
 import 'package:mornye/widgets/desktop/desktop_selection.dart';
 import 'package:mornye/widgets/mornye_context_menu.dart';
 
@@ -47,8 +48,8 @@ const double _mornyeMenuWidth = 280;
 ///
 /// Material opens the M3E menu popup of More buttons, or under reduced
 /// motion a [MenuAnchor] with the M3 Expressive menu container; Mornye
-/// opens the dense [MornyeContextMenu]. Empty groups are dropped and the
-/// remaining ones are set apart (dividers, or separate M3E surfaces). The
+/// opens the dense [MornyeContextMenu]. Empty groups are dropped and a
+/// divider sets the remaining ones apart, inside the one menu surface. The
 /// chosen action runs once the menu has been dismissed, so it can open its
 /// own dialog or sheet. The future completes after that action has started,
 /// with whether a row was chosen.
@@ -143,30 +144,34 @@ Future<bool> _showExpressiveContextMenu(
   }
 
   var index = 0;
-  final children = [
-    for (final group in groups)
-      M3EMenuGroup(
-        children: [
-          for (final action in group)
-            if (action.checked)
-              M3EMenuSelectable(
-                label: action.label,
-                value: index++,
-                leading: AppIcon(action.icon, size: 20),
-                selected: true,
-                enabled: action.onSelected != null,
-              )
-            else
-              M3EMenuEntry(
-                label: action.label,
-                value: index++,
-                leading: AppIcon(action.icon, size: 20),
-                isDestructive: action.destructive,
-                enabled: action.onSelected != null,
-              ),
-        ],
-      ),
+  // One surface, as a menu is one object: a divider sets the groups apart.
+  final children = <M3EMenuNode>[
+    for (final (position, group) in groups.indexed) ...[
+      if (position > 0) const M3EMenuDivider(),
+      for (final action in group)
+        if (action.checked)
+          M3EMenuSelectable(
+            label: action.label,
+            value: index++,
+            leading: AppIcon(action.icon, size: 20),
+            selected: true,
+            enabled: action.onSelected != null,
+          )
+        else
+          M3EMenuEntry(
+            label: action.label,
+            value: index++,
+            leading: AppIcon(action.icon, size: 20),
+            isDestructive: action.destructive,
+            enabled: action.onSelected != null,
+          ),
+    ],
   ];
+  final anchor = Rect.fromLTWH(point.dx, point.dy, 0, 0);
+  // A point anchor gives the narrowest menu, which cuts longer labels.
+  final fit = menuFittingLabels(context, [
+    for (final action in actions) (label: action.label, leading: true),
+  ], anchor);
   late final OverlayEntry entry;
   // Once dismissed, the closing menu lets clicks through to the page.
   var closing = false;
@@ -187,9 +192,11 @@ Future<bool> _showExpressiveContextMenu(
               context,
             ).copyWith(scrollbars: false),
             child: M3EMenuPopup<int>(
-              anchor: Rect.fromLTWH(point.dx, point.dy, 0, 0),
+              anchor: anchor,
               historyRoute: route,
               position: M3EMenuAnchorPosition.bottomStart,
+              preferredWidth: fit.width,
+              themeOverride: fit.theme,
               children: children,
               onSelected: (value) {
                 close();
@@ -239,16 +246,21 @@ Offset? contextMenuPositionBelow(BuildContext context) {
 /// Opens [onContextMenu] on desktop on a right-click, a Control-click on
 /// macOS, or Shift+F10 and the Menu key while the item or its
 /// [DesktopListScope] has focus. Phones and tablets get [child] unchanged;
-/// their long press keeps the same actions.
+/// their long press keeps the same actions, or opens this menu with [touch].
 class DesktopContextMenuRegion extends StatefulWidget {
   const DesktopContextMenuRegion({
     super.key,
     required this.onContextMenu,
     required this.child,
+    this.touch = false,
   });
 
   /// Opens the item's menu at a global position. Null turns the region off.
   final ValueChanged<Offset>? onContextMenu;
+
+  /// Whether a long press opens the menu on phones and tablets, for items
+  /// with no long press of their own.
+  final bool touch;
   final Widget child;
 
   @override
@@ -277,7 +289,14 @@ class _DesktopContextMenuRegionState extends State<DesktopContextMenuRegion>
   Widget build(BuildContext context) {
     final onContextMenu = widget.onContextMenu;
     if ((!isDesktopPlatform && !isAndroidTv) || onContextMenu == null) {
-      return widget.child;
+      if (!widget.touch || onContextMenu == null) return widget.child;
+      return GestureDetector(
+        onLongPressStart: (details) {
+          HapticFeedback.mediumImpact();
+          onContextMenu(details.globalPosition);
+        },
+        child: widget.child,
+      );
     }
     return Focus(
       canRequestFocus: false,

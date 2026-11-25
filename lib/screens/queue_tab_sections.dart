@@ -431,7 +431,14 @@ extension _QueueTabSections on _QueueTabState {
       builder: (context, ref, _) {
         final state = ref.watch(libraryBrowseProvider(request));
         final entries = state.value?.entries ?? const <LibraryBrowseEntry>[];
-        final sections = _initialSections(entries);
+        final cached = _artistSectionsCache;
+        final List<_LibrarySection> sections;
+        if (cached != null && identical(cached.$1, entries)) {
+          sections = cached.$2;
+        } else {
+          sections = _initialSections(entries);
+          _artistSectionsCache = (entries, sections);
+        }
         void openArtist(String artist) =>
             pushPage<void>(context, (_) => LibraryArtistScreen(artist: artist));
         final content = CustomScrollView(
@@ -525,7 +532,14 @@ extension _QueueTabSections on _QueueTabState {
       builder: (context, ref, _) {
         final state = ref.watch(libraryGenresProvider);
         final entries = state.value ?? const <LibraryBrowseEntry>[];
-        final sections = _initialSections(entries);
+        final cached = _genreSectionsCache;
+        final List<_LibrarySection> sections;
+        if (cached != null && identical(cached.$1, entries)) {
+          sections = cached.$2;
+        } else {
+          sections = _initialSections(entries);
+          _genreSectionsCache = (entries, sections);
+        }
         final content = CustomScrollView(
           slivers: [
             if (state.isLoading && entries.isEmpty)
@@ -727,9 +741,10 @@ class _BrowseRow extends StatelessWidget {
               colorScheme: colors,
               cacheWidth: (52 * MediaQuery.devicePixelRatioOf(context)).ceil(),
               iconSize: 24,
+              songFile: entry.samplePath,
             ),
     );
-    return Padding(
+    final row = Padding(
       padding: EdgeInsets.fromLTRB(16, first ? 0 : 1, 16, last ? 4 : 1),
       child: Material(
         color: settingsGroupColor(context),
@@ -778,6 +793,34 @@ class _BrowseRow extends StatelessWidget {
           ),
         ),
       ),
+    );
+    return Consumer(
+      builder: (context, ref, child) => DesktopContextMenuRegion(
+        touch: true,
+        onContextMenu: (position) => showContextMenu(
+          context,
+          position: position,
+          groups: [
+            [
+              ContextMenuAction(
+                icon: Icons.open_in_new,
+                label: context.l10n.desktopMenuOpen,
+                onSelected: onTap,
+              ),
+              homePinMenuAction(
+                context,
+                ref,
+                homePinOfBrowseEntry(
+                  entry,
+                  artist ? HomePinKind.artist : HomePinKind.genre,
+                ),
+              ),
+            ],
+          ],
+        ),
+        child: child!,
+      ),
+      child: row,
     );
   }
 }

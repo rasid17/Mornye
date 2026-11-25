@@ -63,6 +63,13 @@ class _FakeController implements MusicPlayerController {
   Future<void> seek(Duration position) async => calls.add('seek');
 
   @override
+  Future<void> setShuffle(bool enabled) async => calls.add('shuffle $enabled');
+
+  @override
+  Future<void> setRepeatMode(AudioServiceRepeatMode mode) async =>
+      calls.add('repeat ${mode.name}');
+
+  @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
@@ -104,8 +111,8 @@ const _libraryLinks = [
   DesktopSidebarLink(id: 'albums', icon: Icons.album, label: 'Albums'),
 ];
 
-List<DesktopDestination> _destinations({required bool mornye}) => [
-  for (final tab in desktopDestinationTabs(mornye: mornye, showStore: true))
+List<DesktopDestination> _destinations() => [
+  for (final tab in desktopDestinationTabs(showStore: true))
     DesktopDestination(
       tab: tab,
       icon: Icons.circle_outlined,
@@ -227,7 +234,7 @@ void main() {
           ),
           home: Scaffold(
             body: DesktopShellLayout(
-              destinations: _destinations(mornye: mornye),
+              destinations: _destinations(),
               selected: selected,
               onSelected: selections.add,
               libraryLinks: libraryLinks,
@@ -500,6 +507,46 @@ void main() {
       expect(find.byKey(const ValueKey('desktop-now-playing')), findsNothing);
       expect(find.text('content'), findsOneWidget);
     });
+
+    testWidgets('a resize keeps the sidebar, inspector and player controls '
+        '($mornye)', (tester) async {
+      addTearDown(() => desktopInspectorPanel.value = null);
+      await pumpShell(tester, mornye: mornye, width: 1500);
+      desktopInspectorPanel.value = DesktopInspectorPanel.upNext;
+      await tester.pumpAndSettle();
+      final kept = [
+        find.byType(mornye ? DesktopSidebar : DesktopNavigationRail),
+        find.byType(DesktopInspector),
+        find.byType(DesktopDownloadsButton),
+        if (!mornye) find.byKey(const ValueKey('desktop-player-shuffle')),
+      ];
+      final before = [for (final finder in kept) tester.widget(finder)];
+      for (var step = 1; step <= 5; step++) {
+        tester.view.physicalSize = Size(1500 - step * 40.0, 800);
+        await tester.pump();
+      }
+      expect([for (final finder in kept) tester.widget(finder)], before);
+      expect(tester.takeException(), isNull);
+      if (mornye) return;
+
+      // Below the breakpoints the inspector floats and the rail collapses.
+      tester.view.physicalSize = const Size(1000, 800);
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('desktop-inspector-overlay')),
+          matching: find.byType(DesktopInspector),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<DesktopNavigationRail>(find.byType(DesktopNavigationRail))
+            .extended,
+        isFalse,
+      );
+      expect(tester.takeException(), isNull);
+    });
   }
 
   group('Material shell', () {
@@ -566,7 +613,7 @@ void main() {
               child: ValueListenableBuilder<ShellTab>(
                 valueListenable: selected,
                 builder: (context, tab, _) => DesktopNavigationRail(
-                  destinations: _destinations(mornye: false),
+                  destinations: _destinations(),
                   selected: tab,
                   onSelected: (_) {},
                   extended: extended,
@@ -731,6 +778,30 @@ void main() {
       await tester.tap(findByTooltip('Next track (Ctrl+Right)'));
       await tester.tap(findByTooltip('Play (Space)'));
       expect(controller.calls, ['next', 'play']);
+    });
+
+    testWidgets('player bar puts shuffle and repeat beside the transport', (
+      tester,
+    ) async {
+      await pumpShell(tester, mornye: false, width: 1400);
+
+      final shuffle = tester.getRect(
+        find.byKey(const ValueKey('desktop-player-shuffle')),
+      );
+      final repeat = tester.getRect(
+        find.byKey(const ValueKey('desktop-player-repeat')),
+      );
+      final previous = tester.getRect(
+        findByTooltip('Previous track (Ctrl+Left)'),
+      );
+      final next = tester.getRect(findByTooltip('Next track (Ctrl+Right)'));
+      expect(shuffle.right, lessThanOrEqualTo(previous.left));
+      expect(repeat.left, greaterThanOrEqualTo(next.right));
+      expect(shuffle.center.dy, closeTo(previous.center.dy, 0.5));
+
+      await tester.tap(find.byKey(const ValueKey('desktop-player-shuffle')));
+      await tester.tap(find.byKey(const ValueKey('desktop-player-repeat')));
+      expect(controller.calls, ['shuffle true', 'repeat all']);
     });
 
     testWidgets('idle player bar stays in place with disabled controls', (
@@ -964,6 +1035,70 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Playlists'), findsNothing);
       expect(find.text('Road trip'), findsNothing);
+    });
+
+    testWidgets('the rail spring fades the playlists without building them', (
+      tester,
+    ) async {
+      desktopSidebarCollapsed.value = true;
+      await pumpShell(
+        tester,
+        mornye: false,
+        width: 1400,
+        selected: ShellTab.library,
+        onOpenLibraryLink: (_) {},
+      );
+      final row = find.byKey(const ValueKey('desktop-rail-link:playlist:mix'));
+      expect(row, findsNothing);
+
+      desktopSidebarCollapsed.value = false;
+      await tester.pump();
+      final shown = <Widget>{};
+      for (var i = 0; i < 40; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+        if (row.evaluate().isNotEmpty) shown.add(tester.widget(row));
+      }
+      await tester.pumpAndSettle();
+      shown.add(tester.widget(row));
+      expect(shown, hasLength(1));
+
+      // A new open playlist still reaches the rows.
+      desktopSidebarLink.value = 'playlist:mix';
+      await tester.pumpAndSettle();
+      expect(
+        tester.any(find.descendant(of: row, matching: railIndicator)),
+        isTrue,
+      );
+    });
+
+    testWidgets('the rail spring keeps the destination icons and menu', (
+      tester,
+    ) async {
+      desktopSidebarCollapsed.value = true;
+      await pumpShell(tester, mornye: false, width: 1400);
+      desktopSidebarCollapsed.value = false;
+      await tester.pump();
+      final icon = find.descendant(
+        of: find.byKey(const ValueKey('desktop-rail:library')),
+        matching: find.byType(AppIcon),
+      );
+      final menu = find.byKey(const ValueKey('desktop-rail-menu'));
+      final icons = <Widget>{};
+      final menus = <Widget>{};
+      for (var i = 0; i < 40; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+        icons.add(tester.widget(icon));
+        menus.add(tester.widget(menu));
+      }
+      await tester.pumpAndSettle();
+      expect(icons, hasLength(1));
+      expect(menus, hasLength(1));
+      expect(find.text('library'), findsOneWidget);
+
+      // A new selection still reaches the kept icon.
+      await tester.tap(find.text('library'));
+      await tester.pumpAndSettle();
+      expect(selections, [ShellTab.library]);
     });
 
     testWidgets('Library leaves an open playlist for the Library root', (

@@ -107,7 +107,7 @@ class _PlayerTrackSwipeState extends State<PlayerTrackSwipe>
     }
     final spring = context.isMornye
         ? MornyeMotion.standardSpring
-        : _materialSpring;
+        : MotionPace.spring(_materialSpring);
     final offset = _offset.value;
     var start = velocity;
     if (target == 0 && offset != 0 && velocity.sign != offset.sign) {
@@ -270,7 +270,7 @@ class _SwipeScope extends InheritedWidget {
   final _PlayerTrackSwipeState state;
 
   @override
-  bool updateShouldNotify(_SwipeScope oldWidget) => true;
+  bool updateShouldNotify(_SwipeScope oldWidget) => state != oldWidget.state;
 }
 
 /// Multiple hit regions can drive the same titles without moving their child.

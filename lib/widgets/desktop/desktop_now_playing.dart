@@ -41,7 +41,7 @@ import 'package:mornye/widgets/player_playback_controls.dart';
 import 'package:mornye/widgets/player_track_crossfade.dart';
 import 'package:mornye/widgets/player_volume_control.dart';
 import 'package:mornye/widgets/playlist_picker_sheet.dart';
-import 'package:share_plus/share_plus.dart';
+import 'package:mornye/widgets/song_share_sheet.dart';
 
 /// Now Playing covers the desktop window: cover, title and transport on the
 /// leading side, lyrics or Up Next ([desktopInspectorPanel]) on the trailing
@@ -258,11 +258,16 @@ class _DesktopNowPlayingState extends ConsumerState<DesktopNowPlaying> {
   ) {
     if (panel != null) _lastPanel = panel;
     final reduce = MediaQuery.disableAnimationsOf(context);
-    // Opening follows the panel motion; closing eases out without
-    // overshoot.
+    // Opening follows the inspector's spring; closing matches its exit
+    // (Apple's fast critically damped spring in Mornye, M3 accelerate in Material).
     final motion = panel != null
         ? desktopInspectorMotion(context)
-        : const AppMotionSpec(Duration(milliseconds: 260), Curves.easeInCubic);
+        : context.isMornye
+        ? MornyeMotion.fast
+        : AppMotionSpec(
+            MotionPace.duration(const Duration(milliseconds: 220)),
+            Easing.standardAccelerate,
+          );
     final panels = _panels(
       context,
       colorScheme,
@@ -275,7 +280,7 @@ class _DesktopNowPlayingState extends ConsumerState<DesktopNowPlaying> {
           colorScheme,
           // The cover decodes once at its largest size rather than on every
           // frame of the resize.
-          _columnWidthFor(constraints, 520),
+          _largestColumnWidth,
         );
         return TweenAnimationBuilder<double>(
           tween: Tween(end: panel != null ? 1 : 0),
@@ -293,6 +298,9 @@ class _DesktopNowPlayingState extends ConsumerState<DesktopNowPlaying> {
       },
     );
   }
+
+  /// The widest the cover column gets, in any window.
+  static const _largestColumnWidth = 520.0;
 
   /// The cover column's width under [limit], leaving room for the title and
   /// transport below.
@@ -335,7 +343,7 @@ class _DesktopNowPlayingState extends ConsumerState<DesktopNowPlaying> {
     final width = constraints.maxWidth;
     final size = progress.clamp(0.0, 1.0);
     final columnWidth = lerpDouble(
-      _columnWidthFor(constraints, 520),
+      _columnWidthFor(constraints, _largestColumnWidth),
       _columnWidthFor(constraints, math.min(440.0, width * 0.34)),
       size,
     )!;
@@ -372,7 +380,7 @@ class _DesktopNowPlayingState extends ConsumerState<DesktopNowPlaying> {
                 opacity: size,
                 child: Transform.translate(
                   offset: Offset(slide * (rtl ? -1 : 1), 0),
-                  child: panels,
+                  child: RepaintBoundary(child: panels),
                 ),
               ),
             ),
@@ -728,14 +736,10 @@ class _PlayerMoreButton extends ConsumerWidget {
       case 'artist':
         await openPlayingArtist(context, ref, mediaItem);
       case 'share':
-        final artist = mediaItem.artist ?? '';
-        await SharePlus.instance.share(
-          ShareParams(
-            text: artist.isEmpty
-                ? mediaItem.title
-                : '${mediaItem.title}, $artist',
-            sharePositionOrigin: anchor,
-          ),
+        await showSongShare(
+          context,
+          title: mediaItem.title,
+          artist: mediaItem.artist ?? '',
         );
     }
   }

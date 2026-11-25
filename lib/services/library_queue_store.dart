@@ -393,6 +393,71 @@ class LibraryQueueStore {
     ''');
   }
 
+  /// The genre tag of each Library song among [matchKeys] (title and artist
+  /// as the Library compares them) that has one, as `match_key` and
+  /// `genre_name` rows. A song in both sources, or in several files, is
+  /// listed once per file.
+  Future<List<Map<String, Object?>>> genresOfSongs(
+    List<String> matchKeys, {
+    required bool includeLocal,
+  }) => _rowsOfSongs(
+    matchKeys,
+    includeLocal: includeLocal,
+    columns: 'TRIM(genre) AS genre_name',
+    where: "sort_genre != ''",
+  );
+
+  /// The release date, format, bit depth and sample rate of each Library
+  /// song among [matchKeys], listed like [genresOfSongs].
+  Future<List<Map<String, Object?>>> detailsOfSongs(
+    List<String> matchKeys, {
+    required bool includeLocal,
+  }) => _rowsOfSongs(
+    matchKeys,
+    includeLocal: includeLocal,
+    columns: 'release_date, format, bit_depth, sample_rate',
+  );
+
+  /// `match_key` and [columns] of the songs among [matchKeys] in both
+  /// sources, in chunks under SQLite's limit of 999 variables.
+  Future<List<Map<String, Object?>>> _rowsOfSongs(
+    List<String> matchKeys, {
+    required bool includeLocal,
+    required String columns,
+    String? where,
+  }) async {
+    final rows = <Map<String, Object?>>[];
+    final filter = where == null ? '' : '$where AND ';
+    const chunk = 400;
+    for (var start = 0; start < matchKeys.length; start += chunk) {
+      final keys = matchKeys.sublist(
+        start,
+        (start + chunk).clamp(0, matchKeys.length),
+      );
+      final marks = List.filled(keys.length, '?').join(',');
+      final parts = <String>[
+        '''
+          SELECT match_key, $columns
+          FROM history_db.history
+          WHERE ${filter}match_key IN ($marks)
+        ''',
+        if (includeLocal)
+          '''
+            SELECT match_key, $columns
+            FROM ${LibrarySchema.visibleView}
+            WHERE ${filter}match_key IN ($marks)
+          ''',
+      ];
+      rows.addAll(
+        await _db.rawQuery(parts.join(' UNION ALL '), [
+          ...keys,
+          if (includeLocal) ...keys,
+        ]),
+      );
+    }
+    return rows;
+  }
+
   String _escapeLikePattern(String value) {
     return value
         .replaceAll('\\', r'\\')
